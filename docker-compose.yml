@@ -1,0 +1,50 @@
+services:
+  db:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    container_name: wc-odds-db
+    environment:
+      POSTGRES_USER: odds
+      POSTGRES_PASSWORD: odds
+      POSTGRES_DB: odds
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odds -d odds"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  poll:
+    build: .
+    container_name: wc-odds-poll
+    command: python poll_service.py --interval 300
+    environment:
+      DATABASE_URL: postgresql://odds:odds@db:5432/odds
+      POLL_DAYS: "2"
+      POLL_SOURCE: "500"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build: .
+    container_name: wc-odds-web
+    command: python serve.py --host 0.0.0.0 --port 8765 --no-scheduler
+    environment:
+      DATABASE_URL: postgresql://odds:odds@db:5432/odds
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./output/service:/app/output/service
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:

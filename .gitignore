@@ -1,0 +1,37 @@
+# ── 密钥 / 本地配置（勿提交）────────────────────────
+.env
+.env.*
+!.env.example
+local_secrets.py
+local_secrets.*.py
+!local_secrets.example.py
+secrets/
+credentials.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+
+# 运行时 / 缓存
+output/
+downloads/
+logs/
+*.log
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# （密钥规则见文件顶部）

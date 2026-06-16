@@ -1,0 +1,25 @@
+# 仅 PostgreSQL（不 build poll/web，适合网络差时先起库）
+# 用法: docker compose -f compose.db.yaml up -d
+
+services:
+  db:
+    image: ${POSTGRES_IMAGE:-docker.m.daocloud.io/library/postgres:16-alpine}
+    container_name: wc-odds-db
+    environment:
+      POSTGRES_USER: odds
+      POSTGRES_PASSWORD: odds
+      POSTGRES_DB: odds
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odds -d odds"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:

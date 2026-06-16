@@ -1,0 +1,955 @@
+#!/usr/bin/env python3
+"""HTTP service: hourly 500.com download + football prediction + match detail pages."""
+
+from __future__ import annotations
+
+import argparse
+import html
+import json
+import logging
+import os
+import re
+import sys
+import threading
+import time
+from datetime import datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+from hourly_pipeline import (
+    get_history,
+    get_state,
+    list_runs,
+    run_hourly_job,
+    run_single_match_ai,
+    seconds_until_next_hour,
+    set_next_scheduled,
+)
+from db_timeline import load_match_index_from_db
+from match_timeline import load_ai_records, load_deep_analyses, load_match_index, rebuild_from_runs
+from timeline_merge import load_latest_poll_meta, merge_match_indexes
+from time_utils import now_beijing
+from daily_picks import load_daily_picks_from_output, save_daily_picks
+from share_card import build_parlay_share_context, build_share_context, html_share_match, html_share_parlay
+from web_ui import html_daily_picks, html_dashboard, html_match_detail, html_worldcup_ledger
+
+log = logging.getLogger("serve")
+_FID_RE = re.compile(r"^/match/(\d+)$")
+_SHARE_RE = re.compile(r"^/share/match/(\d+)$")
+_API_FID_RE = re.compile(r"^/api/match/(\d+)/timeline$")
+_API_RECOMMEND_RE = re.compile(r"^/api/match/(\d+)/recommend$")
+_API_DEEP_RE = re.compile(r"^/api/match/(\d+)/deep-analyze$")
+_API_CHAT_RE = re.compile(r"^/api/match/(\d+)/chat-stream$")
+_daily_ai_lock = threading.Lock()
+_daily_ai_running = False
+
+
+def _read_json(path: Path) -> dict | None:
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+
+
+def _load_match_index(output_root: Path, fid: str) -> dict | None:
+    db_idx = load_match_index_from_db(fid)
+    file_idx = load_match_index(output_root, fid)
+    return merge_match_indexes(db_idx, file_idx)
+
+
+def _load_latest_pred(output_root: Path, fid: str) -> dict | None:
+    data = _read_json(output_root / "latest.json")
+    if not data:
+        return None
+    for m in data.get("matches") or []:
+        if str(m.get("fixture_id")) == str(fid):
+            return m
+    return None
+
+
+def _existing_path(path_text: str | None, output_root: Path | None = None) -> Path | None:
+    if not path_text:
+        return None
+    p = Path(path_text)
+    candidates = [p]
+    if output_root is not None and not p.is_absolute():
+        candidates.append(output_root.parent.parent / p)
+    for c in candidates:
+        if c.is_file():
+            return c
+    return None
+
+
+def _ensure_similarity_analysis(pred: dict | None, output_root: Path | None = None) -> None:
+    if not pred or pred.get("similarity_analysis"):
+        return
+    ah = _existing_path(pred.get("xls_asian"), output_root)
+    eu = _existing_path(pred.get("xls_european"), output_root)
+    if not ah or not eu:
+        return
+    try:
+        from predict import build_payload
+        from similar_samples import build_similarity_analysis
+
+        payload = build_payload(str(ah), str(eu), history=get_history(), sample_limit=10)
+        pred["similarity_analysis"] = build_similarity_analysis(payload)
+    except Exception:
+        log.exception("相似样本临时重算失败")
+
+
+from jingcai_pick import final_recommendation_cn
+
+
+def _compact_match_for_chat(m: dict | None) -> dict:
+    if not m:
+        return {}
+    row = m.get("predict_row") or {}
+    return {
+        "fixture_id": m.get("fixture_id"),
+        "match": m.get("match") or row.get("比赛"),
+        "final_pick": final_recommendation_cn(m),
+        "match_result": m.get("match_result_1x2_cn") or row.get("赛果预测"),
+        "scores": row.get("推荐比分") or m.get("likely_scores_detail") or m.get("likely_scores"),
+        "asian": row.get("亚盘") or m.get("asian_handicap_cn"),
+        "confidence": row.get("置信度") or m.get("confidence_cn"),
+        "value_bet": m.get("value_bet"),
+        "summary": (m.get("summary") or "")[:700],
+        "actuary_reasoning": m.get("actuary_reasoning"),
+        "market_pattern_summary": m.get("market_pattern_summary"),
+        "market_pattern_names": m.get("market_pattern_names"),
+        "risk_level": m.get("risk_level_cn"),
+        "control_level": m.get("control_level_cn"),
+        "jingcai": m.get("jingcai_pick_info") or {},
+    }
+
+
+def _chat_profile(provider: str):
+    provider = (provider or "deepseek").strip().lower()
+    if provider == "cursor":
+        from ai_profiles import _cursor_profile
+        return _cursor_profile()
+    if provider == "deepseek":
+        from ai_profiles import _deepseek_profile
+        return _deepseek_profile()
+    raise ValueError("provider 仅支持 deepseek 或 cursor")
+
+
+def _parse_chat_answer(text: str) -> str:
+    from ai_prompt import _extract_json_text
+    try:
+        data = json.loads(_extract_json_text(text))
+        if isinstance(data, dict):
+            return str(data.get("answer") or data.get("summary") or data.get("result") or text)
+    except Exception:
+        pass
+    return text
+
+
+def _ask_ai_chat(*, provider: str, prompt: str, context: dict, scope: str) -> tuple[str, str]:
+    from deepseek_client import chat
+
+    prof = _chat_profile(provider)
+    api_key = prof.resolve_api_key()
+    if not api_key:
+        raise RuntimeError(f"未配置 {prof.api_key_env}")
+
+    system = (
+        "你是足球盘口人工复核助手。你的任务不是重新给强推荐，而是帮助用户做人工干预。"
+        "重点分析：欧亚互转暗线、EV是否足够、诱盘/控盘、平局分流、串关风险。"
+        "只能使用输入 context，不得编造新闻、伤病、天气。"
+        "输出 JSON：{\"answer\":\"...\"}。answer 用中文，结构清晰，给出人工干预建议。"
+    )
+    user = {
+        "scope": scope,
+        "user_question": prompt,
+        "context": context,
+        "required_style": (
+            "先给人工复核结论，再列关键原因，最后给可执行建议。"
+            "如果证据不足，要明确说只能观望或小仓位。"
+        ),
+    }
+    text = chat(
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": json.dumps(user, ensure_ascii=False, default=str)},
+        ],
+        api_key=api_key,
+        model=prof.model,
+        base_url=prof.base_url,
+        temperature=0.25,
+        max_tokens=1800,
+        timeout=180,
+    )
+    return prof.label, _parse_chat_answer(text)
+
+
+def _sse_write(handler: BaseHTTPRequestHandler, event: str, data: str) -> None:
+    handler.wfile.write(f"event: {event}\n".encode("utf-8"))
+    for line in str(data).splitlines() or [""]:
+        handler.wfile.write(f"data: {line}\n".encode("utf-8"))
+    handler.wfile.write(b"\n")
+    handler.wfile.flush()
+
+
+def _send_chat_sse(handler: BaseHTTPRequestHandler, *, provider: str, prompt: str, context: dict, scope: str) -> None:
+    handler.send_response(200)
+    handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
+    handler.send_header("Cache-Control", "no-cache")
+    handler.send_header("Connection", "keep-alive")
+    handler.end_headers()
+    try:
+        label, answer = _ask_ai_chat(provider=provider, prompt=prompt, context=context, scope=scope)
+        _sse_write(handler, "chunk", f"【{label}】\n")
+        step = 80
+        for i in range(0, len(answer), step):
+            _sse_write(handler, "chunk", answer[i:i + step])
+        _sse_write(handler, "done", "ok")
+    except Exception as exc:
+        log.exception("AI chat SSE failed")
+        _sse_write(handler, "chunk", f"错误：{exc}")
+        _sse_write(handler, "done", "error")
+
+
+def _pred_summary(pred: dict) -> dict:
+    scores = pred.get("likely_scores_detail") or pred.get("likely_scores") or []
+    if isinstance(scores, list):
+        scores_txt = "、".join(str(s) for s in scores[:3])
+    else:
+        scores_txt = str(scores)
+    final_pick = final_recommendation_cn(pred)
+    out = {
+        "ok": True,
+        "fixture_id": pred.get("fixture_id"),
+        "match": pred.get("match"),
+        "result_1x2_cn": final_pick,
+        "final_pick_cn": final_pick,
+        "match_result_1x2_cn": pred.get("match_result_1x2_cn"),
+        "likely_scores": scores_txt,
+        "asian_handicap_cn": pred.get("asian_handicap_cn"),
+        "over_under_cn": pred.get("over_under_cn"),
+        "confidence_cn": pred.get("confidence_cn"),
+        "summary": pred.get("summary"),
+        "manual_ai": pred.get("manual_ai", True),
+        "recommendation_source": pred.get("recommendation_source"),
+        "ai_providers": pred.get("ai_providers") or [],
+    }
+    analyses = pred.get("ai_analyses") or {}
+    if analyses:
+        out["ai_analyses"] = {
+            k: {
+                "result_1x2_cn": final_recommendation_cn(v),
+                "final_pick_cn": final_recommendation_cn(v),
+                "likely_scores": v.get("likely_scores_detail") or v.get("likely_scores"),
+                "asian_handicap_cn": v.get("asian_handicap_cn"),
+                "confidence_cn": v.get("confidence_cn"),
+                "summary": (v.get("summary") or "")[:300],
+                "actuary_reasoning": v.get("actuary_reasoning"),
+                "ai_provider_label": v.get("ai_provider_label"),
+            }
+            for k, v in analyses.items()
+        }
+    return out
+
+
+class Handler(BaseHTTPRequestHandler):
+    output_root: Path = Path("output/service")
+    within_days: float = 7
+    use_ai: bool = False
+    ai_model: str = "deepseek-chat"
+    ai_mode: str = "expert"
+    ai_base_url: str | None = None
+    dual_ai: bool = False
+    ai_model_b: str | None = None
+    ai_base_url_b: str | None = None
+    skip_unchanged: bool = True
+    ai_interval_sec: int = 3600
+    force_ai: bool = False
+
+    def log_message(self, fmt, *args):
+        log.info("%s - %s", self.address_string(), fmt % args)
+
+    def _send_json(self, data, status=200):
+        body = json.dumps(data, ensure_ascii=False, indent=2, default=str).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_html(self, html: str, status=200):
+        body = html.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _trigger_run(self, background: bool = True, *, force_ai: bool | None = None) -> dict:
+        force = self.force_ai if force_ai is None else force_ai
+
+        def _job():
+            try:
+                run_hourly_job(
+                    self.output_root,
+                    within_days=self.within_days,
+                    use_ai=self.use_ai,
+                    ai_model=self.ai_model,
+                    ai_mode=self.ai_mode,
+                    ai_base_url=self.ai_base_url,
+                    dual_ai=self.dual_ai,
+                    ai_model_b=self.ai_model_b,
+                    ai_base_url_b=self.ai_base_url_b,
+                    skip_unchanged=self.skip_unchanged,
+                    ai_interval_sec=self.ai_interval_sec,
+                    force_ai=force,
+                )
+            except RuntimeError as exc:
+                log.warning("%s", exc)
+
+        if get_state().get("running"):
+            return {"ok": False, "error": "任务运行中", "state": get_state()}
+
+        if background:
+            threading.Thread(target=_job, daemon=True).start()
+            return {"ok": True, "message": "任务已启动", "state": get_state()}
+        run_hourly_job(
+            self.output_root,
+            within_days=self.within_days,
+            use_ai=self.use_ai,
+            ai_model=self.ai_model,
+            ai_mode=self.ai_mode,
+            ai_base_url=self.ai_base_url,
+            dual_ai=self.dual_ai,
+            ai_model_b=self.ai_model_b,
+            ai_base_url_b=self.ai_base_url_b,
+            skip_unchanged=self.skip_unchanged,
+            ai_interval_sec=self.ai_interval_sec,
+            force_ai=force,
+        )
+        return {"ok": True, "message": "任务已完成", "state": get_state()}
+
+    def do_GET(self):
+        path = urlparse(self.path).path.rstrip("/") or "/"
+        root = self.output_root
+
+        sm = _SHARE_RE.match(path)
+        if sm:
+            fid = sm.group(1)
+            idx = _load_match_index(root, fid)
+            if idx is None:
+                self._send_html(
+                    f"<html><body><p>暂无该比赛</p><a href='/'>返回</a></body></html>",
+                    404,
+                )
+                return
+            pred = _load_latest_pred(root, fid)
+            ctx = build_share_context(
+                fid,
+                match_name=idx.get("match_name") or "",
+                timeline=idx.get("timeline") or [],
+                prediction=pred,
+            )
+            self._send_html(html_share_match(ctx))
+            return
+
+        if path == "/share/parlay":
+            qs = parse_qs(urlparse(self.path).query)
+            raw_ids = qs.get("ids", [""])[0]
+            fixture_ids = [x.strip() for x in raw_ids.split(",") if x.strip()]
+            if len(fixture_ids) != 2:
+                self._send_html(
+                    "<html><body><p>请在 URL 中提供 2 个 fixture_id，"
+                    "例如 /share/parlay?ids=123,456</p>"
+                    "<a href='/'>返回</a></body></html>",
+                    400,
+                )
+                return
+            try:
+                from custom_parlay import analyze_custom_parlay, load_matches_for_parlay
+                matches = load_matches_for_parlay(root, fixture_ids)
+                analysis = analyze_custom_parlay(matches)
+                ctx = build_parlay_share_context(analysis)
+                self._send_html(html_share_parlay(ctx))
+            except ValueError as exc:
+                self._send_html(
+                    f"<html><body><p>{html.escape(str(exc))}</p>"
+                    f"<a href='/'>返回</a></body></html>",
+                    404,
+                )
+            except Exception as exc:
+                log.exception("2串1 分享图失败")
+                self._send_html(
+                    f"<html><body><p>生成失败：{html.escape(str(exc))}</p>"
+                    f"<a href='/'>返回</a></body></html>",
+                    500,
+                )
+            return
+
+        m = _FID_RE.match(path)
+        if m:
+            fid = m.group(1)
+            idx = _load_match_index(root, fid)
+            if idx is None:
+                self._send_html(
+                    f"<html><body><p>暂无该比赛历史（FID {fid}）</p>"
+                    f'<a href="/">返回</a></body></html>',
+                    404,
+                )
+                return
+            pred = _load_latest_pred(root, fid)
+            _ensure_similarity_analysis(pred, root)
+            ai_records = load_ai_records(root, fid)
+            deep_records = load_deep_analyses(root, fid)
+            from match_settlement import load_settled_map
+            settled = load_settled_map(root).get(fid)
+            self._send_html(html_match_detail(
+                idx, prediction=pred, ai_records=ai_records,
+                deep_records=deep_records, settled=settled,
+            ))
+            return
+
+        am = _API_FID_RE.match(path)
+        if am:
+            idx = _load_match_index(root, am.group(1))
+            if idx is None:
+                self._send_json({"error": "not found"}, 404)
+            else:
+                self._send_json(idx)
+            return
+
+        cm = _API_CHAT_RE.match(path)
+        if cm:
+            fid = cm.group(1)
+            qs = parse_qs(urlparse(self.path).query)
+            prompt = (qs.get("prompt", [""])[0] or "").strip()
+            provider = qs.get("provider", ["deepseek"])[0]
+            if not prompt:
+                self._send_json({"ok": False, "error": "prompt required"}, 400)
+                return
+            pred = _load_latest_pred(root, fid)
+            idx = _load_match_index(root, fid) or {}
+            context = {
+                "match": _compact_match_for_chat(pred),
+                "timeline_summary": {
+                    "fixture_id": fid,
+                    "match_name": idx.get("match_name"),
+                    "updated_at": idx.get("updated_at"),
+                    "changes": (idx.get("changes") or [])[-10:],
+                    "latest": (idx.get("timeline") or [])[-1:] if isinstance(idx.get("timeline"), list) else [],
+                },
+            }
+            _send_chat_sse(self, provider=provider, prompt=prompt, context=context, scope="match")
+            return
+
+        if path == "/":
+            latest = _read_json(root / "latest.json")
+            self._send_html(html_dashboard(
+                get_state(), latest, output_root=root, within_days=self.within_days,
+            ))
+            return
+        if path == "/api/dashboard/chat-stream":
+            qs = parse_qs(urlparse(self.path).query)
+            prompt = (qs.get("prompt", [""])[0] or "").strip()
+            provider = qs.get("provider", ["deepseek"])[0]
+            if not prompt:
+                self._send_json({"ok": False, "error": "prompt required"}, 400)
+                return
+            from daily_picks import load_dashboard_matches, load_kickoff_map
+            from match_settlement import classify_matches, load_settled_map
+
+            matches = load_dashboard_matches(root, within_days=self.within_days)
+            kickoff_map = load_kickoff_map()
+            upcoming, live, finished = classify_matches(
+                matches, kickoff_map=kickoff_map, settled_map=load_settled_map(root),
+            )
+            active = upcoming + live
+            latest_payload = _read_json(root / "latest.json") or {}
+            context = {
+                "state": get_state(),
+                "active_count": len(active),
+                "finished_count": len(finished),
+                "active_matches": [_compact_match_for_chat(m) for m in active[:20]],
+                "latest_generated_at": latest_payload.get("generated_at"),
+            }
+            _send_chat_sse(self, provider=provider, prompt=prompt, context=context, scope="dashboard")
+            return
+        if path == "/daily":
+            qs = parse_qs(urlparse(self.path).query)
+            match_date = qs.get("date", [None])[0]
+            payload = load_daily_picks_from_output(root, match_date=match_date)
+            self._send_html(html_daily_picks(payload))
+            return
+        if path == "/share/daily-safe":
+            qs = parse_qs(urlparse(self.path).query)
+            match_date = qs.get("date", [None])[0]
+            payload = load_daily_picks_from_output(root, match_date=match_date)
+            tier = payload.get("fallback_safe")
+            if not tier:
+                self._send_json({"ok": False, "error": "暂无保底 2串1 候选"}, 404)
+                return
+            from daily_picks import daily_tier_to_parlay_analysis
+            analysis = daily_tier_to_parlay_analysis(
+                tier,
+                generated_at=payload.get("generated_at") or "",
+            )
+            self._send_html(html_share_parlay(build_parlay_share_context(analysis)))
+            return
+        if path == "/worldcup":
+            from worldcup_analytics import build_tournament_ledger
+            ledger = build_tournament_ledger(
+                root,
+                include_ai_watch=True,
+                ai_model=self.ai_model,
+                ai_base_url=self.ai_base_url,
+            )
+            self._send_html(html_worldcup_ledger(ledger))
+            return
+        if path == "/api/worldcup/ledger":
+            from worldcup_analytics import build_tournament_ledger
+            self._send_json(build_tournament_ledger(
+                root,
+                include_ai_watch=True,
+                ai_model=self.ai_model,
+                ai_base_url=self.ai_base_url,
+            ))
+            return
+        if path == "/api/status" or path == "/health":
+            from ai_schedule import ai_schedule_info
+            state = get_state()
+            state["ai_schedule"] = ai_schedule_info(self.output_root)
+            self._send_json(state)
+            return
+        if path == "/api/latest":
+            data = _read_json(root / "latest.json")
+            if data is None:
+                self._send_json({"matches": [], "message": "尚无分析结果"}, 404)
+            else:
+                self._send_json(data)
+            return
+        if path == "/api/daily-picks":
+            qs = parse_qs(urlparse(self.path).query)
+            match_date = qs.get("date", [None])[0]
+            payload = load_daily_picks_from_output(root, match_date=match_date)
+            self._send_json(payload)
+            return
+        if path == "/api/runs":
+            qs = parse_qs(urlparse(self.path).query)
+            limit = int(qs.get("limit", ["20"])[0])
+            self._send_json({"runs": list_runs(root, limit=limit)})
+            return
+        if path == "/api/db/status":
+            try:
+                from db.connection import ping
+                from db.repository import db_stats, get_scraper_state
+                if not ping():
+                    self._send_json({"ok": False, "error": "database unreachable"}, 503)
+                    return
+                self._send_json({
+                    "ok": True,
+                    "stats": db_stats(),
+                    "last_poll": get_scraper_state("poll_500_last_run"),
+                })
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/db/fixtures":
+            try:
+                from db.repository import list_fixtures
+                qs = parse_qs(urlparse(self.path).query)
+                limit = int(qs.get("limit", ["50"])[0])
+                self._send_json({"fixtures": list_fixtures(limit=limit)})
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, 500)
+            return
+        self._send_json({"error": "not found", "path": path}, 404)
+
+    def do_POST(self):
+        path = urlparse(self.path).path.rstrip("/")
+        qs = parse_qs(urlparse(self.path).query)
+        if path == "/api/run":
+            force_ai = qs.get("force_ai", ["0"])[0] in ("1", "true", "yes")
+            self._send_json(self._trigger_run(background=True, force_ai=force_ai))
+            return
+        if path == "/api/rebuild-timeline":
+            n = rebuild_from_runs(self.output_root)
+            self._send_json({"ok": True, "records": n})
+            return
+        if path == "/api/settle":
+            from match_settlement import run_settlement
+            self._send_json(run_settlement(self.output_root))
+            return
+        if path == "/api/worldcup/refresh":
+            from worldcup_analytics import refresh_tournament_ledger
+            try:
+                ledger = refresh_tournament_ledger(
+                    self.output_root,
+                    include_ai_watch=True,
+                    ai_model=self.ai_model,
+                    ai_base_url=self.ai_base_url,
+                    force_ai_watch=True,
+                )
+                self._send_json({"ok": True, "ledger": ledger})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/worldcup/match-ai":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b"{}"
+                payload = json.loads(raw.decode("utf-8"))
+                fid = str(payload.get("fixture_id") or qs.get("fixture_id", [""])[0]).strip()
+                if not fid:
+                    self._send_json({"ok": False, "error": "fixture_id required"}, 400)
+                    return
+                force = payload.get("force") is True or qs.get("force", ["0"])[0] in ("1", "true", "yes")
+                from worldcup_analytics import build_upcoming_match_ai_watch
+                result = build_upcoming_match_ai_watch(
+                    self.output_root,
+                    fid,
+                    ai_model=self.ai_model,
+                    ai_base_url=self.ai_base_url,
+                    force=force,
+                )
+                self._send_json(result, 200 if result.get("ok") else 500)
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "请求体须为 JSON"}, 400)
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                log.exception("世界杯单场AI分析失败")
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/parlay/analyze":
+            use_ai = qs.get("ai", ["0"])[0] in ("1", "true", "yes")
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b"{}"
+                payload = json.loads(raw.decode("utf-8"))
+                fixture_ids = payload.get("fixture_ids") or []
+                if len(fixture_ids) != 2:
+                    self._send_json({"ok": False, "error": "请勾选恰好 2 场比赛"}, 400)
+                    return
+                from custom_parlay import (
+                    analyze_custom_parlay,
+                    load_matches_for_parlay,
+                    merge_ai_into_explanation,
+                    run_parlay_ai_brief,
+                )
+                matches = load_matches_for_parlay(self.output_root, fixture_ids)
+                result = analyze_custom_parlay(matches)
+                if use_ai:
+                    try:
+                        ai_brief = run_parlay_ai_brief(
+                            result,
+                            ai_model=self.ai_model,
+                            ai_base_url=self.ai_base_url,
+                        )
+                        result["ai_brief"] = ai_brief
+                        merge_ai_into_explanation(result, ai_brief)
+                        result["source"] = "local+ai_brief"
+                    except Exception as exc:
+                        log.warning("2串1 AI 简评失败: %s", exc)
+                        result["ai_error"] = str(exc)
+                self._send_json(result)
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, 400)
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "请求体须为 JSON"}, 400)
+            except Exception as exc:
+                log.exception("2串1 分析失败")
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/list-parlay/ai":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b"{}"
+                payload = json.loads(raw.decode("utf-8"))
+                provider = payload.get("provider") or qs.get("provider", ["deepseek"])[0]
+                target_date = payload.get("date") or qs.get("date", [None])[0]
+
+                from daily_picks import load_dashboard_matches, load_kickoff_map
+                from list_parlay_ai import recommend_list_parlay
+                from match_settlement import classify_matches, load_settled_map
+
+                matches = load_dashboard_matches(self.output_root, within_days=self.within_days)
+                kickoff_map = load_kickoff_map()
+                upcoming, live, _finished = classify_matches(
+                    matches,
+                    kickoff_map=kickoff_map,
+                    settled_map=load_settled_map(self.output_root),
+                )
+                active = upcoming + live
+                result = recommend_list_parlay(
+                    active,
+                    provider=provider,
+                    kickoff_map=kickoff_map,
+                    target_date=target_date,
+                )
+                self._send_json(result)
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "请求体须为 JSON"}, 400)
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                log.exception("列表AI 2串1失败")
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/daily/ai":
+            global _daily_ai_running
+            qs = parse_qs(urlparse(self.path).query)
+            match_date = qs.get("date", [None])[0]
+            if not match_date:
+                from time_utils import now_beijing
+                match_date = now_beijing().date().isoformat()
+            if _daily_ai_running:
+                self._send_json({"ok": False, "error": "当日 AI 分析进行中，请稍候"}, 409)
+                return
+
+            def _job():
+                global _daily_ai_running
+                try:
+                    from daily_picks_ai import run_daily_ai_analysis
+                    run_daily_ai_analysis(
+                        self.output_root,
+                        match_date,
+                        ai_model=self.ai_model,
+                        ai_mode=self.ai_mode,
+                        ai_base_url=self.ai_base_url,
+                        dual_ai=self.dual_ai,
+                        ai_model_b=self.ai_model_b,
+                        ai_base_url_b=self.ai_base_url_b,
+                        within_days=self.within_days,
+                    )
+                except Exception as exc:
+                    log.exception("当日 AI 分析失败")
+                finally:
+                    with _daily_ai_lock:
+                        _daily_ai_running = False
+
+            with _daily_ai_lock:
+                _daily_ai_running = True
+            threading.Thread(target=_job, daemon=True).start()
+            self._send_json({
+                "ok": True,
+                "message": f"已启动 {match_date} AI 分析（逐场 + 三档 2串1），约 2–5 分钟",
+                "date": match_date,
+            })
+            return
+        rm = _API_RECOMMEND_RE.match(path)
+        if rm:
+            fid = rm.group(1)
+            try:
+                pred = run_single_match_ai(
+                    self.output_root,
+                    fid,
+                    ai_model=self.ai_model,
+                    ai_mode=self.ai_mode,
+                    ai_base_url=self.ai_base_url,
+                    dual_ai=self.dual_ai,
+                    ai_model_b=self.ai_model_b,
+                    ai_base_url_b=self.ai_base_url_b,
+                )
+                self._send_json(_pred_summary(pred))
+            except RuntimeError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, 409)
+            except Exception as exc:
+                log.exception("手动 AI 失败 fid=%s", fid)
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        dm = _API_DEEP_RE.match(path)
+        if dm:
+            fid = dm.group(1)
+            try:
+                from ai_deep_analysis import has_prior_ai_analysis, run_deep_match_analysis
+                pred = _load_latest_pred(self.output_root, fid)
+                ai_records = load_ai_records(self.output_root, fid)
+                if not has_prior_ai_analysis(pred, ai_records):
+                    self._send_json({
+                        "ok": False,
+                        "error": "请先完成首轮「AI 推荐本场」，再使用深度分析",
+                    }, 400)
+                    return
+                record = run_deep_match_analysis(
+                    self.output_root,
+                    fid,
+                    ai_model=self.ai_model,
+                    ai_base_url=self.ai_base_url,
+                    prediction=pred,
+                    index=_load_match_index(self.output_root, fid),
+                    ai_records=ai_records,
+                )
+                self._send_json({
+                    "ok": True,
+                    "headline": (record.get("analysis") or {}).get("headline"),
+                    "final_pick": (record.get("analysis") or {}).get("final_pick"),
+                    "ts": record.get("ts"),
+                })
+            except RuntimeError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, 409)
+            except Exception as exc:
+                log.exception("深度 AI 失败 fid=%s", fid)
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        self._send_json({"error": "not found"}, 404)
+
+
+def scheduler_loop(
+    output_root: Path,
+    *,
+    within_days: float,
+    use_ai: bool,
+    ai_model: str,
+    ai_mode: str,
+    ai_base_url: str | None,
+    dual_ai: bool = False,
+    ai_model_b: str | None = None,
+    ai_base_url_b: str | None = None,
+    run_on_start: bool,
+    skip_unchanged: bool = True,
+    ai_interval_sec: int = 3600,
+):
+    job_kw = dict(
+        within_days=within_days,
+        use_ai=use_ai,
+        ai_model=ai_model,
+        ai_mode=ai_mode,
+        ai_base_url=ai_base_url,
+        dual_ai=dual_ai,
+        ai_model_b=ai_model_b,
+        ai_base_url_b=ai_base_url_b,
+        skip_unchanged=skip_unchanged,
+        ai_interval_sec=ai_interval_sec,
+        force_ai=False,
+    )
+    if run_on_start:
+        log.info("启动时立即执行一次（AI 仍受 %ds 节流）", ai_interval_sec)
+        try:
+            run_hourly_job(output_root, **job_kw)
+        except RuntimeError:
+            pass
+
+    while True:
+        wait = seconds_until_next_hour()
+        nxt = now_beijing() + timedelta(seconds=wait)
+        set_next_scheduled(nxt)
+        log.info("下次整点任务: %s 北京时间（%.0f 秒后）", nxt.strftime("%H:%M:%S"), wait)
+        time.sleep(wait)
+        try:
+            run_hourly_job(output_root, **job_kw)
+        except RuntimeError:
+            log.warning("整点任务跳过（已有任务在运行）")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="HTTP 服务：每整点拉取赔率、分析，并提供比赛趋势二级页",
+    )
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("-o", "--output", default="output/service", help="结果输出目录")
+    parser.add_argument("--days", type=float, default=7, help="只处理 N 天内比赛")
+    parser.add_argument("--with-ai", action="store_true", help="启用 AI 专家分析")
+    parser.add_argument("--ai-model", default="deepseek-chat")
+    parser.add_argument("--ai-mode", default="expert", choices=["expert", "locked"])
+    parser.add_argument("--ai-base-url", default=None)
+    parser.add_argument(
+        "--dual-ai", action="store_true",
+        help="多模型：DeepSeek + 已配置的豆包各分析一次",
+    )
+    parser.add_argument(
+        "--ai-model-b", default=None,
+        help="第二模型 ID（豆包 Model ID 如 doubao-seed-2-0-lite-260428，或 ep- 接入点）",
+    )
+    parser.add_argument(
+        "--ai-base-url-b", default="https://ark.cn-beijing.volces.com/api/v3",
+        help="第二模型 API 地址（默认火山方舟）",
+    )
+    parser.add_argument("--run-on-start", action="store_true", help="启动后立即跑一轮")
+    parser.add_argument("--no-scheduler", action="store_true", help="仅 HTTP，不自动整点")
+    parser.add_argument(
+        "--ai-interval-minutes", type=int, default=60,
+        help="AI 最短调用间隔（分钟），默认 60；0=不限制",
+    )
+    parser.add_argument(
+        "--force-analyze", action="store_true",
+        help="即使赔率 xls 未变动也重新分析（含 AI）",
+    )
+    parser.add_argument(
+        "--rebuild-timeline", action="store_true",
+        help="启动时从 runs/ 重建 hourly 时间线文件",
+    )
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    out = Path(args.output)
+    out.mkdir(parents=True, exist_ok=True)
+
+    if args.rebuild_timeline or not (out / "matches").is_dir():
+        rebuild_from_runs(out)
+
+    Handler.output_root = out
+    Handler.within_days = args.days
+    Handler.use_ai = args.with_ai
+    Handler.ai_model = args.ai_model
+    Handler.ai_mode = args.ai_mode
+    Handler.ai_base_url = args.ai_base_url
+    Handler.dual_ai = args.dual_ai
+    Handler.ai_model_b = args.ai_model_b or os.environ.get("DOUBAO_ENDPOINT") or os.environ.get("DOUBAO_MODEL")
+    Handler.ai_base_url_b = args.ai_base_url_b
+    Handler.skip_unchanged = not args.force_analyze
+    Handler.ai_interval_sec = max(0, args.ai_interval_minutes * 60)
+
+    if not args.no_scheduler:
+        threading.Thread(
+            target=scheduler_loop,
+            kwargs={
+                "output_root": out,
+                "within_days": args.days,
+                "use_ai": args.with_ai,
+                "ai_model": args.ai_model,
+                "ai_mode": args.ai_mode,
+                "ai_base_url": args.ai_base_url,
+                "dual_ai": args.dual_ai,
+                "ai_model_b": Handler.ai_model_b,
+                "ai_base_url_b": args.ai_base_url_b,
+                "run_on_start": args.run_on_start,
+                "skip_unchanged": not args.force_analyze,
+                "ai_interval_sec": Handler.ai_interval_sec,
+            },
+            daemon=True,
+        ).start()
+    elif args.run_on_start:
+        threading.Thread(
+            target=lambda: run_hourly_job(
+                out, within_days=args.days, use_ai=args.with_ai,
+                ai_model=args.ai_model, ai_mode=args.ai_mode,
+                ai_base_url=args.ai_base_url,
+                dual_ai=args.dual_ai,
+                ai_model_b=Handler.ai_model_b,
+                ai_base_url_b=args.ai_base_url_b,
+                skip_unchanged=not args.force_analyze,
+                ai_interval_sec=Handler.ai_interval_sec,
+            ),
+            daemon=True,
+        ).start()
+
+    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    log.info("服务已启动 http://%s:%s/", args.host, args.port)
+    log.info("比赛详情页 http://%s:%s/match/{{fid}}", args.host, args.port)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        log.info("已停止")
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

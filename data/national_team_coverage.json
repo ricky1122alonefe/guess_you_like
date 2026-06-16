@@ -1,0 +1,400 @@
+{
+  "teams_total": 48,
+  "covered_local": 48,
+  "xlsx_teams_with_rows": 45,
+  "openfootball_only_teams": 3,
+  "openfootball_match_count": 27,
+  "api_football_key_configured": false,
+  "missing": [],
+  "teams": [
+    {
+      "team_cn": "乌兹别克",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 16,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "乌拉圭",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 18,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "伊拉克",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 22,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "伊朗",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 16,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "佛得角",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 10,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "克罗地亚",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 8,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "刚果(金)",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 1,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "加拿大",
+      "in_xlsx": false,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 0,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "加纳",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 10,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "南非",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 9,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "卡塔尔",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 18,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "厄瓜多尔",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 18,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "哥伦比亚",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 18,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "土耳其",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 9,
+      "openfootball_match_rows": 3
+    },
+    {
+      "team_cn": "埃及",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 10,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "塞内加尔",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 10,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "墨西哥",
+      "in_xlsx": false,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 0,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "奥地利",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 8,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "巴拉圭",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 18,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "巴拿马",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 10,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "巴西",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 18,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "库拉索",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 10,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "德国",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 6,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "挪威",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 8,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "捷克",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 10,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "摩洛哥",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 8,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "新西兰",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 5,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "日本",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 15,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "比利时",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 8,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "沙特",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 18,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "法国",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 6,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "波黑",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 10,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "海地",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 10,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "澳大利亚",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 16,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "瑞典",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 9,
+      "openfootball_match_rows": 2
+    },
+    {
+      "team_cn": "瑞士",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 6,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "科特迪瓦",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 10,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "突尼斯",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 10,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "约旦",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 16,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "美国",
+      "in_xlsx": false,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 0,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "苏格兰",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 6,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "英格兰",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 8,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "荷兰",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 8,
+      "openfootball_match_rows": 1
+    },
+    {
+      "team_cn": "葡萄牙",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 6,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "西班牙",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 6,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "阿尔及利亚",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 10,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "阿根廷",
+      "in_xlsx": true,
+      "in_openfootball": false,
+      "covered_any": true,
+      "xlsx_match_rows": 18,
+      "openfootball_match_rows": 0
+    },
+    {
+      "team_cn": "韩国",
+      "in_xlsx": true,
+      "in_openfootball": true,
+      "covered_any": true,
+      "xlsx_match_rows": 16,
+      "openfootball_match_rows": 1
+    }
+  ],
+  "notes": [
+    "WorldCup2026.xlsx = football-data 预选赛/国际赛（无东道主直邀队预选赛）",
+    "openfootball = GitHub 免费 2026 小组赛+附加赛赛果文本",
+    "API-Football 免费档需注册 dashboard.api-football.com 并设 API_FOOTBALL_KEY"
+  ]
+}

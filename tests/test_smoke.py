@@ -160,3 +160,32 @@ def test_match_result_payload_serialized():
     payload_idx = 22  # payload column position
     assert isinstance(vals[payload_idx], str)
     assert json.loads(vals[payload_idx])["line_move"] == 0.25
+
+
+def test_knockout_path_group_a():
+    from knockout_path import (
+        analyze_opponent_picking,
+        bracket_flow_steps,
+        build_group_bracket_overview,
+        path_for_rank,
+    )
+
+    p1 = path_for_rank("A", 1)
+    p2 = path_for_rank("A", 2)
+    assert p1["r32_match"] == 79
+    assert p2["r32_match"] == 73
+    assert p2["r32_opponent_slot"] == "2B"
+    assert p2["difficulty_score"] < p1["difficulty_score"]
+
+    steps = bracket_flow_steps(p2)
+    assert steps[0]["stage"] == "group"
+    assert "M73" in steps[1]["label"]
+
+    overview = build_group_bracket_overview("A")
+    assert overview["first"]["slot"] == "1A"
+    assert overview["second"]["slot"] == "2A"
+
+    pick = analyze_opponent_picking("墨西哥", "A", standings_row={"points": 3, "played": 1})
+    assert pick["easiest_path_rank"] == 2
+    assert pick["picking_level"] in ("watch", "medium")
+    assert any("挑对手" in n or "第二" in n for n in pick["notes"])

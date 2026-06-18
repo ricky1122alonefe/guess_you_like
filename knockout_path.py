@@ -55,7 +55,7 @@ def _opponent_slot_for_fixed_match(slot: str, match: dict) -> str:
     if away == slot:
         return home
     if slot.startswith("3rd-"):
-        g = slot[5:]
+        g = slot[4:]
         if match.get("away") == "3rd" and g in (match.get("third_pool") or []):
             return match.get("home") or "?"
         if match.get("home") == "3rd" and g in (match.get("third_pool") or []):
@@ -170,6 +170,42 @@ def _r16_path_hint(r32_match: int | None) -> str:
             other = a if h == f"W{r32_match}" else h
             return f"若晋级16强 → M{r16.get('match')} 对阵 {other} 的胜者"
     return "—"
+
+
+def bracket_flow_steps(path: dict) -> list[dict[str, str]]:
+    """Turn a rank path into display steps for the mini bracket UI."""
+    rank_cn = path.get("rank_cn") or ""
+    if path.get("r32_matches"):
+        pools = path.get("r32_matches") or []
+        labels = " / ".join(f"M{p.get('match')}" for p in pools[:3])
+        suffix = "…" if len(pools) > 3 else ""
+        return [
+            {"stage": "group", "label": rank_cn},
+            {"stage": "r32", "label": f"32强 · {len(pools)}个可能签位 {labels}{suffix}"},
+            {"stage": "note", "label": path.get("narrow_note") or "赛后按FIFA表锁定"},
+        ]
+
+    steps = [{"stage": "group", "label": rank_cn}]
+    r32 = path.get("r32_summary") or path.get("r32_label") or "—"
+    steps.append({"stage": "r32", "label": f"32强 · {r32}"})
+    r16 = path.get("r16_hint") or ""
+    if r16 and r16 != "—":
+        steps.append({"stage": "r16", "label": r16.replace("若晋级16强 → ", "16强 · ")})
+    half = path.get("bracket_half")
+    if half in ("upper", "lower"):
+        steps.append({"stage": "half", "label": "上半区" if half == "upper" else "下半区"})
+    return steps
+
+
+def build_group_bracket_overview(group: str) -> dict[str, Any]:
+    """Fixed R32 slots for a group (detail page bracket strip)."""
+    bracket = _load_bracket()
+    return {
+        "group": group,
+        "first": path_for_rank(group, 1, bracket=bracket),
+        "second": path_for_rank(group, 2, bracket=bracket),
+        "third_pools": path_for_rank(group, 3, bracket=bracket).get("r32_matches") or [],
+    }
 
 
 def analyze_opponent_picking(
@@ -367,6 +403,9 @@ def _combined_prediction_hint(
         "match_type_cn": mt,
         "likely_direction_cn": likely,
         "model_1x2_hint": pick_1x2,
+        "draw_bias": 0.08 if picking_level in ("medium", "high", "watch") and draw_up else (
+            0.06 if picking_level in ("medium", "watch") else 0.0
+        ),
         "ah_hint": ah or "热门谨慎追让" if picking_level != "low" else ah,
         "picking_note": "存在挑对手/控分可能，优先防平局与小比分" if picking_level in ("medium", "high", "watch") else "",
         "summary": f"{mt} · {likely}" + (f" · {ah}" if ah else ""),

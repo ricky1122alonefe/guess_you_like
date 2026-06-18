@@ -2587,15 +2587,29 @@ def _build_ah_analysis_card(prediction: dict | None, timeline: list[dict] | None
 
 
 def _path_block(team: str, pick: dict) -> str:
+    from knockout_path import bracket_flow_steps
+
     paths = pick.get("paths") or {}
+    preferred = pick.get("easiest_path_rank") or 1
+    pref_key = {1: "first", 2: "second", 3: "third"}.get(preferred, "first")
+    pref_path = paths.get(pref_key) or {}
+    pref_steps = bracket_flow_steps(pref_path)
+    lane = ""
+    for i, step in enumerate(pref_steps):
+        if i:
+            lane += "<div class='bracket-connector'>↓</div>"
+        cls = f"bracket-node {step.get('stage', '')}"
+        lane += f"<div class='{cls}'>{_e(step.get('label'))}</div>"
+
     rows = ""
     for key, label in (("first", "若夺头名"), ("second", "若拿第二"), ("third", "若第三(最佳8)")):
         p = paths.get(key) or {}
         summary = p.get("r32_summary") or p.get("r32_label") or "—"
         r16 = p.get("r16_hint") or ""
         extra = f"<br><span class='meta'>{_e(r16)}</span>" if r16 and r16 != "—" else ""
+        highlight = " class='path-row-preferred'" if key == pref_key else ""
         rows += (
-            f"<tr><td>{label}</td>"
+            f"<tr{highlight}><td>{label}</td>"
             f"<td>{_e(summary)}{extra}</td>"
             f"<td>{p.get('difficulty_score', '—')}</td></tr>\n"
         )
@@ -2606,6 +2620,10 @@ def _path_block(team: str, pick: dict) -> str:
   <h4>{_e(team)} · 淘汰赛路径</h4>
   <p class="meta">挑对手风险：<span class="tag">{_e(pick.get('picking_level_cn'))}</span>
      · 相对更优路径：<strong>{_e(pick.get('preferred_path_cn'))}</strong></p>
+  <div class="bracket-lane" aria-label="潜在对阵图">
+    <div class="lane-title">更优路径示意</div>
+    {lane}
+  </div>
   <table class="mini">
     <tr><th>名次</th><th>32强可能对阵</th><th>难度</th></tr>
     {rows}
@@ -2663,6 +2681,27 @@ def _build_match_strategy_panel(match_name: str, prediction: dict | None = None)
 
     bracket_notes = "".join(f"<li>{_e(x)}</li>" for x in (ctx.get("bracket_notes") or [])[:2])
 
+    from knockout_path import build_group_bracket_overview
+
+    go = build_group_bracket_overview(group)
+    g1, g2 = go.get("first") or {}, go.get("second") or {}
+    group_strip = f"""
+<div class="group-bracket-strip">
+  <span class="meta">{_e(group)}组固定签位：</span>
+  <span class="bracket-chip r32">头名 → {_e(g1.get('r32_summary') or '—')}</span>
+  <span class="bracket-chip r32">第二 → {_e(g2.get('r32_summary') or '—')}</span>
+  <span class="meta">（同组两队末轮可能为争/让名次而控分）</span>
+</div>"""
+
+    home_pref = (ctx.get("home_knockout") or {}).get("preferred_path_cn") or "—"
+    away_pref = (ctx.get("away_knockout") or {}).get("preferred_path_cn") or "—"
+    pick_compare = ""
+    if home_pref != away_pref and ctx.get("picking_level") in ("watch", "medium", "high"):
+        pick_compare = (
+            f"<p class='meta picking-warn'>⚠ 同组路径分化：{_e(home)} 更优为<strong>{_e(home_pref)}</strong>，"
+            f"{_e(away)} 更优为<strong>{_e(away_pref)}</strong>——平局或小胜可能同时满足双方「挑对手」动机。</p>"
+        )
+
     rs = ctx.get("round_summary") or {}
     stage = rs.get("stage_label") or ""
 
@@ -2691,9 +2730,12 @@ def _build_match_strategy_panel(match_name: str, prediction: dict | None = None)
          · <strong>模型方向</strong> {_e(pred_1x2)}
          · <strong>亚盘</strong> {_e(hint.get('ah_hint') or '—')}</p>
       {note_p}
+      {pick_compare}
       <p class="meta picking-warn">{_e(hint.get('picking_note') or '')}</p>
     </div>
   </div>
+
+  {group_strip}
 
   <div class="path-grid">
     {home_path}
@@ -2949,9 +2991,22 @@ def html_match_detail(
 .path-block { background: #f8fafc; border-radius: 10px; padding: 12px; border: 1px solid #e2e8f0; }
 .path-block h4 { margin: 0 0 8px; font-size: 14px; }
 .path-notes { margin: 8px 0 0 16px; padding: 0; line-height: 1.55; }
+.bracket-lane { margin: 10px 0 12px; padding: 10px; background: #fff; border: 1px dashed #cbd5e1; border-radius: 8px; }
+.lane-title { font-size: 12px; color: #64748b; margin-bottom: 8px; }
+.bracket-node { padding: 6px 10px; border-radius: 6px; font-size: 13px; text-align: center; }
+.bracket-node.group { background: #ede9fe; color: #5b21b6; }
+.bracket-node.r32 { background: #dcfce7; color: #166534; }
+.bracket-node.r16 { background: #fee2e2; color: #991b1b; }
+.bracket-node.half, .bracket-node.note { background: #f1f5f9; color: #475569; font-size: 12px; }
+.bracket-connector { text-align: center; color: #94a3b8; line-height: 1.2; font-size: 12px; }
+.path-row-preferred td { background: #ecfdf5; font-weight: 600; }
 .prediction-col { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 12px; }
 .picking-warn { color: #92400e; }
 .bracket-notes { margin-top: 12px; font-size: 13px; }
+.group-bracket-strip { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px;
+  padding: 10px; background: #f0fdf4; border-radius: 8px; border: 1px solid #bbf7d0; }
+.bracket-chip { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; }
+.bracket-chip.r32 { background: #dcfce7; color: #166534; }
 .rec-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
 @media (max-width: 900px) {{
   .strategy-grid, .path-grid, .rec-grid {{ grid-template-columns: 1fr; }}

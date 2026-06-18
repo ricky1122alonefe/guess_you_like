@@ -229,6 +229,8 @@ def _predict_one(
         _attach_odds_snapshot(result, ah_path, eu_path)
         _attach_similarity_analysis(result, _payload)
         attach_jingcai_recommendation(result, (poll_meta or {}).get("jingcai"))
+        from quant_analytics import attach_quant_analysis
+        attach_quant_analysis(result, cur=vars(cur))
         return result
 
     payload = build_payload(str(ah_path), str(eu_path), history=history, sample_limit=10)
@@ -242,6 +244,8 @@ def _predict_one(
     _attach_odds_snapshot(base, ah_path, eu_path)
     _attach_similarity_analysis(base, payload)
     attach_jingcai_recommendation(base, (poll_meta or {}).get("jingcai"))
+    from quant_analytics import attach_quant_analysis
+    attach_quant_analysis(base, cur=vars(cur))
     return base
 
 
@@ -487,6 +491,8 @@ def run_hourly_job(
                     )
                     poll_meta = load_latest_poll_meta(fid)
                     attach_jingcai_recommendation(pred, (poll_meta or {}).get("jingcai"))
+                    from quant_analytics import attach_quant_analysis
+                    attach_quant_analysis(pred, cur=pred.get("odds_snapshot") or {})
                     results.append(pred)
                     summary.predict_ok += 1
                     summary.predict_skipped += 1

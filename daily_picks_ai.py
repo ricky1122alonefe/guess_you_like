@@ -138,7 +138,7 @@ def _candidate_brief(c: dict) -> dict[str, Any]:
         "confidence": c["confidence_cn"],
         "consensus": c.get("consensus"),
         "value_bet": c.get("value_bet"),
-        "jingcai_sp": c.get("eu_odds"),
+        "jingcai_sp": c.get("jingcai_sp") or c.get("eu_odds"),
         "model_note": c.get("model_note"),
         "asian_handicap": c.get("asian_handicap_cn"),
         "eu_ah_conversion": c.get("market_pattern_summary") or "",

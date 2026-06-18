@@ -7,7 +7,7 @@ import logging
 from typing import Any
 
 from daily_picks import _best_actionable_pick, _combined_odds, _eu_odds, _kickoff_label, load_kickoff_map
-from jingcai_pick import NO_JINGCAI, actionable_jingcai_pick, final_recommendation_cn
+from jingcai_pick import NO_JINGCAI, actionable_jingcai_pick, ensure_match_jingcai, final_recommendation_cn, resolve_jingcai_sp
 from time_utils import now_beijing_str
 
 log = logging.getLogger(__name__)
@@ -22,21 +22,17 @@ def _pick_actionable(pick_cn: str) -> bool:
 
 
 def _leg_from_match(m: dict) -> dict[str, Any]:
+    m = ensure_match_jingcai(m)
     row = m.get("predict_row") or {}
     pick_cn = final_recommendation_cn(m)
     jc_info = m.get("jingcai_pick_info") or {}
     jc = actionable_jingcai_pick(m)
     actionable = _best_actionable_pick(m)
 
-    sp = jc_info.get("jingcai_sp") or row.get("竞彩SP")
-    if sp is None and jc:
-        sp = jc.get("sp")
-    eu = None
-    if actionable:
-        eu = actionable.get("jingcai_sp") or _eu_odds(m, actionable.get("pick_key") or "skip")
-    if eu is None and jc and jc.get("pick_key") not in (None, "skip"):
-        eu = _eu_odds(m, jc["pick_key"])
-    odds = float(sp) if sp else (float(eu) if eu else None)
+    pick_key = (jc or {}).get("pick_key") or (actionable or {}).get("pick_key")
+    market = (jc or {}).get("market") or jc_info.get("jingcai_market") or "none"
+    sp = resolve_jingcai_sp(m, pick_key=pick_key, market=market)
+    eu = _eu_odds(m, pick_key) if pick_key and pick_key != "skip" else None
 
     reason = ""
     if actionable:
@@ -52,12 +48,13 @@ def _leg_from_match(m: dict) -> dict[str, Any]:
         "match": m.get("match") or row.get("比赛") or "",
         "kickoff": _kickoff_label(m, kickoff_map),
         "pick_cn": pick_cn,
-        "pick_key": (jc or {}).get("pick_key") or (actionable or {}).get("pick_key"),
-        "jingcai_market": (jc or {}).get("market") or jc_info.get("jingcai_market") or "none",
+        "pick_key": pick_key,
+        "jingcai_market": market if market != "none" else (jc or {}).get("market") or jc_info.get("jingcai_market") or "none",
         "jingcai_market_label": row.get("竞彩玩法") or jc_info.get("jingcai_market_label") or "—",
         "jingcai_sp": sp,
         "eu_odds": round(eu, 2) if eu else None,
-        "odds_used": round(odds, 2) if odds else None,
+        "odds_used": sp,
+        "odds_source": "jingcai_sp" if sp else "missing",
         "confidence_cn": row.get("置信度") or m.get("confidence_cn") or "—",
         "scores": row.get("推荐比分") or "",
         "asian_handicap_cn": row.get("亚盘") or m.get("asian_handicap_cn") or "—",
@@ -77,7 +74,7 @@ def analyze_custom_parlay(matches: list[dict]) -> dict[str, Any]:
         raise ValueError("请勾选恰好 2 场比赛")
 
     legs = [_leg_from_match(m) for m in matches]
-    combined = _combined_odds([{"eu_odds": leg.get("odds_used")} for leg in legs])
+    combined = _combined_odds(legs)
 
     warnings: list[str] = []
     blockers: list[str] = []
@@ -85,6 +82,8 @@ def analyze_custom_parlay(matches: list[dict]) -> dict[str, Any]:
     for leg in legs:
         if not leg["actionable"]:
             blockers.append(f"{leg['match']}：推荐为「{leg['pick_cn']}」，不可串关")
+        if not leg.get("jingcai_sp"):
+            warnings.append(f"{leg['match']}：暂无竞彩 SP，组合回报无法按国内赔率计算")
         if leg.get("insufficient_data"):
             warnings.append(f"{leg['match']}：样本不足")
         if leg.get("confidence_cn") == "低":
@@ -170,7 +169,7 @@ def _leg_reason_text(leg: dict) -> str:
         parts.append("让球玩法，需赢够让球数")
     sp = leg.get("odds_used")
     if sp:
-        parts.append(f"SP {sp}")
+        parts.append(f"竞彩 SP {sp}")
     return "；".join(parts) if parts else f"推荐 {leg.get('pick_cn')}"
 
 
@@ -260,7 +259,8 @@ def _format_summary(legs: list[dict], combined: float | None, verdict: str) -> s
 
 
 PARLAY_AI_SYSTEM = """你是串关顾问。用户自选 2 场比赛组成竞彩 2串1。
-你只能使用用户提供的两场本地分析摘要（推荐方向、SP、置信度），禁止编造数据、禁止引入新闻/天气/外部舆情。
+组合回报按国内竞彩 SP 相乘计算（local_analysis.combined_odds / legs[].jingcai_sp），不要用欧赔 eu_odds。
+你只能使用用户提供的两场本地分析摘要（推荐方向、竞彩 SP、置信度），禁止编造数据、禁止引入新闻/天气/外部舆情。
 输出纯 JSON：
 {
   "headline": "一句话结论（≤30字）",
@@ -353,7 +353,7 @@ def load_matches_for_parlay(
         if not m:
             missing.append(fid)
         else:
-            out.append(m)
+            out.append(ensure_match_jingcai(m))
     if missing:
         raise ValueError(f"未找到比赛：{', '.join(missing)}")
     return out

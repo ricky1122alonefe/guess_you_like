@@ -32,7 +32,24 @@ from timeline_merge import load_latest_poll_meta, merge_match_indexes
 from time_utils import now_beijing
 from daily_picks import load_daily_picks_from_output, save_daily_picks
 from share_card import build_parlay_share_context, build_share_context, html_share_match, html_share_parlay
-from web_ui import html_ah_analytics, html_daily_picks, html_dashboard, html_group_stage, html_kelly_calculator, html_match_detail, html_worldcup_ledger
+from web_ui import html_ah_analytics, html_daily_picks, html_dashboard, html_group_stage, html_kelly_calculator, html_match_detail, html_quant_analytics, html_worldcup_ledger
+
+
+def _error_html(body: str) -> str:
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>提示</title>
+<style>
+body {{ font-family: system-ui, sans-serif; margin: 0 auto; padding: 16px clamp(12px, 3vw, 24px);
+       max-width: min(720px, 100%); line-height: 1.6; color: #1a1a1a; background: #f0f2f5; }}
+a {{ color: #2563eb; }}
+.card {{ background: #fff; border-radius: 10px; padding: 16px; margin-top: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.06); }}
+</style></head><body>
+<p><a href="/">← 返回首页</a></p>
+<div class="card">{body}</div>
+</body></html>"""
 
 log = logging.getLogger("serve")
 _FID_RE = re.compile(r"^/match/(\d+)$")
@@ -98,6 +115,24 @@ def _ensure_similarity_analysis(pred: dict | None, output_root: Path | None = No
         pred["similarity_analysis"] = build_similarity_analysis(payload)
     except Exception:
         log.exception("相似样本临时重算失败")
+
+
+def _ensure_quant_analysis(pred: dict | None, idx: dict | None = None) -> None:
+    if not pred or pred.get("quant"):
+        return
+    cur = dict(pred.get("odds_snapshot") or {})
+    if idx:
+        timeline = idx.get("timeline") or []
+        if timeline:
+            latest_odds = (timeline[-1].get("odds") or {})
+            for k, v in latest_odds.items():
+                cur.setdefault(k, v)
+    try:
+        from quant_analytics import attach_quant_analysis
+
+        attach_quant_analysis(pred, cur=cur or None)
+    except Exception:
+        log.exception("量化分析附加失败")
 
 
 from jingcai_pick import final_recommendation_cn
@@ -341,7 +376,7 @@ class Handler(BaseHTTPRequestHandler):
             idx = _load_match_index(root, fid)
             if idx is None:
                 self._send_html(
-                    f"<html><body><p>暂无该比赛</p><a href='/'>返回</a></body></html>",
+                    _error_html(f"<p>暂无该比赛</p>"),
                     404,
                 )
                 return
@@ -361,9 +396,10 @@ class Handler(BaseHTTPRequestHandler):
             fixture_ids = [x.strip() for x in raw_ids.split(",") if x.strip()]
             if len(fixture_ids) != 2:
                 self._send_html(
-                    "<html><body><p>请在 URL 中提供 2 个 fixture_id，"
-                    "例如 /share/parlay?ids=123,456</p>"
-                    "<a href='/'>返回</a></body></html>",
+                    _error_html(
+                        "<p>请在 URL 中提供 2 个 fixture_id，"
+                        "例如 <code>/share/parlay?ids=123,456</code></p>"
+                    ),
                     400,
                 )
                 return
@@ -375,15 +411,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_html(html_share_parlay(ctx))
             except ValueError as exc:
                 self._send_html(
-                    f"<html><body><p>{html.escape(str(exc))}</p>"
-                    f"<a href='/'>返回</a></body></html>",
+                    _error_html(f"<p>{html.escape(str(exc))}</p>"),
                     404,
                 )
             except Exception as exc:
                 log.exception("2串1 分享图失败")
                 self._send_html(
-                    f"<html><body><p>生成失败：{html.escape(str(exc))}</p>"
-                    f"<a href='/'>返回</a></body></html>",
+                    _error_html(f"<p>生成失败：{html.escape(str(exc))}</p>"),
                     500,
                 )
             return
@@ -394,13 +428,13 @@ class Handler(BaseHTTPRequestHandler):
             idx = _load_match_index(root, fid)
             if idx is None:
                 self._send_html(
-                    f"<html><body><p>暂无该比赛历史（FID {fid}）</p>"
-                    f'<a href="/">返回</a></body></html>',
+                    _error_html(f"<p>暂无该比赛历史（FID {html.escape(fid)}）</p>"),
                     404,
                 )
                 return
             pred = _load_latest_pred(root, fid)
             _ensure_similarity_analysis(pred, root)
+            _ensure_quant_analysis(pred, idx)
             ai_records = load_ai_records(root, fid)
             deep_records = load_deep_analyses(root, fid)
             from match_settlement import load_settled_map
@@ -523,6 +557,15 @@ class Handler(BaseHTTPRequestHandler):
             from ah_analytics import build_ah_ledger
             self._send_html(html_ah_analytics(build_ah_ledger(root)))
             return
+        if path == "/quant":
+            from quant_analytics import build_quant_backtest_report, refresh_elo_from_settled
+            from time_utils import now_beijing_str
+
+            refresh_elo_from_settled(root)
+            report = build_quant_backtest_report(root)
+            report["updated_at"] = now_beijing_str()
+            self._send_html(html_quant_analytics(report))
+            return
         if path == "/kelly":
             qs = parse_qs(urlparse(self.path).query)
             fid = (qs.get("fixture_id", [None])[0] or "").strip()
@@ -531,6 +574,8 @@ class Handler(BaseHTTPRequestHandler):
             if fid:
                 pred = _load_latest_pred(root, fid)
                 _ensure_similarity_analysis(pred, root)
+                idx = _load_match_index(root, fid) or {}
+                _ensure_quant_analysis(pred, idx)
                 from kelly import compute_kelly, kelly_prefill_from_prediction
                 prefill = kelly_prefill_from_prediction(pred, fixture_id=fid)
                 if prefill.get("probability_pct") is not None and prefill.get("odds_value") is not None:
@@ -548,6 +593,15 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/handicap/ledger":
             from ah_analytics import build_ah_ledger
             self._send_json(build_ah_ledger(root))
+            return
+        if path == "/api/quant/report":
+            from quant_analytics import build_quant_backtest_report, refresh_elo_from_settled
+            from time_utils import now_beijing_str
+
+            refresh_elo_from_settled(root)
+            report = build_quant_backtest_report(root)
+            report["updated_at"] = now_beijing_str()
+            self._send_json(report)
             return
         if path == "/api/worldcup/ledger":
             from worldcup_analytics import build_tournament_ledger

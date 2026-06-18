@@ -3,7 +3,11 @@
 # ── 样本门槛 ──────────────────────────────────────────
 MIN_SAMPLES_FOR_PICK = 100
 SCORE_POOL_TOP_N = 250
-SCORE_RUNNER_MIN_RATE = 0.22
+# ── 量化模型（免费层）────────────────────────────────
+DIXON_COLES_RHO = -0.13
+SCORE_MODEL_MAX_GOALS = 6
+MC_SIMULATIONS = 3000
+SCORE_RUNNER_MIN_RATE = 0.15  # 略降，历史比分轨更易带平局备选
 HIST_EU_BLEND_MAX_WEIGHT_RATIO = 1.0  # 欧赔扩展样本最多与亚盘样本同权，避免大库压倒盘口匹配
 
 # ── 历史匹配容差（predict.py CLI 可覆盖）──────────────

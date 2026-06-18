@@ -254,6 +254,12 @@ def run_settlement(
             summary["ah_ledger_matches"] = len(ah_ledger.get("records") or [])
         except Exception as exc:
             log.warning("亚盘账本更新失败: %s", exc)
+        try:
+            from quant_analytics import refresh_elo_from_settled
+
+            refresh_elo_from_settled(root)
+        except Exception as exc:
+            log.debug("Elo 更新: %s", exc)
 
     log.info(
         "赛果结算完成：写入 %d 场，待结算无比分 %d 场",

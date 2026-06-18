@@ -372,26 +372,81 @@ details.fold-open > summary {{ color: #1e40af; }}
 """
 
 _LAYOUT_CSS = """
-body {{ font-family: system-ui, sans-serif; margin: 24px; background: #f0f2f5; color: #1a1a1a;
-       max-width: 1080px; }}
-.card {{ background: #fff; border-radius: 10px; padding: 18px 22px; margin-bottom: 16px;
-         box-shadow: 0 1px 4px rgba(0,0,0,.06); }}
-h1 {{ margin: 0 0 10px; font-size: 1.3rem; }}
-h2 {{ margin: 0 0 12px; font-size: 1.05rem; }}
-h3 {{ margin: 0 0 12px; font-size: 1rem; color: #334155; }}
+*, *::before, *::after {{ box-sizing: border-box; }}
+html {{ -webkit-text-size-adjust: 100%; }}
+body {{ font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+       margin: 0 auto; padding: 16px clamp(12px, 3vw, 24px) 32px; background: #f0f2f5; color: #1a1a1a;
+       max-width: min(1200px, 100%); width: 100%; min-height: 100vh; overflow-x: clip; }}
+.card {{ background: #fff; border-radius: 10px; padding: 18px clamp(14px, 3vw, 22px); margin-bottom: 16px;
+         box-shadow: 0 1px 4px rgba(0,0,0,.06); max-width: 100%; }}
+h1 {{ margin: 0 0 10px; font-size: clamp(1.15rem, 4vw, 1.35rem); line-height: 1.3; }}
+h2 {{ margin: 0 0 12px; font-size: clamp(1rem, 3.2vw, 1.08rem); line-height: 1.35; }}
+h3 {{ margin: 0 0 12px; font-size: clamp(.95rem, 3vw, 1rem); color: #334155; line-height: 1.35; }}
 .back {{ margin-bottom: 12px; }}
 .back a {{ color: #2563eb; text-decoration: none; }}
-.meta {{ color: #64748b; font-size: 13px; }}
+.meta {{ color: #64748b; font-size: 13px; line-height: 1.55; }}
 table {{ border-collapse: collapse; width: 100%; }}
-th, td {{ border-bottom: 1px solid #eee; padding: 10px 8px; text-align: left; font-size: 14px; }}
-th {{ background: #fafafa; font-weight: 600; }}
-a {{ color: #2563eb; text-decoration: none; }}
+th, td {{ border-bottom: 1px solid #eee; padding: 10px 8px; text-align: left; font-size: 14px; vertical-align: top; }}
+th {{ background: #fafafa; font-weight: 600; white-space: nowrap; }}
+a {{ color: #2563eb; text-decoration: none; word-break: break-word; }}
 .tag {{ display: inline-block; background: #eff6ff; color: #1d4ed8; padding: 2px 8px;
-        border-radius: 4px; font-size: 12px; margin-right: 6px; }}
+        border-radius: 4px; font-size: 12px; margin: 2px 4px 2px 0; max-width: 100%; }}
 .tag-live {{ background: #fef3c7; color: #b45309; }}
 .tag-ok {{ background: #ecfdf5; color: #047857; }}
 .tag-miss {{ background: #fef2f2; color: #b91c1c; }}
 .tag-active {{ background: #1d4ed8; color: #fff; }}
+code {{ word-break: break-word; }}
+canvas {{ max-width: 100% !important; height: auto !important; }}
+img {{ max-width: 100%; height: auto; }}
+"""
+
+_RESPONSIVE_CSS = """
+.page-nav, .back { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; line-height: 1.65; }
+.page-nav a, .back a { white-space: nowrap; }
+.action-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+.card:has(> table), .fold-body:has(> table), .similar-block {
+  overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%;
+}
+.card > table:not(.mini), .fold-body > table:not(.mini) { min-width: 560px; }
+.card > table.dashboard-table { min-width: 680px; }
+table.mini { width: 100%; min-width: 0; }
+.stat-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 118px), 1fr));
+  gap: 10px; margin-bottom: 12px;
+}
+.stat {
+  background: #f8fafc; border-radius: 8px; padding: 10px 12px; border: 1px solid #e2e8f0;
+  text-align: center; min-width: 0;
+}
+.stat-val { font-size: clamp(1.05rem, 3.5vw, 1.35rem); font-weight: 700; line-height: 1.25; word-break: break-word; }
+.stat-lbl { font-size: 11px; color: #64748b; margin-top: 4px; line-height: 1.35; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 12px; }
+.match-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 8px 16px; align-items: start; }
+.match-side { justify-self: end; text-align: right; font-size: 12px; color: #475569; line-height: 1.65; min-width: 0; }
+.hero-card { max-width: 100%; }
+@media (max-width: 900px) {
+  .strategy-grid, .path-grid, .rec-grid, .quant-score-grid, .kelly-grid, .gs-grid, .conc-grid,
+  .watch-grid, .ai-watch-cols, .ai-match-grid, .match-ai-grid, .watch-stats {
+    grid-template-columns: 1fr !important;
+  }
+  .match-row { grid-template-columns: 1fr !important; }
+  .match-side { justify-self: stretch !important; text-align: left !important; }
+}
+@media (max-width: 640px) {
+  body { padding: 12px 10px 24px; }
+  .card { padding: 14px 12px; margin-bottom: 12px; border-radius: 8px; }
+  th, td { padding: 8px 6px; font-size: 13px; }
+  .btn { padding: 8px 12px; font-size: 13px; }
+  .toast { left: 10px; right: 10px; bottom: 10px; max-width: none; }
+  details.fold > summary { padding: 12px 14px; font-size: 13px; }
+  .fold-body { padding: 0 12px 12px; }
+  .parlay-toolbar { flex-direction: column; align-items: stretch; }
+  .parlay-toolbar .btn, .parlay-toolbar select, .parlay-toolbar .ai-chat-provider { width: 100%; max-width: 100%; }
+  .ai-chat-toolbar { flex-direction: column; align-items: stretch; }
+  .ai-chat-toolbar .btn, .ai-chat-toolbar select { width: 100%; max-width: 100%; }
+  .toolbar { flex-direction: column; align-items: stretch; }
+  .toolbar .btn { width: 100%; text-align: center; }
+}
 """
 
 
@@ -405,7 +460,7 @@ def _shared_css(*extra: str) -> str:
 .ai-chat-output { min-height:90px; max-height:360px; overflow:auto; white-space:pre-wrap; background:#0f172a; color:#e2e8f0;
                   border-radius:8px; padding:12px; line-height:1.55; font-size:13px; }
 """
-    raw = _LAYOUT_CSS + _FOLD_CSS + _TOAST_CSS + _BTN_CSS + chat_css + "".join(extra)
+    raw = _LAYOUT_CSS + _RESPONSIVE_CSS + _FOLD_CSS + _TOAST_CSS + _BTN_CSS + chat_css + "".join(extra)
     return raw.replace("{{", "{").replace("}}", "}")
 
 
@@ -668,6 +723,7 @@ def html_dashboard(
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head>
 <meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
 <meta http-equiv="refresh" content="120"/>
 <title>盘口分析服务</title>
 <style>
@@ -676,13 +732,14 @@ def html_dashboard(
 <script>{_AI_BTN_JS}{_AI_CHAT_JS}{_PARLAY_JS}</script>
 </head><body>
 <h1>⚽ 盘口分析</h1>
-<p class="meta" style="margin-bottom:14px">
+<nav class="page-nav meta" style="margin-bottom:14px">
   <a href="/daily">📋 当日 2串1</a> · <a href="/worldcup">🏆 开盘套路</a>
   · <a href="/worldcup/groups">⚔️ 小组战意</a>
   · <a href="/handicap">📊 亚盘赢盘</a>
+  · <a href="/quant">📈 量化回测</a>
   · <a href="/kelly">🧮 Kelly</a>
   · 状态 <strong>{run_status}</strong>
-</p>
+</nav>
 <button class="btn" style="margin-bottom:14px" onclick="fetch('/api/run',{{method:'POST'}}).then(r=>r.json()).then(d=>showToast(d.message||d.error||'已触发', !d.ok))">立即执行一次</button>
 {wc_teaser}
 {_ai_chat_card(scope="dashboard")}
@@ -703,7 +760,7 @@ def html_dashboard(
     <span class="meta">自选仅基于本地推荐与 SP；AI自动选会参考初盘→实时盘与历史相似样本</span>
   </div>
   <div class="card parlay-result" id="parlay-result"></div>
-  <table>
+  <table class="dashboard-table">
     <tr><th title="勾选 2 场">串</th><th>比赛</th><th>竞彩推荐</th><th>比分</th><th>亚盘</th><th>置信</th><th>详情</th><th>AI</th></tr>
     {active_rows}
   </table>
@@ -844,8 +901,6 @@ def html_daily_picks(payload: dict) -> str:
     )
 
     daily_css = _shared_css("""
-.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-@media (max-width: 960px) { .grid { grid-template-columns: 1fr; } }
 .tier-card { border-top: 4px solid #94a3b8; }
 .tier-safe { border-top-color: #059669; }
 .tier-balanced { border-top-color: #2563eb; }
@@ -868,6 +923,7 @@ def html_daily_picks(payload: dict) -> str:
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head>
 <meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>当日推荐 · {_e(target)}</title>
 <style>
 {daily_css}
@@ -921,7 +977,7 @@ function runDailyAi(date) {{
 {_AI_CHAT_JS}
 </script>
 </head><body>
-<p class="back"><a href="/">← 返回首页</a> · <a href="/worldcup">开盘套路</a> · <a href="/handicap">亚盘赢盘</a> · <a href="/kelly">Kelly</a></p>
+<p class="back page-nav"><a href="/">← 返回首页</a> · <a href="/worldcup">开盘套路</a> · <a href="/handicap">亚盘赢盘</a> · <a href="/quant">量化回测</a> · <a href="/kelly">Kelly</a></p>
 <h1>📋 当日 2串1 · {_e(target)}</h1>
 <p class="meta">{payload.get('match_count', 0)} 场 · 可推 {payload.get('actionable_count', 0)} 场
   · {_daily_source_line(payload)} · {_e(format_ts(payload.get('generated_at')))}
@@ -1426,6 +1482,7 @@ def _worldcup_teaser(output_root: Path) -> str:
   <p style="margin:0"><a href="/worldcup"><strong>🏆 开盘套路</strong></a>
   · <a href="/worldcup/groups"><strong>⚔️ 小组战意</strong></a>
   · <a href="/handicap"><strong>📊 亚盘赢盘</strong></a>
+  · <a href="/quant"><strong>📈 量化回测</strong></a>
   · <a href="/kelly"><strong>🧮 Kelly</strong></a>
      <span class="meta"> · {n} 场完赛</span></p>
   <p style="margin:6px 0 0;font-size:15px">{_e(headline)}</p>
@@ -1761,10 +1818,9 @@ def html_worldcup_ledger(ledger: dict) -> str:
     details_html = _ledger_details_block(records, acc, patterns)
 
     wc_css = _shared_css("""
-body { max-width: min(1280px, calc(100vw - 32px)); }
-.card, .hero-card { border-radius: 12px; padding: 20px 24px; }
+.card, .hero-card { border-radius: 12px; padding: clamp(14px, 3vw, 20px) clamp(14px, 3vw, 24px); }
 .hero-card { background: linear-gradient(135deg, #eff6ff 0%, #fff 60%); border: 1px solid #dbeafe; box-shadow: 0 1px 4px rgba(0,0,0,.06); margin-bottom: 16px; }
-h2.hero-headline { margin: 0; font-size: 1.25rem; line-height: 1.45; color: #0f172a; flex: 1; }
+h2.hero-headline { margin: 0; font-size: clamp(1.05rem, 3.5vw, 1.25rem); line-height: 1.45; color: #0f172a; flex: 1; }
 .hero-top { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
 .conf-badge { font-size: 12px; font-weight: 600; padding: 6px 12px; border-radius: 20px; white-space: nowrap; }
 .conf-low { background: #fef3c7; color: #92400e; }
@@ -1772,8 +1828,7 @@ h2.hero-headline { margin: 0; font-size: 1.25rem; line-height: 1.45; color: #0f1
 .conf-high { background: #d1fae5; color: #065f46; }
 .conf-note { margin: 10px 0 0; }
 .action-list { margin: 0; padding-left: 20px; line-height: 1.75; font-size: 15px; }
-.conc-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-@media (max-width: 640px) { .conc-grid { grid-template-columns: 1fr; } }
+.conc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 12px; }
 .conc-card { border-radius: 10px; padding: 14px 16px; border: 1px solid #e2e8f0; }
 .conc-card.tone-warn { border-color: #fecaca; background: #fffbeb; }
 .conc-card.tone-ok { border-color: #bbf7d0; background: #f0fdf4; }
@@ -1786,24 +1841,17 @@ h2.hero-headline { margin: 0; font-size: 1.25rem; line-height: 1.45; color: #0f1
 .conc-liner { margin: 0 0 6px; font-size: 14px; line-height: 1.5; }
 .conc-advice { margin: 0; font-size: 13px; color: #475569; }
 .match-list { display: flex; flex-direction: column; gap: 8px; }
-.match-row { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(360px, 1.15fr); gap: 8px 18px; padding: 12px 0; border-bottom: 1px solid #f1f5f9; align-items:start; }
+.match-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 8px 18px; padding: 12px 0; border-bottom: 1px solid #f1f5f9; align-items:start; }
 .match-left { min-width: 0; }
 .match-take { font-size: 13px; color: #64748b; margin-top: 4px; }
 .score { font-weight: 700; margin-left: 8px; }
 .match-side { justify-self: end; text-align: right; font-size: 12px; color: #475569; line-height: 1.65; }
 .side-label { display:inline-block; color:#64748b; margin-right:6px; font-weight:700; }
 .match-link { margin-top: 4px; }
-@media (max-width: 760px) {
-  .match-row { grid-template-columns: 1fr; }
-  .match-side { justify-self: stretch; text-align: left; background:#f8fafc; border-radius:8px; padding:8px 10px; }
-}
 .chip-grp { display:inline-flex; align-items:center; background:#eff6ff; color:#1d4ed8; font-size:10px; font-weight:700; padding:2px 8px; border-radius:999px; border:1px solid #dbeafe; white-space:nowrap; }
 .toolbar { display: flex; gap: 10px; flex-wrap: wrap; }
-.stat-grid { grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 12px; }
-.stat-val { font-size: 1.3rem; font-weight: 700; }
-.stat-lbl { font-size: 11px; }
 table.mini { font-size: 13px; }
-.watch-grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:14px; align-items:stretch; }
+.watch-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap:14px; align-items:stretch; }
 .watch-item { display:flex; flex-direction:column; gap:10px; border:1px solid #e2e8f0; border-radius:14px; padding:14px 14px 12px; background:#fff; box-shadow:0 1px 2px rgba(15,23,42,.04); }
 .watch-item.watch-warn { border-color:#fdba74; background:linear-gradient(180deg,#fff7ed 0%,#fff 36%); }
 .watch-item-head { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
@@ -1849,13 +1897,6 @@ table.mini { font-size: 13px; }
 .watch-badge-warn { background: #fee2e2; color: #be123c; }
 .watch-badge-ok { background: #dcfce7; color: #15803d; }
 .watch-badge-neutral { background: #e0f2fe; color: #0369a1; }
-@media (max-width: 900px) {
-  .watch-grid { grid-template-columns: 1fr; }
-}
-@media (max-width: 520px) {
-  body { max-width: calc(100vw - 16px); padding-left:8px; padding-right:8px; }
-  .watch-stats, .match-ai-grid { grid-template-columns: 1fr; }
-}
 .ai-watch-card { border-left:4px solid #7c3aed; }
 .ai-headline { font-size:17px; font-weight:700; color:#4c1d95; margin:4px 0 8px; }
 .ai-watch-cols { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:12px 0; }
@@ -1864,9 +1905,6 @@ table.mini { font-size: 13px; }
 .ai-match-note { background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px; }
 .ai-match-head { display:flex; justify-content:space-between; gap:8px; align-items:center; }
 .ai-match-note p { margin:6px 0 0; line-height:1.5; }
-@media (max-width:760px) {
-  .ai-watch-cols, .ai-match-grid { grid-template-columns:1fr; }
-}
 .export-hero { margin-bottom: 14px; }
 .export-hero h1 { margin: 0 0 6px; font-size: 1.45rem; }
 .export-footer { margin-top: 16px; padding-top: 10px; border-top: 1px dashed #cbd5e1; text-align: center; font-size: 11px; color: #64748b; }
@@ -1879,6 +1917,7 @@ table.mini { font-size: 13px; }
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head>
 <meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
 <meta http-equiv="refresh" content="180"/>
 <title>世界杯 · 开盘套路总结</title>
 <style>
@@ -1936,7 +1975,7 @@ function analyzeWorldcupMatch(fid, btn) {{
 }}
 </script>
 </head><body>
-<p class="back"><a href="/">← 返回首页</a> · <a href="/daily">当日推荐</a> · <a href="/handicap">亚盘赢盘</a> · <a href="/kelly">Kelly</a></p>
+<p class="back page-nav"><a href="/">← 返回首页</a> · <a href="/daily">当日推荐</a> · <a href="/handicap">亚盘赢盘</a> · <a href="/quant">量化回测</a> · <a href="/kelly">Kelly</a></p>
 
 <div class="card toolbar">
   <button class="btn" onclick="refreshLedger()">刷新</button>
@@ -2037,12 +2076,9 @@ def html_ah_analytics(ledger: dict) -> str:
         pick_rows = '<p class="meta">暂无带亚盘推荐的完场记录；有推荐且完场后会自动纳入回测。</p>'
 
     ah_css = _shared_css("""
-body { max-width: min(1200px, calc(100vw - 32px)); }
 .hero-card { background: linear-gradient(135deg, #f5f3ff 0%, #fff 60%); border: 1px solid #ddd6fe; }
-.stat-grid { grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px; }
-@media (max-width: 760px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
 .match-list { display: flex; flex-direction: column; gap: 8px; }
-.match-row { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(280px, 1fr); gap: 8px 16px;
+.match-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px 16px;
              padding: 12px 0; border-bottom: 1px solid #f1f5f9; }
 .match-take { font-size: 13px; color: #64748b; margin-top: 4px; }
 .score { font-weight: 700; margin-left: 8px; }
@@ -2052,12 +2088,13 @@ body { max-width: min(1200px, calc(100vw - 32px)); }
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head>
 <meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>亚盘赢盘分析</title>
 <style>
 {ah_css}
 </style>
 </head><body>
-<p class="back"><a href="/">← 返回首页</a> · <a href="/worldcup">开盘套路</a> · <a href="/daily">当日推荐</a> · <a href="/kelly">Kelly</a></p>
+<p class="back page-nav"><a href="/">← 返回首页</a> · <a href="/worldcup">开盘套路</a> · <a href="/daily">当日推荐</a> · <a href="/kelly">Kelly</a></p>
 
 <div class="card hero-card">
   <h1>📊 亚盘赢盘分析</h1>
@@ -2117,10 +2154,9 @@ def html_kelly_calculator(
         )
 
     kelly_css = _shared_css("""
-.kelly-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-@media (max-width: 760px) { .kelly-grid { grid-template-columns: 1fr; } }
+.kelly-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 16px; }
 .kelly-form label { display: block; font-size: 13px; color: #475569; margin: 10px 0 4px; }
-.kelly-form input, .kelly-form select { width: 100%; max-width: 320px; padding: 8px 10px;
+.kelly-form input, .kelly-form select { width: 100%; max-width: 100%; padding: 8px 10px;
   border: 1px solid #cbd5e1; border-radius: 8px; font-size: 14px; }
 .prefill-card { background: #eff6ff; border: 1px solid #bfdbfe; margin-bottom: 14px; }
 .result-card { border-left: 4px solid #2563eb; }
@@ -2129,8 +2165,7 @@ def html_kelly_calculator(
 .result-card.tone-ok { border-left-color: #059669; }
 .kelly-val { font-size: 1.6rem; font-weight: 700; margin: 4px 0; }
 .kelly-sub { font-size: 13px; color: #64748b; }
-.kelly-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
-@media (max-width: 640px) { .kelly-metrics { grid-template-columns: 1fr; } }
+.kelly-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 120px), 1fr)); gap: 10px; margin-top: 12px; }
 .metric { background: #f8fafc; border-radius: 8px; padding: 10px 12px; }
 .metric .lbl { font-size: 11px; color: #64748b; }
 .metric .num { font-size: 1.1rem; font-weight: 700; }
@@ -2144,12 +2179,13 @@ def html_kelly_calculator(
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head>
 <meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Kelly 仓位计算器</title>
 <style>
 {kelly_css}
 </style>
 </head><body>
-<p class="back"><a href="/">← 返回首页</a> · <a href="/handicap">亚盘赢盘</a> · <a href="/daily">当日推荐</a> · <a href="/worldcup">开盘套路</a></p>
+<p class="back page-nav"><a href="/">← 返回首页</a> · <a href="/handicap">亚盘赢盘</a> · <a href="/quant">量化回测</a> · <a href="/daily">当日推荐</a> · <a href="/worldcup">开盘套路</a></p>
 
 <h1>🧮 Kelly 仓位计算器</h1>
 <p class="meta">根据胜率与赔率计算最优下注比例 · 公式 f* = (p×D − 1) / (D − 1)</p>
@@ -2384,8 +2420,9 @@ def html_group_stage(report: dict) -> str:
     if not report.get("ok"):
         err = report.get("error") or "无法拉取积分榜"
         return f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>小组战意</title></head><body>
-<p class="back"><a href="/">← 返回</a></p>
+<p class="back page-nav"><a href="/">← 返回</a></p>
 <p>加载失败：{_e(err)}</p></body></html>"""
 
     rs = report.get("round_summary") or {}
@@ -2427,9 +2464,7 @@ def html_group_stage(report: dict) -> str:
     type_txt = " · ".join(f"{k} {v}场" for k, v in sorted(type_counts.items(), key=lambda x: -x[1]))
 
     gs_css = _shared_css("""
-body { max-width: min(1280px, calc(100vw - 32px)); }
-.gs-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
-@media (max-width: 900px) { .gs-grid { grid-template-columns: 1fr; } }
+.gs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 14px; }
 .gs-fixture { border-top: 1px solid #f1f5f9; padding: 10px 0; }
 .gs-fix-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 4px; }
 .gs-group-card h4 { margin: 14px 0 6px; font-size: 13px; color: #475569; }
@@ -2439,10 +2474,11 @@ body { max-width: min(1280px, calc(100vw - 32px)); }
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head>
 <meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>世界杯小组战意 · 默契球/拼命球</title>
 <style>{gs_css}</style>
 </head><body>
-<p class="back"><a href="/">← 返回首页</a> · <a href="/worldcup">开盘套路</a> · <a href="/handicap">亚盘赢盘</a> · <a href="/kelly">Kelly</a></p>
+<p class="back page-nav"><a href="/">← 返回首页</a> · <a href="/worldcup">开盘套路</a> · <a href="/handicap">亚盘赢盘</a> · <a href="/quant">量化回测</a> · <a href="/kelly">Kelly</a></p>
 
 <div class="card hero-gs">
   <h1>⚔️ 小组战意分析 · 48队赛制</h1>
@@ -2632,6 +2668,212 @@ def _path_block(team: str, pick: dict) -> str:
 </div>"""
 
 
+def _quant_score_tags(scores: list, *, detail: list | None = None) -> str:
+    if detail:
+        return " ".join(f"<span class='tag'>{_e(str(x))}</span>" for x in detail[:5])
+    if not scores:
+        return "<span class='meta'>—</span>"
+    return " ".join(f"<span class='tag'>{_e(str(x))}</span>" for x in scores[:5])
+
+
+def _quant_panel(prediction: dict | None) -> str:
+    if not prediction:
+        return ""
+    quant = prediction.get("quant") or {}
+    sm = quant.get("score_model") or {}
+    ev = quant.get("jingcai_ev") or prediction.get("jingcai_ev")
+    elo = quant.get("elo")
+    mc = quant.get("group_mc")
+    if not sm and not ev and not elo and not mc:
+        return ""
+
+    hist_detail = prediction.get("likely_scores_detail") or []
+    hist_scores = prediction.get("likely_scores") or []
+    model_detail = prediction.get("model_likely_scores_detail") or sm.get("likely_scores_detail") or []
+    model_scores = prediction.get("model_likely_scores") or sm.get("likely_scores") or []
+    stretch = prediction.get("model_stretch_scores") or [
+        s.get("score") for s in (sm.get("stretch_scores") or []) if s.get("score")
+    ]
+
+    score_grid = ""
+    if hist_scores or model_scores:
+        stretch_txt = ""
+        if stretch:
+            stretch_txt = f"<p class='meta'>模型延伸：{' · '.join(_e(str(x)) for x in stretch[:2])}</p>"
+        score_grid = f"""
+<div class="quant-score-grid">
+  <div class="quant-track">
+    <h4>历史相似 Top3</h4>
+    {_quant_score_tags(hist_scores, detail=hist_detail)}
+  </div>
+  <div class="quant-track model-track">
+    <h4>Dixon-Coles 模型 Top3</h4>
+    {_quant_score_tags(model_scores, detail=model_detail)}
+    {stretch_txt}
+  </div>
+</div>"""
+
+    model_meta = ""
+    if sm:
+        probs = sm.get("prob_1x2_pct") or {}
+        ah_cov = sm.get("ah_home_cover_pct")
+        model_meta = (
+            f"<p class='meta'>λ 主 {sm.get('lambda_home')} · 客 {sm.get('lambda_away')}"
+            f" · 总进球 {sm.get('avg_total_goals')}"
+            f" · 模型 1X2 {probs.get('home')}/{probs.get('draw')}/{probs.get('away')}%"
+            f"{f' · 模型上盘 {ah_cov}%' if ah_cov is not None else ''}</p>"
+        )
+
+    elo_block = ""
+    if elo:
+        elo_block = (
+            f"<p class='meta'><strong>Elo</strong> {_e(elo.get('home'))} {elo.get('home_elo')}"
+            f" vs {_e(elo.get('away'))} {elo.get('away_elo')}"
+            f" · 差 {elo.get('elo_diff'):+.0f}"
+            f" · 主胜 {elo.get('home_win_prob_pct')}%</p>"
+        )
+
+    ev_block = ""
+    if ev:
+        vb = "value-yes" if ev.get("value_bet") else "value-no"
+        ev_block = f"""
+<div class="quant-ev {vb}">
+  <strong>{_e(ev.get('pick_cn') or '—')}</strong>
+  · SP {ev.get('jingcai_sp')} · 公平 {ev.get('fair_prob_pct')}% · 边际 {ev.get('edge_pp'):+.2f}pp
+  · EV {ev.get('ev_pct'):+.2f}% · {_e(ev.get('label') or '')}
+</div>"""
+
+    mc_block = ""
+    if mc and mc.get("teams"):
+        mc_rows = ""
+        for t in mc.get("teams") or []:
+            mc_rows += (
+                f"<tr><td>{_e(t.get('team'))}</td>"
+                f"<td>{t.get('p_top2_pct')}%</td>"
+                f"<td>{t.get('p_best3_pct')}%</td>"
+                f"<td>{t.get('p_out_pct')}%</td></tr>"
+            )
+        mc_block = f"""
+<div class="quant-mc">
+  <h4>小组出线 MC · {_e(mc.get('group'))} 组 · {mc.get('simulations')} 次</h4>
+  <table class="mini">
+    <tr><th>球队</th><th>前二</th><th>最佳第三</th><th>出局</th></tr>
+    {mc_rows}
+  </table>
+</div>"""
+
+    return f"""
+<div class="card quant-card">
+  <h3>📈 量化分析 <span class="tag">Poisson · Elo · EV</span></h3>
+  {score_grid}
+  {model_meta}
+  {elo_block}
+  {ev_block}
+  {mc_block}
+  <p class="meta">历史轨来自相似样本；模型轨由去水欧赔拟合 λ，Dixon-Coles 修正低比分相关。</p>
+</div>"""
+
+
+def html_quant_analytics(report: dict) -> str:
+    acc = report or {}
+    updated = acc.get("updated_at") or now_beijing_str()
+    elo_sample = acc.get("elo_ratings_sample") or {}
+
+    stats = _stat_grid([
+        ("完场样本", str(acc.get("total_settled") or 0)),
+        ("1X2 命中率", _pct(acc.get("rate_1x2_pct"))),
+        ("历史比分 Top3", _pct((acc.get("hist_score") or {}).get("rate_pct"))),
+        ("模型比分 Top3", _pct((acc.get("model_score") or {}).get("rate_pct"))),
+        ("亚盘推荐赢盘", _pct((acc.get("ah_settled") or {}).get("rate_pct"))),
+        ("正EV 1X2 命中", _pct((acc.get("ev_positive") or {}).get("rate_pct"))),
+    ])
+
+    hist = acc.get("hist_score") or {}
+    model = acc.get("model_score") or {}
+    ah = acc.get("ah_settled") or {}
+    evp = acc.get("ev_positive") or {}
+
+    detail_rows = [
+        ("竞彩 1X2", acc.get("judged_1x2"), acc.get("hit_1x2"), acc.get("rate_1x2_pct")),
+        ("历史比分 Top3", hist.get("judged"), hist.get("hit_top3"), hist.get("rate_pct")),
+        ("Dixon-Coles Top3", model.get("judged"), model.get("hit_top3"), model.get("rate_pct")),
+        ("亚盘推荐", ah.get("judged"), ah.get("hit"), ah.get("rate_pct")),
+        ("EV&gt;3% 场次 1X2", evp.get("judged"), evp.get("hit_1x2"), evp.get("rate_pct")),
+    ]
+    detail_table = ""
+    for label, judged, hit, rate in detail_rows:
+        detail_table += (
+            f"<tr><td>{label}</td><td>{judged or 0}</td><td>{hit or 0}</td><td>{_pct(rate)}</td></tr>"
+        )
+
+    source_table = _source_table(acc.get("by_source") or {})
+    conf_table = _source_table(acc.get("by_confidence") or {})
+
+    elo_rows = ""
+    for team, rating in sorted(elo_sample.items(), key=lambda x: -x[1])[:12]:
+        elo_rows += f"<tr><td>{_e(team)}</td><td>{rating:.0f}</td></tr>"
+    if not elo_rows:
+        elo_rows = "<tr><td colspan='2'>暂无 Elo 快照（完赛后自动更新）</td></tr>"
+
+    quant_css = _shared_css("""
+.hero-card { background: linear-gradient(135deg, #ecfdf5 0%, #fff 60%); border: 1px solid #bbf7d0; }
+.quant-card { border-left: 4px solid #059669; }
+.quant-score-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px; margin: 10px 0; }
+.quant-track { background: #f8fafc; border-radius: 8px; padding: 10px; border: 1px solid #e2e8f0; }
+.quant-track.model-track { background: #ecfdf5; border-color: #bbf7d0; }
+.quant-ev { margin: 10px 0; padding: 10px 12px; border-radius: 8px; font-size: 14px; }
+.quant-ev.value-yes { background: #ecfdf5; border: 1px solid #86efac; color: #166534; }
+.quant-ev.value-no { background: #f8fafc; border: 1px solid #e2e8f0; color: #475569; }
+.quant-mc { margin-top: 12px; }
+""")
+
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>量化回测</title>
+<style>
+{quant_css}
+</style>
+</head><body>
+<p class="back page-nav"><a href="/">← 返回首页</a> · <a href="/worldcup">开盘套路</a> · <a href="/daily">当日推荐</a> · <a href="/handicap">亚盘赢盘</a> · <a href="/quant">量化回测</a> · <a href="/kelly">Kelly</a></p>
+
+<div class="card hero-card">
+  <h1>📈 量化回测</h1>
+  <p class="meta">Dixon-Coles 比分 · Elo 强度 · 竞彩 EV · 小组 MC · 更新 {_e(updated)}</p>
+  {stats}
+</div>
+
+<div class="card">
+  <h2>回测明细</h2>
+  <table>
+    <tr><th>维度</th><th>样本</th><th>命中</th><th>命中率</th></tr>
+    {detail_table}
+  </table>
+  <p class="meta">历史比分取推荐时 likely_scores 前三；模型比分取 Dixon-Coles Top3；正 EV 阈值为 EV&gt;3%。</p>
+</div>
+
+<div class="card">
+  <h2>1X2 按来源 / 置信度</h2>
+  <h4>按推荐来源</h4>
+  {source_table}
+  <h4>按置信度</h4>
+  {conf_table}
+</div>
+
+<div class="card">
+  <h2>Elo 强度（样本）</h2>
+  <table>
+    <tr><th>球队</th><th>Rating</th></tr>
+    {elo_rows}
+  </table>
+  <p class="meta">种子来自 wc2026 档位，完场后自动迭代更新。</p>
+</div>
+
+<p class="meta" style="margin-top:20px">公益体彩 量力而行 · 仅供参考 不构成投注建议</p>
+</body></html>"""
+
+
 def _build_match_strategy_panel(match_name: str, prediction: dict | None = None) -> str:
     from knockout_path import build_match_knockout_context
 
@@ -2771,6 +3013,7 @@ def html_match_detail(
     pred_card = _build_pred_cards(prediction)
     settled_card = _settled_card(settled)
     strategy_panel = _build_match_strategy_panel(name, prediction)
+    quant_panel = _quant_panel(prediction)
     ah_card = _build_ah_analysis_card(prediction, timeline)
     latest_deep = (deep_records or [None])[0]
     deep_card = _deep_analysis_card(latest_deep)
@@ -2921,13 +3164,11 @@ def html_match_detail(
     team_form_fold = _team_form_fold_html(name)
 
     match_css = _shared_css("""
-.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-@media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
 .card.inner { box-shadow: none; border: 1px solid #e2e8f0; padding: 12px; margin: 0; }
-.pick { font-size: 1.15rem; }
+.pick { font-size: clamp(1rem, 3.5vw, 1.15rem); }
 .pred-card { border-left: 4px solid #7c3aed; }
 .deep-card { border-left: 4px solid #0d9488; }
-.deep-headline { font-size: 1.2rem; font-weight: 600; color: #0f766e; margin: 0 0 8px; }
+.deep-headline { font-size: clamp(1.05rem, 3.5vw, 1.2rem); font-weight: 600; color: #0f766e; margin: 0 0 8px; }
 .deep-section { margin: 10px 0; }
 .deep-section h4 { margin: 0 0 4px; font-size: 13px; color: #475569; }
 .deep-list { margin: 4px 0 0 16px; padding: 0; }
@@ -2938,10 +3179,18 @@ def html_match_detail(
 .ah-card { border-left: 4px solid #7c3aed; margin-bottom: 12px; }
 .ah-stats-table { margin-top: 10px; }
 .strategy-card { border-left: 4px solid #059669; margin-bottom: 14px; }
+.quant-card { border-left: 4px solid #059669; margin-bottom: 14px; }
+.quant-score-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px; margin: 10px 0; }
+.quant-track { background: #f8fafc; border-radius: 8px; padding: 10px; border: 1px solid #e2e8f0; }
+.quant-track.model-track { background: #ecfdf5; border-color: #bbf7d0; }
+.quant-ev { margin: 10px 0; padding: 10px 12px; border-radius: 8px; font-size: 14px; }
+.quant-ev.value-yes { background: #ecfdf5; border: 1px solid #86efac; color: #166534; }
+.quant-ev.value-no { background: #f8fafc; border: 1px solid #e2e8f0; color: #475569; }
+.quant-mc { margin-top: 12px; }
 .strategy-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; }
-.strategy-head h3 { margin: 0; flex: 1; min-width: 200px; }
-.strategy-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
-.path-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.strategy-head h3 { margin: 0; flex: 1; min-width: min(100%, 200px); }
+.strategy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 14px; margin-bottom: 14px; }
+.path-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 14px; margin-bottom: 14px; }
 .path-block { background: #f8fafc; border-radius: 10px; padding: 12px; border: 1px solid #e2e8f0; }
 .path-block h4 { margin: 0 0 8px; font-size: 14px; }
 .path-notes { margin: 8px 0 0 16px; padding: 0; line-height: 1.55; }
@@ -2961,23 +3210,20 @@ def html_match_detail(
   padding: 10px; background: #f0fdf4; border-radius: 8px; border: 1px solid #bbf7d0; }
 .bracket-chip { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; }
 .bracket-chip.r32 { background: #dcfce7; color: #166534; }
-.rec-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
-@media (max-width: 900px) {{
-  .strategy-grid, .path-grid, .rec-grid {{ grid-template-columns: 1fr; }}
-}}
+.rec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 12px; margin-bottom: 12px; }
 .dual-hint { color: #b45309; background: #fffbeb; padding: 8px 12px; border-radius: 6px; }
 canvas { max-height: 260px; }
 tr.chg td { background: #fffbeb; }
 .style-clash-banner { margin-bottom: 8px; line-height: 1.5; }
 .style-clash-banner strong { color: #92400e; }
 .similar-block { overflow-x: auto; }
-.similar-block table { min-width: 960px; }
+.similar-block table { min-width: min(960px, 100%); }
 .similar-block .tag { margin-bottom: 4px; }
 h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
-.export-hero h1 { margin: 0 0 6px; font-size: 1.45rem; }
+.export-hero h1 { margin: 0 0 6px; font-size: clamp(1.15rem, 4vw, 1.45rem); }
 .export-footer { margin-top: 16px; padding-top: 10px; border-top: 1px dashed #cbd5e1; text-align: center; font-size: 11px; color: #64748b; }
 #match-export-root { background: #f8fafc; padding: 4px 0 8px; }
-.export-chart-img { border-radius: 8px; background: #fff; }
+.export-chart-img { border-radius: 8px; background: #fff; max-width: 100%; }
 """)
 
     safe_name = re.sub(r"[^\w\-]+", "_", name).strip("_") or fid
@@ -2987,6 +3233,7 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head>
 <meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>{_e(name)} · 趋势</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 {export_script}
@@ -2995,8 +3242,8 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
 </style>
 <script>{_AI_BTN_JS}{_AI_CHAT_JS}</script>
 </head><body>
-<p class="back"><a href="/">← 返回首页</a> · <a href="/daily">当日推荐</a> · <a href="/handicap">亚盘赢盘</a> · <a href="/kelly">Kelly</a></p>
-<p style="margin-bottom:16px">
+<p class="back page-nav"><a href="/">← 返回首页</a> · <a href="/daily">当日推荐</a> · <a href="/handicap">亚盘赢盘</a> · <a href="/quant">量化回测</a> · <a href="/kelly">Kelly</a></p>
+<p class="action-bar">
   <button type="button" class="btn btn-ai" data-label="✨ AI 推荐本场"
     onclick="aiRecommend('{_e(fid)}', this)">✨ AI 推荐本场</button>
   {deep_btn}
@@ -3016,6 +3263,7 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
 {settled_card}
 {_ai_chat_card(scope="match", fid=fid)}
 {strategy_panel}
+{quant_panel}
 {deep_card}
 <div class="rec-grid">
   <div>{pred_card}</div>

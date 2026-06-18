@@ -269,6 +269,13 @@ body {{
   text-align: center; position: relative; z-index: 3;
 }}
 .hint {{ color: #aaa; font-size: 13px; text-align: center; max-width: 750px; }}
+@media (max-width: 520px) {{
+  body {{ padding: 10px; }}
+  .side-left, .side-right {{ display: none; }}
+  .scroll {{ margin: 0; padding: 22px 16px 18px; }}
+  .toolbar {{ flex-direction: column; }}
+  .toolbar a, .toolbar button {{ width: 100%; text-align: center; }}
+}}
 </style>
 </head><body>
 <div class="toolbar">
@@ -597,6 +604,13 @@ body {{
   text-align: center; position: relative; z-index: 3;
 }}
 .hint {{ color: #aaa; font-size: 13px; text-align: center; max-width: 750px; }}
+@media (max-width: 520px) {{
+  body {{ padding: 10px; }}
+  .side-left, .side-right {{ display: none; }}
+  .scroll {{ margin: 0; padding: 22px 16px 18px; }}
+  .toolbar {{ flex-direction: column; }}
+  .toolbar a, .toolbar button {{ width: 100%; text-align: center; }}
+}}
 </style>
 </head><body>
 <div class="toolbar">

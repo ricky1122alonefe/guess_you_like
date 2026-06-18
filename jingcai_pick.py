@@ -287,3 +287,57 @@ def actionable_jingcai_pick(pred: dict) -> dict[str, Any] | None:
         "sp": info.get("jingcai_sp"),
         "reason": info.get("jingcai_reason") or "",
     }
+
+
+def resolve_jingcai_sp(
+    m: dict,
+    *,
+    pick_key: str | None = None,
+    market: str | None = None,
+) -> float | None:
+    """竞彩 SP for the buy direction — used for 2串1 payout math."""
+    info = m.get("jingcai_pick_info") or {}
+    jc = m.get("jingcai_snapshot") or {}
+    pk = pick_key or info.get("jingcai_pick")
+    mk = market or info.get("jingcai_market") or jingcai_market_mode(jc)
+    if not pk or pk == "skip" or mk in (None, "none", ""):
+        return None
+    if jc:
+        sp = _sp_for_pick(jc, mk, pk)
+        if sp is not None:
+            return sp
+    if info.get("jingcai_pick") == pk and info.get("jingcai_sp") is not None:
+        try:
+            return round(float(info["jingcai_sp"]), 2)
+        except (TypeError, ValueError):
+            pass
+    row = m.get("predict_row") or {}
+    if info.get("jingcai_pick") == pk and row.get("竞彩SP") is not None:
+        try:
+            return round(float(row["竞彩SP"]), 2)
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def ensure_match_jingcai(m: dict) -> dict:
+    """Attach latest poll 竞彩 snapshot when prediction cache lacks SP data."""
+    jc = m.get("jingcai_snapshot") or {}
+    info = m.get("jingcai_pick_info") or {}
+    if jc and info.get("jingcai_market") not in (None, "none", ""):
+        return m
+    fid = str(m.get("fixture_id") or "")
+    if not fid:
+        return m
+    try:
+        from timeline_merge import load_latest_poll_meta
+
+        meta = load_latest_poll_meta(fid)
+        poll_jc = meta.get("jingcai") or {}
+        if not poll_jc:
+            return m
+        out = dict(m)
+        attach_jingcai_recommendation(out, poll_jc)
+        return out
+    except Exception:
+        return m

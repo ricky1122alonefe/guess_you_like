@@ -235,3 +235,142 @@ def test_prediction_archive_kickoff_compare():
         )
         assert pred3 is not None
         assert pred3.get("result_1x2_cn") == "平局"
+
+
+def test_parlay_uses_jingcai_sp_only():
+    from custom_parlay import _leg_from_match
+    from daily_picks import _combined_odds
+    from jingcai_pick import attach_jingcai_recommendation, resolve_jingcai_sp
+
+    jc = {
+        "has_sp": True,
+        "sp_home": 1.85,
+        "sp_draw": 3.20,
+        "sp_away": 4.10,
+    }
+    m = {
+        "fixture_id": "1",
+        "match": "A vs B",
+        "result_1x2_cn": "home",
+        "result_1x2": "home",
+        "predict_row": {"胜平负": "主胜", "置信度": "高", "竞彩玩法": "胜平负", "竞彩SP": 1.85},
+        "odds_snapshot": {"eu_home": 1.70, "eu_draw": 3.5, "eu_away": 5.0},
+    }
+    attach_jingcai_recommendation(m, jc)
+    assert resolve_jingcai_sp(m, pick_key="home", market="sp") == 1.85
+
+    leg = _leg_from_match(m)
+    assert leg["jingcai_sp"] == 1.85
+    assert leg["odds_used"] == 1.85
+    assert leg["eu_odds"] == 1.70
+
+    m2 = dict(m, fixture_id="2", match="C vs D")
+    attach_jingcai_recommendation(m2, {**jc, "sp_home": 2.10})
+    leg2 = _leg_from_match(m2)
+    combined = _combined_odds([leg, leg2])
+    assert combined == round(1.85 * 2.10, 2)
+
+
+def test_score_model_from_odds():
+    from score_models import build_score_model
+
+    sm = build_score_model(
+        eu_home=1.70,
+        eu_draw=3.50,
+        eu_away=5.00,
+        fair_home_pct=55.0,
+        fair_draw_pct=26.0,
+        fair_away_pct=19.0,
+        ah_line=-0.5,
+        pick_1x2="home",
+    )
+    assert sm is not None
+    assert len(sm["likely_scores"]) == 3
+    assert sm["prob_1x2_pct"]["home"] > sm["prob_1x2_pct"]["away"]
+    assert sm["ah_home_cover_pct"] is not None
+
+
+def test_jingcai_ev_positive():
+    from jingcai_ev import compute_jingcai_ev
+    from jingcai_pick import attach_jingcai_recommendation
+
+    jc = {"has_sp": True, "sp_home": 2.20, "sp_draw": 3.20, "sp_away": 4.50}
+    pred = {
+        "result_1x2": "home",
+        "result_1x2_cn": "主胜",
+        "predict_row": {"胜平负": "主胜", "置信度": "高", "竞彩玩法": "胜平负", "竞彩SP": 2.20},
+        "odds_snapshot": {"eu_home": 1.70, "eu_draw": 3.5, "eu_away": 5.0},
+        "eu_implied": {"fair_home_pct": 58.0, "fair_draw_pct": 24.0, "fair_away_pct": 18.0},
+        "quant": {
+            "score_model": {"prob_1x2_pct": {"home": 57.0, "draw": 25.0, "away": 18.0}},
+        },
+    }
+    attach_jingcai_recommendation(pred, jc)
+    ev = compute_jingcai_ev(pred)
+    assert ev is not None
+    assert ev["jingcai_sp"] == 2.20
+    assert ev["ev_per_unit"] > 0
+
+
+def test_elo_update():
+    from elo_ratings import apply_finished_results, expected_score, match_elo_context
+
+    ratings = apply_finished_results([
+        {"home": "巴西", "away": "阿根廷", "home_score": 2, "away_score": 1},
+    ])
+    assert "巴西" in ratings
+    ctx = match_elo_context("巴西", "阿根廷", ratings=ratings)
+    assert ctx["home_elo"] >= ctx["away_elo"]
+    assert 0 < expected_score(ctx["home_elo"], ctx["away_elo"]) < 1
+
+
+def test_group_mc_simulate():
+    from group_mc import simulate_group_outcomes
+
+    out = simulate_group_outcomes(
+        "A",
+        current_standings=[
+            {"team": "墨西哥", "played": 1, "points": 3, "gd": 1, "gf": 2, "ga": 1, "won": 1, "drawn": 0, "lost": 0},
+            {"team": "韩国", "played": 1, "points": 3, "gd": 1, "gf": 2, "ga": 1, "won": 1, "drawn": 0, "lost": 0},
+            {"team": "捷克", "played": 1, "points": 0, "gd": -1, "gf": 1, "ga": 2, "won": 0, "drawn": 0, "lost": 1},
+            {"team": "南非", "played": 1, "points": 0, "gd": -1, "gf": 1, "ga": 2, "won": 0, "drawn": 0, "lost": 1},
+        ],
+        n_sims=200,
+    )
+    assert out["group"] == "A"
+    assert len(out["teams"]) == 4
+    assert abs(sum(t["p_top2_pct"] + t["p_best3_pct"] + t["p_out_pct"] for t in out["teams"]) - 400) < 5
+
+
+def test_attach_quant_analysis_match_odds():
+    from parser import MatchOdds
+    from quant_analytics import attach_quant_analysis
+
+    mo = MatchOdds(
+        "墨西哥 vs 韩国", -0.5, 0.9, 0.95, -0.25, 0.88, 0.92,
+        2.1, 3.2, 3.5, 2.0, 3.3, 3.6,
+    )
+    pred = {"match": mo.match_name, "result_1x2": "home"}
+    attach_quant_analysis(pred, cur=mo)
+    assert pred.get("quant", {}).get("score_model")
+
+
+def test_attach_quant_analysis():
+    from jingcai_pick import attach_jingcai_recommendation
+    from quant_analytics import attach_quant_analysis
+
+    jc = {"has_sp": True, "sp_home": 2.05, "sp_draw": 3.10, "sp_away": 3.20}
+    pred = {
+        "match": "墨西哥 vs 韩国",
+        "result_1x2": "home",
+        "result_1x2_cn": "主胜",
+        "predict_row": {"胜平负": "主胜", "置信度": "中", "竞彩玩法": "胜平负", "竞彩SP": 2.05},
+        "likely_scores": ["1-0", "2-1"],
+        "odds_snapshot": {"eu_home": 2.10, "eu_draw": 3.20, "eu_away": 3.40, "ah_line": -0.25},
+    }
+    attach_jingcai_recommendation(pred, jc)
+    attach_quant_analysis(pred)
+    assert pred.get("quant")
+    assert pred.get("model_likely_scores")
+    assert pred["quant"].get("score_model")
+    assert pred["quant"].get("elo")

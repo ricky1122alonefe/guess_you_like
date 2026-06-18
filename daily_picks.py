@@ -526,6 +526,7 @@ def _build_candidate(
     if not reason:
         reason = (m.get("open_probability_summary") or "")[:120]
     eu = pick.get("jingcai_sp") or _eu_odds(m, pick["pick_key"])
+    sp = pick.get("jingcai_sp") or _jc_sp(m.get("jingcai_snapshot"), market, pick["pick_key"])
     return {
         "fixture_id": fid,
         "match": m.get("match") or (m.get("predict_row") or {}).get("比赛") or fid,
@@ -537,6 +538,8 @@ def _build_candidate(
         "scores": pick["scores"],
         "asian_handicap_cn": pick["asian_handicap_cn"],
         "confidence_cn": pick["confidence_cn"],
+        "jingcai_sp": round(sp, 2) if sp else None,
+        "odds_used": round(sp, 2) if sp else None,
         "eu_odds": round(eu, 2) if eu else None,
         "reason": reason,
         "model_note": pick.get("model_note") or "",
@@ -559,12 +562,24 @@ def _pick_best(candidates: list[dict], score_key: str, exclude_fids: set[str]) -
 
 
 def _combined_odds(legs: list[dict]) -> float | None:
-    odds = [leg.get("eu_odds") for leg in legs]
+    """Multiply leg odds — prefers 竞彩 SP (odds_used / jingcai_sp)."""
+    odds: list[float | None] = []
+    for leg in legs:
+        val = leg.get("odds_used")
+        if val is None:
+            val = leg.get("jingcai_sp")
+        if val is None:
+            odds.append(None)
+            continue
+        try:
+            odds.append(float(val))
+        except (TypeError, ValueError):
+            odds.append(None)
     if not all(odds):
         return None
     combined = 1.0
     for o in odds:
-        combined *= float(o)
+        combined *= o  # type: ignore[operator]
     return round(combined, 2)
 
 

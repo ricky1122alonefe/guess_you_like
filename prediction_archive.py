@@ -111,6 +111,7 @@ def prediction_snapshot(pred: dict | None) -> dict[str, Any]:
         "pick_1x2_cn": row.get("胜平负") or pred.get("result_1x2_cn"),
         "recommended_scores": row.get("推荐比分") or "",
         "asian_handicap_cn": row.get("亚盘") or pred.get("asian_handicap_cn"),
+        "asian_handicap_pick": pred.get("asian_handicap_pick"),
         "confidence_cn": row.get("置信度") or pred.get("confidence_cn"),
         "risk_level_cn": pred.get("risk_level_cn"),
         "control_level_cn": pred.get("control_level_cn"),

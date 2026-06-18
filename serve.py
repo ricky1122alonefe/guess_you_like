@@ -32,7 +32,7 @@ from timeline_merge import load_latest_poll_meta, merge_match_indexes
 from time_utils import now_beijing
 from daily_picks import load_daily_picks_from_output, save_daily_picks
 from share_card import build_parlay_share_context, build_share_context, html_share_match, html_share_parlay
-from web_ui import html_daily_picks, html_dashboard, html_match_detail, html_worldcup_ledger
+from web_ui import html_ah_analytics, html_daily_picks, html_dashboard, html_group_stage, html_kelly_calculator, html_match_detail, html_worldcup_ledger
 
 log = logging.getLogger("serve")
 _FID_RE = re.compile(r"^/match/(\d+)$")
@@ -497,6 +497,18 @@ class Handler(BaseHTTPRequestHandler):
             )
             self._send_html(html_share_parlay(build_parlay_share_context(analysis)))
             return
+        if path == "/worldcup/groups":
+            from group_stage_model import build_group_stage_report
+            qs = parse_qs(urlparse(self.path).query)
+            force = qs.get("refresh", ["0"])[0] in ("1", "true", "yes")
+            self._send_html(html_group_stage(build_group_stage_report(force_refresh=force)))
+            return
+        if path == "/api/worldcup/groups":
+            from group_stage_model import build_group_stage_report
+            qs = parse_qs(urlparse(self.path).query)
+            force = qs.get("refresh", ["0"])[0] in ("1", "true", "yes")
+            self._send_json(build_group_stage_report(force_refresh=force))
+            return
         if path == "/worldcup":
             from worldcup_analytics import build_tournament_ledger
             ledger = build_tournament_ledger(
@@ -506,6 +518,36 @@ class Handler(BaseHTTPRequestHandler):
                 ai_base_url=self.ai_base_url,
             )
             self._send_html(html_worldcup_ledger(ledger))
+            return
+        if path == "/handicap":
+            from ah_analytics import build_ah_ledger
+            self._send_html(html_ah_analytics(build_ah_ledger(root)))
+            return
+        if path == "/kelly":
+            qs = parse_qs(urlparse(self.path).query)
+            fid = (qs.get("fixture_id", [None])[0] or "").strip()
+            prefill = None
+            initial = None
+            if fid:
+                pred = _load_latest_pred(root, fid)
+                _ensure_similarity_analysis(pred, root)
+                from kelly import compute_kelly, kelly_prefill_from_prediction
+                prefill = kelly_prefill_from_prediction(pred, fixture_id=fid)
+                if prefill.get("probability_pct") is not None and prefill.get("odds_value") is not None:
+                    kwargs: dict = {
+                        "probability": prefill["probability_pct"] / 100,
+                        "fraction": 0.5,
+                    }
+                    if prefill.get("odds_type") == "water":
+                        kwargs["water"] = prefill["odds_value"]
+                    else:
+                        kwargs["decimal_odds"] = prefill["odds_value"]
+                    initial = compute_kelly(**kwargs)
+            self._send_html(html_kelly_calculator(prefill, initial_result=initial))
+            return
+        if path == "/api/handicap/ledger":
+            from ah_analytics import build_ah_ledger
+            self._send_json(build_ah_ledger(root))
             return
         if path == "/api/worldcup/ledger":
             from worldcup_analytics import build_tournament_ledger
@@ -580,6 +622,31 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/settle":
             from match_settlement import run_settlement
             self._send_json(run_settlement(self.output_root))
+            return
+        if path == "/api/kelly/calc":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b"{}"
+                payload = json.loads(raw.decode("utf-8"))
+                from kelly import compute_kelly
+
+                prob = payload.get("probability")
+                if prob is None and payload.get("probability_pct") is not None:
+                    prob = float(payload["probability_pct"]) / 100
+                odds_type = payload.get("odds_type") or "decimal"
+                odds_val = payload.get("odds_value") or payload.get("odds")
+                kwargs = {
+                    "probability": float(prob),
+                    "fraction": float(payload.get("fraction", 0.5)),
+                    "bankroll": payload.get("bankroll"),
+                }
+                if odds_type == "water":
+                    kwargs["water"] = odds_val
+                else:
+                    kwargs["decimal_odds"] = odds_val
+                self._send_json(compute_kelly(**kwargs))
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                self._send_json({"ok": False, "error": str(exc)}, 400)
             return
         if path == "/api/worldcup/refresh":
             from worldcup_analytics import refresh_tournament_ledger

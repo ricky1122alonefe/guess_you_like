@@ -106,6 +106,7 @@ def _result_row(
         pred,
         home_score=score.home_score,
         away_score=score.away_score,
+        ah_line=(closing_tick or {}).get("ah_line"),
     )
     payload = _build_payload(pred, opening_tick=opening_tick, closing_tick=closing_tick)
     row = {
@@ -121,6 +122,10 @@ def _result_row(
         "recommended_scores": hits.get("recommended_scores") or payload.get("prediction", {}).get("recommended_scores"),
         "hit_1x2": hits.get("hit_1x2"),
         "hit_score": hits.get("hit_score"),
+        "pick_ah": hits.get("pick_ah"),
+        "pick_ah_cn": hits.get("pick_ah_cn"),
+        "hit_ah": hits.get("hit_ah"),
+        "ah_settlement": hits.get("ah_settlement"),
         "payload": payload,
         "source": SOURCE,
     }
@@ -243,6 +248,12 @@ def run_settlement(
             summary["ledger_matches"] = ledger.get("accuracy", {}).get("total_settled", 0)
         except Exception as exc:
             log.warning("世界杯账本更新失败: %s", exc)
+        try:
+            from ah_analytics import refresh_ah_ledger
+            ah_ledger = refresh_ah_ledger(root)
+            summary["ah_ledger_matches"] = len(ah_ledger.get("records") or [])
+        except Exception as exc:
+            log.warning("亚盘账本更新失败: %s", exc)
 
     log.info(
         "赛果结算完成：写入 %d 场，待结算无比分 %d 场",

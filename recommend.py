@@ -457,6 +457,60 @@ def build_recommendation(payload: dict) -> Recommendation:
     if pick is None:
         pick = _pick_1x2_combined(stats, eu, control, trap)
 
+    gs_notes: list[str] = []
+    gs_analysis = None
+    if pick is not None and match_name:
+        try:
+            from group_stage_model import analyze_match_from_name, adjust_rates_for_group_stage
+
+            gs_analysis = analyze_match_from_name(match_name)
+            if gs_analysis and not gs_analysis.get("is_finished"):
+                result, result_cn, hist_rates, combined, hist_best = pick
+                combined, gs_notes = adjust_rates_for_group_stage(combined, gs_analysis)
+                ordered = sorted(combined.items(), key=lambda x: -x[1])
+                new_key = ordered[0][0]
+                mt = gs_analysis.get("match_type")
+                if mt in ("collusion_watch", "draw_friendly", "open_race"):
+                    draw_v = combined.get("draw", 0)
+                    if draw_v >= ordered[0][1] - 0.025:
+                        new_key = "draw"
+                elif mt == "must_win":
+                    hs = gs_analysis.get("home_situation") or {}
+                    aws = gs_analysis.get("away_situation") or {}
+                    if hs.get("pressure") == "high" and aws.get("pressure") != "high":
+                        if combined.get("home", 0) >= combined.get("away", 0) - 0.03:
+                            new_key = "home"
+                    elif aws.get("pressure") == "high" and hs.get("pressure") != "high":
+                        if combined.get("away", 0) >= combined.get("home", 0) - 0.03:
+                            new_key = "away"
+                result, result_cn = new_key, RESULT_CN[new_key]
+                pick = (result, result_cn, hist_rates, combined, hist_best)
+
+            from knockout_path import build_match_knockout_context
+
+            kctx = build_match_knockout_context(match_name)
+            if kctx and kctx.get("same_group") and not (kctx.get("motivation") or {}).get("is_finished"):
+                hint = kctx.get("prediction_hint") or {}
+                if kctx.get("picking_level") in ("watch", "medium", "high"):
+                    result, result_cn, hist_rates, combined, hist_best = pick
+                    bias = float(hint.get("draw_bias") or 0.06)
+                    combined = dict(combined)
+                    combined["draw"] = combined.get("draw", 0) + bias
+                    total = sum(combined.values()) or 1.0
+                    combined = {k: v / total for k, v in combined.items()}
+                    if hint.get("model_1x2_hint") == "draw":
+                        draw_v = combined.get("draw", 0)
+                        top = max(combined.values())
+                        if draw_v >= top - 0.03:
+                            result, result_cn = "draw", "平局"
+                    pick = (result, result_cn, hist_rates, combined, hist_best)
+                    gs_notes.append("淘汰赛路径：存在挑对手空间，模型略抬平局权重")
+                    gs_notes.extend((hint.get("notes") or [])[:2])
+                elif hint.get("picking_note"):
+                    gs_notes.append(hint["picking_note"])
+        except Exception:
+            pass
+
     if pick is None:
         hint = "可尝试加 --relaxed 放宽匹配" if not auto_relaxed else "当前盘口较极端，历史库中缺少相近样本"
         detail = (
@@ -529,6 +583,8 @@ def build_recommendation(payload: dict) -> Recommendation:
     mp_names = [p.get("name") for p in (getattr(mp, "patterns", None) or []) if p.get("name")]
     funds_txt = "；".join(trap.notes) if trap.notes else "临盘走势与初盘规律基本一致"
     all_notes = list(control.notes) + [n for n in trap.notes if n not in control.notes]
+    if gs_notes:
+        all_notes.extend(gs_notes)
 
     summary = (
         f"【赛事概率】{open_prob_txt}。"
@@ -540,6 +596,8 @@ def build_recommendation(payload: dict) -> Recommendation:
         summary += f"（初盘单项最高 {RESULT_CN[hist_best]}，临盘风控调整后为 {result_cn}）"
     if auto_relaxed:
         summary += "（已自动放宽匹配条件）"
+    if gs_analysis:
+        summary += f"【小组战意】{gs_analysis.get('match_type_cn')}：{gs_analysis.get('likely_direction_cn')}。"
 
     return Recommendation(
         match=match_name,

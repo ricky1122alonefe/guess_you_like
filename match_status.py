@@ -58,6 +58,7 @@ def evaluate_prediction_hits(
     *,
     home_score: int,
     away_score: int,
+    ah_line: float | None = None,
 ) -> dict[str, Any]:
     """Compare stored prediction vs actual score; reuse check_results semantics."""
     score_text = f"{home_score}-{away_score}"
@@ -73,6 +74,10 @@ def evaluate_prediction_hits(
         "recommended_scores": None,
         "hit_1x2": None,
         "hit_score": None,
+        "pick_ah": None,
+        "pick_ah_cn": None,
+        "hit_ah": None,
+        "ah_settlement": None,
     }
     if not pred:
         return out
@@ -97,5 +102,20 @@ def evaluate_prediction_hits(
     if scores_raw:
         recommended = [s.split("(")[0].strip() for s in scores_raw.split("、") if s.strip()]
         out["hit_score"] = score_text in recommended
+
+    pick_ah = pred.get("asian_handicap_pick")
+    out["pick_ah"] = pick_ah if pick_ah in ("home", "away", "skip") else None
+    out["pick_ah_cn"] = pred.get("asian_handicap_cn")
+    if pick_ah in ("home", "away") and ah_line is not None:
+        from ah_analytics import evaluate_ah_pick
+
+        ah_eval = evaluate_ah_pick(
+            pick_ah,
+            home_score=home_score,
+            away_score=away_score,
+            line=ah_line,
+        )
+        out["hit_ah"] = ah_eval.get("hit_ah")
+        out["ah_settlement"] = ah_eval.get("ah_settlement")
 
     return out

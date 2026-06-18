@@ -45,6 +45,10 @@ stop_all() {
 run_dev() {
   local with_ai="${1:-0}"
   local dual_ai="${2:-0}"
+  if [[ "$with_ai" == "1" && "$dual_ai" == "1" && ! -d node_modules/@cursor/sdk ]]; then
+    echo "[dev] 未找到 node_modules，正在 npm install（Cursor 桥接需要）…"
+    npm install
+  fi
   kill_port
   pkill -f "poll_service.py" 2>/dev/null || true
 
@@ -71,7 +75,7 @@ run_dev() {
 
   SERVE_ARGS=(serve.py --host 127.0.0.1 --port "$PORT")
   if [[ "$with_ai" == "1" ]]; then
-    SERVE_ARGS+=(--with-ai --ai-interval-minutes 60)
+    SERVE_ARGS+=(--with-ai --ai-interval-minutes 60 --run-on-start)
     if [[ "$dual_ai" == "1" ]]; then
       SERVE_ARGS+=(--dual-ai)
       if [[ -n "${DOUBAO_ENDPOINT:-}" ]]; then
@@ -81,7 +85,7 @@ run_dev() {
       fi
     fi
   else
-    SERVE_ARGS+=(--no-scheduler)
+    SERVE_ARGS+=(--no-scheduler --run-on-start)
   fi
 
   "$PY" "${SERVE_ARGS[@]}" 2>&1 | prefix_lines web &

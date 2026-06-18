@@ -224,6 +224,27 @@ def list_fixtures_pending_settlement(
         return list(cur.fetchall())
 
 
+def _match_result_values(row: dict[str, Any]) -> tuple[Any, ...]:
+    cols = (
+        "fixture_id", "status", "home_score", "away_score", "score_text",
+        "result_1x2", "result_1x2_cn",
+        "closing_captured_at", "closing_ah_line", "closing_ah_home_water", "closing_ah_away_water",
+        "closing_eu_home", "closing_eu_draw", "closing_eu_away",
+        "closing_eu_open_home", "closing_eu_open_draw", "closing_eu_open_away",
+        "pick_1x2_cn", "pick_jingcai_cn", "recommended_scores",
+        "hit_1x2", "hit_score", "payload", "source",
+    )
+    vals: list[Any] = []
+    for col in cols:
+        val = row.get(col)
+        if col == "payload":
+            val = json.dumps(val or {}, ensure_ascii=False, default=str)
+        elif col == "recommended_scores" and val is not None and not isinstance(val, str):
+            val = json.dumps(val, ensure_ascii=False) if isinstance(val, (list, dict)) else str(val)
+        vals.append(val)
+    return tuple(vals)
+
+
 def upsert_match_result(fixture_db_id: int, row: dict[str, Any]) -> None:
     cols = (
         "fixture_id", "status", "home_score", "away_score", "score_text",
@@ -234,7 +255,7 @@ def upsert_match_result(fixture_db_id: int, row: dict[str, Any]) -> None:
         "pick_1x2_cn", "pick_jingcai_cn", "recommended_scores",
         "hit_1x2", "hit_score", "payload", "source",
     )
-    vals = tuple(row.get(c) for c in cols)
+    vals = _match_result_values(row)
     placeholders = ", ".join(["%s"] * len(cols))
     updates = ", ".join(
         f"{c} = EXCLUDED.{c}" for c in cols if c != "fixture_id"

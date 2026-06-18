@@ -198,8 +198,12 @@ Fri June 26
 
 ▪ Group I
 Tue June 16
-  15:00 UTC-4    France  v Senegal    @ New York/New Jersey (East Rutherford)
-  18:00 UTC-4    Iraq     v Norway  @ Boston (Foxborough)
+  15:00 UTC-4    France  3-1 (0-0) Senegal    @ New York/New Jersey (East Rutherford)
+                    (Kylian Mbappé 66' Bradley Barcola 82' Kylian Mbappé 90+6';
+                       Ibrahim Mbaye 90+5')
+  18:00 UTC-4    Iraq     1-4 (1-2) Norway  @ Boston (Foxborough)
+                    (Aymen Hussein 39';
+                       Erling Haaland 29', 43' Leo Østigard 76' Aymen Hussein 90+6'(OG))
 Mon June 22
   17:00 UTC-4    France  v Iraq      @ Philadelphia
   20:00 UTC-4    Norway  v Senegal    @ New York/New Jersey (East Rutherford)
@@ -210,8 +214,11 @@ Fri June 26
 
 ▪ Group J
 Tue June 16
-  20:00 UTC-5    Argentina  v Algeria   @ Kansas City
-  21:00 UTC-7    Austria  v Jordan    @ San Francisco Bay Area (Santa Clara)
+  20:00 UTC-5    Argentina  3-0 (1-0) Algeria   @ Kansas City
+                    (Lionel Messi 17', 60', 76')
+  21:00 UTC-7    Austria  3-1 (1-0) Jordan    @ San Francisco Bay Area (Santa Clara)
+                    (Romano Schmid 21' Yazan Al-Arab 76'(OG) Marko Arnautovic 90+12' (pen.);
+                       Ali Olwan 50')
 Mon June 22
   12:00 UTC-5    Argentina  v Austria   @ Dallas (Arlington)
   20:00 UTC-7    Jordan  v Algeria   @ San Francisco Bay Area (Santa Clara)

@@ -678,6 +678,9 @@ def html_dashboard(
 <h1>⚽ 盘口分析</h1>
 <p class="meta" style="margin-bottom:14px">
   <a href="/daily">📋 当日 2串1</a> · <a href="/worldcup">🏆 开盘套路</a>
+  · <a href="/worldcup/groups">⚔️ 小组战意</a>
+  · <a href="/handicap">📊 亚盘赢盘</a>
+  · <a href="/kelly">🧮 Kelly</a>
   · 状态 <strong>{run_status}</strong>
 </p>
 <button class="btn" style="margin-bottom:14px" onclick="fetch('/api/run',{{method:'POST'}}).then(r=>r.json()).then(d=>showToast(d.message||d.error||'已触发', !d.ok))">立即执行一次</button>
@@ -918,7 +921,7 @@ function runDailyAi(date) {{
 {_AI_CHAT_JS}
 </script>
 </head><body>
-<p class="back"><a href="/">← 返回首页</a> · <a href="/worldcup">开盘套路</a></p>
+<p class="back"><a href="/">← 返回首页</a> · <a href="/worldcup">开盘套路</a> · <a href="/handicap">亚盘赢盘</a> · <a href="/kelly">Kelly</a></p>
 <h1>📋 当日 2串1 · {_e(target)}</h1>
 <p class="meta">{payload.get('match_count', 0)} 场 · 可推 {payload.get('actionable_count', 0)} 场
   · {_daily_source_line(payload)} · {_e(format_ts(payload.get('generated_at')))}
@@ -1197,6 +1200,19 @@ def _score_pills(scores: list[dict] | None) -> str:
     )
 
 
+def _rate_pct(v) -> str:
+    """Format 0–1 rate or already-percent value for display."""
+    if v is None:
+        return "—"
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return "—"
+    if 0 <= x <= 1:
+        return f"{x * 100:.1f}%"
+    return f"{x:.1f}%"
+
+
 def _similar_block(block: dict) -> str:
     samples = block.get("samples") or []
     if not block or not block.get("count"):
@@ -1223,10 +1239,27 @@ def _similar_block(block: dict) -> str:
         rows = "<tr><td colspan='10'>暂无明细</td></tr>"
     avg = block.get("avg_total_goals")
     avg_txt = f" · 场均进球 {float(avg):.2f}" if avg is not None else ""
+    ah_line = ""
+    if block.get("ah_rate_text"):
+        ah_line = f"<p><strong>赢盘率</strong> {_e(block.get('ah_rate_text'))}</p>"
+        breakdown = []
+        for label, key in (
+            ("上盘全赢", "ah_home_full_win"),
+            ("上盘半赢", "ah_home_half_win"),
+            ("走水", "ah_home_push"),
+            ("上盘半输", "ah_home_half_loss"),
+            ("上盘全输", "ah_home_full_loss"),
+        ):
+            val = block.get(key)
+            if val is not None:
+                breakdown.append(f"{label} {_rate_pct(val)}")
+        if breakdown:
+            ah_line += f"<p class='meta'>分布：{' · '.join(breakdown)}</p>"
     return f"""
 <div class="card inner similar-block">
   <h4>{_e(block.get('title'))} <span class="tag">{_e(block.get('count'))} 场</span></h4>
   <p><strong>{_e(block.get('rate_text'))}</strong>{avg_txt}</p>
+  {ah_line}
   <p class="meta">Top比分：{_score_pills(block.get('top_scores'))}</p>
   <table>
     <tr><th>#</th><th>日期</th><th>比赛</th><th>比分</th><th>结果</th><th>亚盘</th><th>水位</th><th>欧赔</th><th>差值</th><th>来源</th></tr>
@@ -1391,6 +1424,9 @@ def _worldcup_teaser(output_root: Path) -> str:
     return f"""
 <div class="card" style="border-left:4px solid #2563eb">
   <p style="margin:0"><a href="/worldcup"><strong>🏆 开盘套路</strong></a>
+  · <a href="/worldcup/groups"><strong>⚔️ 小组战意</strong></a>
+  · <a href="/handicap"><strong>📊 亚盘赢盘</strong></a>
+  · <a href="/kelly"><strong>🧮 Kelly</strong></a>
      <span class="meta"> · {n} 场完赛</span></p>
   <p style="margin:6px 0 0;font-size:15px">{_e(headline)}</p>
   {extra}
@@ -1900,7 +1936,7 @@ function analyzeWorldcupMatch(fid, btn) {{
 }}
 </script>
 </head><body>
-<p class="back"><a href="/">← 返回首页</a> · <a href="/daily">当日推荐</a></p>
+<p class="back"><a href="/">← 返回首页</a> · <a href="/daily">当日推荐</a> · <a href="/handicap">亚盘赢盘</a> · <a href="/kelly">Kelly</a></p>
 
 <div class="card toolbar">
   <button class="btn" onclick="refreshLedger()">刷新</button>
@@ -1913,6 +1949,7 @@ function analyzeWorldcupMatch(fid, btn) {{
   <div class="export-hero">
     <h1>🏆 本届世界杯 · 开盘套路</h1>
     <p class="meta">结论由完场赛果 + 初/终盘自动归纳 · 更新 {_e(updated)}</p>
+    <p><a class="btn" href="/worldcup/groups">⚔️ 小组战意 · 默契球/拼命球</a></p>
   </div>
 
 {upcoming_html}
@@ -1925,6 +1962,512 @@ function analyzeWorldcupMatch(fid, btn) {{
 
   <p class="export-footer">公益体彩 量力而行 · 仅供参考 不构成投注建议 · {_e(updated)}</p>
 </div>
+</body></html>"""
+
+
+def _ah_pattern_table(rows: list[dict], *, title: str) -> str:
+    if not rows:
+        return f"<p class='meta'>{_e(title)}：暂无足够样本</p>"
+    body = ""
+    for r in rows:
+        push = f" · 走水 {_pct(r.get('push_pct'))}" if r.get("push_pct") is not None else ""
+        body += (
+            f"<tr><td>{_e(r.get('label'))}</td>"
+            f"<td>{r.get('count', 0)}</td>"
+            f"<td>{_pct(r.get('upper_win_pct'))}</td>"
+            f"<td>{_pct(r.get('lower_win_pct'))}</td>"
+            f"<td class='meta'>{push.lstrip(' · ')}</td></tr>\n"
+        )
+    return f"""
+<h4>{_e(title)}</h4>
+<table class="mini">
+  <tr><th>分组</th><th>场次</th><th>上盘赢</th><th>下盘赢</th><th>备注</th></tr>
+  {body}
+</table>"""
+
+
+def _ah_record_row(r: dict) -> str:
+    fid = r.get("fixture_id") or ""
+    link = f'<a href="/match/{_e(fid)}">{_e(r.get("match_name") or fid)}</a>' if fid else _e(r.get("match_name"))
+    pick = r.get("asian_handicap_cn") or r.get("pick_ah_cn") or "—"
+    hit = _hit_badge(r.get("hit_ah"))
+    line = _closing_odds_txt({
+        "closing_ah_line": (r.get("closing_odds") or {}).get("ah_line") or r.get("closing_ah_line"),
+    })
+    return f"""
+<div class="match-row">
+  <div class="match-left">
+    <div>{link} <span class="score">{_e(r.get('score_text'))}</span></div>
+    <div class="match-take">{_e(r.get('result_1x2_cn'))} · 终盘 {_e(line)}</div>
+  </div>
+  <div class="match-side">
+    <div><span class="side-label">推荐</span>{_e(pick)} {hit}</div>
+    <div class="meta">{_e(r.get('asian_handicap_reason') or r.get('takeaway') or '')[:80]}</div>
+  </div>
+</div>"""
+
+
+def html_ah_analytics(ledger: dict) -> str:
+    acc = ledger.get("accuracy") or {}
+    patterns = ledger.get("patterns") or {}
+    records = ledger.get("records") or []
+    updated = ledger.get("updated_at") or now_beijing_str()
+
+    stats = _stat_grid([
+        ("完场样本", str(acc.get("total_settled") or len(records))),
+        ("有亚盘推荐", str(acc.get("with_ah_pick") or 0)),
+        ("推荐赢盘率", _pct(acc.get("rate_ah_pct"))),
+        ("净收益", str(acc.get("net_units") if acc.get("net_units") is not None else "—")),
+    ])
+    side_table = _source_table({
+        {"home": "上盘", "away": "下盘"}.get(k, k): v
+        for k, v in (acc.get("by_side") or {}).items()
+    })
+    conf_table = _source_table(acc.get("by_confidence") or {})
+
+    pattern_html = (
+        _ah_pattern_table(patterns.get("by_line_bucket") or [], title="按终盘盘口区间")
+        + _ah_pattern_table(patterns.get("by_line_move") or [], title="按初→终盘变动")
+        + _ah_pattern_table(patterns.get("by_consistency") or [], title="按欧亚一致性")
+    )
+
+    with_pick = [r for r in records if r.get("asian_handicap_pick") in ("home", "away")]
+    pick_rows = "".join(_ah_record_row(r) for r in reversed(with_pick[-40:]))
+    if not pick_rows:
+        pick_rows = '<p class="meta">暂无带亚盘推荐的完场记录；有推荐且完场后会自动纳入回测。</p>'
+
+    ah_css = _shared_css("""
+body { max-width: min(1200px, calc(100vw - 32px)); }
+.hero-card { background: linear-gradient(135deg, #f5f3ff 0%, #fff 60%); border: 1px solid #ddd6fe; }
+.stat-grid { grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px; }
+@media (max-width: 760px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
+.match-list { display: flex; flex-direction: column; gap: 8px; }
+.match-row { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(280px, 1fr); gap: 8px 16px;
+             padding: 12px 0; border-bottom: 1px solid #f1f5f9; }
+.match-take { font-size: 13px; color: #64748b; margin-top: 4px; }
+.score { font-weight: 700; margin-left: 8px; }
+.side-label { display:inline-block; color:#64748b; margin-right:6px; font-weight:700; }
+""")
+
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<title>亚盘赢盘分析</title>
+<style>
+{ah_css}
+</style>
+</head><body>
+<p class="back"><a href="/">← 返回首页</a> · <a href="/worldcup">开盘套路</a> · <a href="/daily">当日推荐</a> · <a href="/kelly">Kelly</a></p>
+
+<div class="card hero-card">
+  <h1>📊 亚盘赢盘分析</h1>
+  <p class="meta">基于完场赛果 + 终盘盘口统计历史赢盘规律，并回测系统亚盘推荐 · 更新 {_e(updated)}</p>
+  {stats}
+</div>
+
+<div class="card">
+  <h2>推荐回测</h2>
+  <p class="meta">判定 {acc.get('judged_ah', 0)} 场 · 命中 {acc.get('hit_ah', 0)} · 未中 {acc.get('miss_ah', 0)} · 走水 {acc.get('push_ah', 0)}</p>
+  <h4>按上下盘方向</h4>
+  {side_table}
+  <h4>按置信度</h4>
+  {conf_table}
+</div>
+
+<div class="card">
+  <h2>历史赢盘规律（{patterns.get('sample_count', 0)} 场有终盘）</h2>
+  <p class="meta">不依赖推荐，仅看同类盘口在历史上的上/下盘打出频率。</p>
+  {pattern_html}
+</div>
+
+<div class="card">
+  <h2>亚盘推荐复盘（最近 {min(len(with_pick), 40)} 场）</h2>
+  <div class="match-list">{pick_rows}</div>
+</div>
+
+<p class="meta" style="margin-top:20px">公益体彩 量力而行 · 仅供参考 不构成投注建议</p>
+</body></html>"""
+
+
+def html_kelly_calculator(
+    prefill: dict | None = None,
+    *,
+    initial_result: dict | None = None,
+) -> str:
+    pre = prefill or {}
+    init = initial_result or {}
+    pre_json = json.dumps(pre, ensure_ascii=False, default=_json_default)
+    init_json = json.dumps(init, ensure_ascii=False, default=_json_default)
+
+    match_hint = ""
+    if pre.get("available"):
+        probs = []
+        if pre.get("historical_probability_pct") is not None:
+            probs.append(f"历史 {pre['historical_probability_pct']}%")
+        if pre.get("market_probability_pct") is not None:
+            probs.append(f"市场 {pre['market_probability_pct']}%")
+        prob_txt = " · ".join(probs) if probs else ""
+        fid = pre.get("fixture_id") or ""
+        link = f' · <a href="/match/{_e(fid)}">返回单场</a>' if fid else ""
+        match_hint = (
+            f'<div class="card prefill-card">'
+            f'<strong>{_e(pre.get("match"))}</strong> · 推荐 {_e(pre.get("pick_cn"))}'
+            f'{(" · " + _e(prob_txt)) if prob_txt else ""}'
+            f'{link}</div>'
+        )
+
+    kelly_css = _shared_css("""
+.kelly-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 760px) { .kelly-grid { grid-template-columns: 1fr; } }
+.kelly-form label { display: block; font-size: 13px; color: #475569; margin: 10px 0 4px; }
+.kelly-form input, .kelly-form select { width: 100%; max-width: 320px; padding: 8px 10px;
+  border: 1px solid #cbd5e1; border-radius: 8px; font-size: 14px; }
+.prefill-card { background: #eff6ff; border: 1px solid #bfdbfe; margin-bottom: 14px; }
+.result-card { border-left: 4px solid #2563eb; }
+.result-card.tone-negative { border-left-color: #dc2626; }
+.result-card.tone-warn { border-left-color: #d97706; }
+.result-card.tone-ok { border-left-color: #059669; }
+.kelly-val { font-size: 1.6rem; font-weight: 700; margin: 4px 0; }
+.kelly-sub { font-size: 13px; color: #64748b; }
+.kelly-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+@media (max-width: 640px) { .kelly-metrics { grid-template-columns: 1fr; } }
+.metric { background: #f8fafc; border-radius: 8px; padding: 10px 12px; }
+.metric .lbl { font-size: 11px; color: #64748b; }
+.metric .num { font-size: 1.1rem; font-weight: 700; }
+.formula { background: #f1f5f9; padding: 10px 12px; border-radius: 8px; font-family: ui-monospace, monospace;
+  font-size: 13px; margin: 12px 0; }
+.quick-btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.quick-btns button { padding: 4px 10px; font-size: 12px; border: 1px solid #cbd5e1; background: #fff;
+  border-radius: 6px; cursor: pointer; }
+""")
+
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<title>Kelly 仓位计算器</title>
+<style>
+{kelly_css}
+</style>
+</head><body>
+<p class="back"><a href="/">← 返回首页</a> · <a href="/handicap">亚盘赢盘</a> · <a href="/daily">当日推荐</a> · <a href="/worldcup">开盘套路</a></p>
+
+<h1>🧮 Kelly 仓位计算器</h1>
+<p class="meta">根据胜率与赔率计算最优下注比例 · 公式 f* = (p×D − 1) / (D − 1)</p>
+
+{match_hint}
+
+<div class="kelly-grid">
+  <div class="card kelly-form">
+    <h2>输入参数</h2>
+    <label>预估胜率 (%)</label>
+    <input type="number" id="kProb" min="0.1" max="99.9" step="0.1" placeholder="例如 55"/>
+    <div class="quick-btns" id="probQuick"></div>
+
+    <label>赔率类型</label>
+    <select id="kOddsType">
+      <option value="decimal">欧赔（小数）</option>
+      <option value="water">亚盘水位</option>
+    </select>
+
+    <label>赔率 / 水位</label>
+    <input type="number" id="kOdds" min="0.01" step="0.01" placeholder="欧赔 2.05 或水位 0.95"/>
+
+    <label>Kelly 分数（风控）</label>
+    <select id="kFraction">
+      <option value="1">全 Kelly（100%）</option>
+      <option value="0.5" selected>半 Kelly（50%）</option>
+      <option value="0.25">四分之一 Kelly（25%）</option>
+    </select>
+
+    <label>本金（可选，元）</label>
+    <input type="number" id="kBankroll" min="0" step="100" placeholder="例如 10000"/>
+
+    <p style="margin-top:14px">
+      <button class="btn" type="button" onclick="calcKelly()">计算</button>
+    </p>
+    <p class="formula">f* = (p×D − 1) / (D − 1) · D = 1 + 水位（亚盘）</p>
+  </div>
+
+  <div class="card result-card" id="kResult">
+    <h2>计算结果</h2>
+    <p class="meta">填写左侧参数后自动计算</p>
+  </div>
+</div>
+
+<div class="card" style="margin-top:16px">
+  <h3>说明</h3>
+  <ul class="meta" style="line-height:1.7">
+    <li><strong>全 Kelly</strong>：理论最优比例，波动极大，长期易回撤。</li>
+    <li><strong>半 Kelly / 四分之一 Kelly</strong>：实战常用，牺牲少量 EV 换稳定性。</li>
+    <li>胜率可填：历史相似样本频率、修正概率，或你自己的判断。</li>
+    <li>Kelly ≤ 0 表示无正 EV，不应下注；本工具上限默认 25% 本金。</li>
+  </ul>
+</div>
+
+<p class="meta" style="margin-top:20px">公益体彩 量力而行 · 仅供参考 不构成投注建议</p>
+
+<script>
+const PREFILL = {pre_json};
+const INITIAL = {init_json};
+
+function esc(s) {{
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}}
+
+function decimalOdds(type, raw) {{
+  const v = parseFloat(raw);
+  if (!isFinite(v)) return null;
+  if (type === 'water') return 1 + v;
+  return v;
+}}
+
+function calcKellyLocal() {{
+  const p = parseFloat(document.getElementById('kProb').value) / 100;
+  const type = document.getElementById('kOddsType').value;
+  const oddsRaw = document.getElementById('kOdds').value;
+  const fraction = parseFloat(document.getElementById('kFraction').value);
+  const bankrollRaw = document.getElementById('kBankroll').value;
+  const bankroll = bankrollRaw ? parseFloat(bankrollRaw) : null;
+  const D = decimalOdds(type, oddsRaw);
+
+  if (!isFinite(p) || p <= 0 || p >= 1) return {{ ok: false, error: '胜率须在 0–100% 之间' }};
+  if (!D || D <= 1) return {{ ok: false, error: '赔率无效' }};
+
+  const b = D - 1;
+  const fullKelly = (p * D - 1) / b;
+  const implied = 1 / D;
+  const edge = p - implied;
+  const ev = p * D - 1;
+  const frac = Math.max(0, Math.min(fraction, 1));
+  const adjusted = fullKelly * frac;
+  const maxPct = 0.25;
+  const capped = adjusted > 0 ? Math.min(adjusted, maxPct) : adjusted;
+  const stake = (bankroll && bankroll > 0 && capped > 0) ? Math.round(bankroll * capped * 100) / 100 : null;
+
+  let verdict = '有正 EV';
+  let tone = 'ok';
+  if (fullKelly <= 0) {{ verdict = '无正 EV，不建议下注'; tone = 'negative'; }}
+  else if (fullKelly < 0.02) {{ verdict = '边缘极薄，建议观望'; tone = 'warn'; }}
+  else if (frac < 1) {{ verdict = '建议采用分数 Kelly 控风险'; }}
+
+  return {{
+    ok: true, probability_pct: p * 100, decimal_odds: D, implied_probability_pct: implied * 100,
+    edge_pp: edge * 100, ev_pct: ev * 100, full_kelly_pct: fullKelly * 100,
+    adjusted_kelly_pct: adjusted * 100, capped_kelly_pct: capped > 0 ? capped * 100 : 0,
+    half_kelly_pct: fullKelly > 0 ? fullKelly * 50 : 0,
+    quarter_kelly_pct: fullKelly > 0 ? fullKelly * 25 : 0,
+    stake_amount: stake, verdict, tone, fraction: frac
+  }};
+}}
+
+function renderResult(r) {{
+  const box = document.getElementById('kResult');
+  if (!r.ok) {{
+    box.className = 'card result-card tone-negative';
+    box.innerHTML = '<h2>计算结果</h2><p class="meta">' + esc(r.error) + '</p>';
+    return;
+  }}
+  box.className = 'card result-card tone-' + (r.tone || 'ok');
+  const stakeLine = r.stake_amount != null
+    ? '<p class="kelly-val">建议下注 ' + esc(r.stake_amount) + ' 元</p>'
+      + '<p class="kelly-sub">约 ' + esc(r.capped_kelly_pct.toFixed(2)) + '% 本金（上限 25%）</p>'
+    : '<p class="kelly-sub">填写本金可换算建议金额</p>';
+  box.innerHTML = `
+    <h2>计算结果</h2>
+    <p class="meta">${{esc(r.verdict)}}</p>
+    <p class="kelly-val">${{esc(r.adjusted_kelly_pct.toFixed(2))}}%</p>
+    <p class="kelly-sub">分数 Kelly（${{esc((r.fraction * 100).toFixed(0))}}%）· 全 Kelly ${{esc(r.full_kelly_pct.toFixed(2))}}%</p>
+    ${{stakeLine}}
+    <div class="kelly-metrics">
+      <div class="metric"><div class="lbl">隐含胜率</div><div class="num">${{esc(r.implied_probability_pct.toFixed(1))}}%</div></div>
+      <div class="metric"><div class="lbl">Edge</div><div class="num">${{esc(r.edge_pp.toFixed(2))}} pp</div></div>
+      <div class="metric"><div class="lbl">EV / 单位</div><div class="num">${{esc(r.ev_pct.toFixed(2))}}%</div></div>
+      <div class="metric"><div class="lbl">半 Kelly</div><div class="num">${{esc(r.half_kelly_pct.toFixed(2))}}%</div></div>
+      <div class="metric"><div class="lbl">¼ Kelly</div><div class="num">${{esc(r.quarter_kelly_pct.toFixed(2))}}%</div></div>
+      <div class="metric"><div class="lbl">欧赔 D</div><div class="num">${{esc(r.decimal_odds.toFixed(3))}}</div></div>
+    </div>`;
+}}
+
+function calcKelly() {{
+  renderResult(calcKellyLocal());
+}}
+
+function applyPrefill() {{
+  if (!PREFILL || !PREFILL.available) return;
+  if (PREFILL.probability_pct != null)
+    document.getElementById('kProb').value = PREFILL.probability_pct;
+  if (PREFILL.odds_type)
+    document.getElementById('kOddsType').value = PREFILL.odds_type;
+  if (PREFILL.odds_value != null)
+    document.getElementById('kOdds').value = PREFILL.odds_value;
+
+  const q = document.getElementById('probQuick');
+  if (PREFILL.historical_probability_pct != null) {{
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = '历史 ' + PREFILL.historical_probability_pct + '%';
+    b.onclick = () => {{ document.getElementById('kProb').value = PREFILL.historical_probability_pct; calcKelly(); }};
+    q.appendChild(b);
+  }}
+  if (PREFILL.market_probability_pct != null) {{
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = '市场 ' + PREFILL.market_probability_pct + '%';
+    b.onclick = () => {{ document.getElementById('kProb').value = PREFILL.market_probability_pct; calcKelly(); }};
+    q.appendChild(b);
+  }}
+}}
+
+['kProb','kOddsType','kOdds','kFraction','kBankroll'].forEach(id => {{
+  document.getElementById(id).addEventListener('input', calcKelly);
+  document.getElementById(id).addEventListener('change', calcKelly);
+}});
+
+applyPrefill();
+if (INITIAL && INITIAL.ok) renderResult(INITIAL);
+else calcKelly();
+</script>
+</body></html>"""
+
+
+def _motivation_tag(match_type: str) -> str:
+    cls = {
+        "collusion_watch": "tag-warn",
+        "must_win": "tag-miss",
+        "draw_friendly": "tag-active",
+        "open_race": "tag-active",
+        "gd_race": "tag",
+        "conservative_favorite": "tag-warn",
+        "dead_rubber": "meta",
+    }.get(match_type, "tag")
+    return cls
+
+
+def _group_standings_table(table: list[dict]) -> str:
+    if not table:
+        return "<p class='meta'>暂无积分</p>"
+    rows = ""
+    for r in table:
+        rows += (
+            f"<tr><td>{r.get('rank')}</td><td><strong>{_e(r.get('team'))}</strong></td>"
+            f"<td>{r.get('played')}</td><td>{r.get('won')}/{r.get('drawn')}/{r.get('lost')}</td>"
+            f"<td>{r.get('gf')}-{r.get('ga')}</td><td>{r.get('gd'):+d}</td>"
+            f"<td><strong>{r.get('points')}</strong></td></tr>\n"
+        )
+    return f"""<table class="mini">
+<tr><th>#</th><th>球队</th><th>赛</th><th>胜/平/负</th><th>进失</th><th>净</th><th>分</th></tr>
+{rows}</table>"""
+
+
+def _fixture_prediction_row(p: dict) -> str:
+    fid = p.get("fixture_id") or ""
+    name = p.get("match_name") or f"{p.get('home')}VS{p.get('away')}"
+    link = f'<a href="/match/{_e(fid)}">{_e(name)}</a>' if fid else _e(name)
+    mt = p.get("match_type") or "normal"
+    tag_cls = _motivation_tag(mt)
+    reasons = " · ".join(p.get("reasoning") or [])[:180]
+    ah = p.get("ah_hint") or "—"
+    return f"""
+<div class="gs-fixture">
+  <div class="gs-fix-head">
+    {link}
+    <span class="tag {tag_cls}">{_e(p.get('match_type_cn'))}</span>
+    <span class="meta">R{p.get('round')} · {_e(p.get('kickoff'))}</span>
+  </div>
+  <p><strong>倾向</strong> {_e(p.get('likely_direction_cn'))} · 亚盘提示 {_e(ah)}</p>
+  <p class="meta">{_e(reasons)}</p>
+</div>"""
+
+
+def html_group_stage(report: dict) -> str:
+    if not report.get("ok"):
+        err = report.get("error") or "无法拉取积分榜"
+        return f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"/>
+<title>小组战意</title></head><body>
+<p class="back"><a href="/">← 返回</a></p>
+<p>加载失败：{_e(err)}</p></body></html>"""
+
+    rs = report.get("round_summary") or {}
+    cutoff = report.get("best_third_cutoff") or {}
+    thirds = report.get("best_third_ranking") or []
+    updated = report.get("updated_at") or now_beijing_str()
+
+    third_rows = ""
+    for t in thirds:
+        zone = "✓" if t.get("in_best8_zone") else "—"
+        third_rows += (
+            f"<tr><td>{t.get('third_rank')}</td><td>{_e(t.get('group'))}组</td>"
+            f"<td>{_e(t.get('team'))}</td><td>{t.get('points')}</td>"
+            f"<td>{t.get('gd'):+d}</td><td>{t.get('gf')}</td><td>{zone}</td></tr>\n"
+        )
+
+    highlight_html = ""
+    for label, key in (("默契球观察", "collusion_watch"), ("拼命球", "must_win")):
+        items = (report.get("highlights") or {}).get(key) or []
+        if not items:
+            continue
+        cards = "".join(_fixture_prediction_row(p) for p in items)
+        highlight_html += f"<div class='card'><h3>{_e(label)} · {len(items)} 场</h3>{cards}</div>"
+
+    groups_html = ""
+    for g in report.get("groups") or []:
+        upcoming = g.get("upcoming") or []
+        pred_block = "".join(_fixture_prediction_row(p) for p in upcoming) or "<p class='meta'>暂无待赛</p>"
+        groups_html += f"""
+<div class="card gs-group-card">
+  <h3>{g.get('group')} 组 <span class="meta">{_e(g.get('archetype') or '')}</span></h3>
+  <p class="meta">{_e(g.get('strategy_hint') or '')}</p>
+  {_group_standings_table(g.get('standings') or [])}
+  <h4>待赛场次 · 战意预测</h4>
+  {pred_block}
+</div>"""
+
+    type_counts = report.get("type_counts") or {}
+    type_txt = " · ".join(f"{k} {v}场" for k, v in sorted(type_counts.items(), key=lambda x: -x[1]))
+
+    gs_css = _shared_css("""
+body { max-width: min(1280px, calc(100vw - 32px)); }
+.gs-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+@media (max-width: 900px) { .gs-grid { grid-template-columns: 1fr; } }
+.gs-fixture { border-top: 1px solid #f1f5f9; padding: 10px 0; }
+.gs-fix-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 4px; }
+.gs-group-card h4 { margin: 14px 0 6px; font-size: 13px; color: #475569; }
+.hero-gs { background: linear-gradient(135deg, #ecfdf5 0%, #fff 55%); border: 1px solid #bbf7d0; }
+""")
+
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<title>世界杯小组战意 · 默契球/拼命球</title>
+<style>{gs_css}</style>
+</head><body>
+<p class="back"><a href="/">← 返回首页</a> · <a href="/worldcup">开盘套路</a> · <a href="/handicap">亚盘赢盘</a> · <a href="/kelly">Kelly</a></p>
+
+<div class="card hero-gs">
+  <h1>⚔️ 小组战意分析 · 48队赛制</h1>
+  <p class="meta">{_e(rs.get('stage_label'))} · 更新 {_e(updated)}</p>
+  <p>{_e(report.get('advance_rule_cn') or '')}</p>
+  <p class="meta">最佳8小组第三参考线：≥ <strong>{cutoff.get('points', '—')}</strong> 分 · 净胜球 ≥ <strong>{cutoff.get('gd', '—')}</strong></p>
+  <p class="meta">待赛分类：{_e(type_txt or '—')}</p>
+  <button class="btn" onclick="location.reload()">刷新积分榜</button>
+</div>
+
+<div class="card">
+  <h2>12组第三名排名（争8席）</h2>
+  <table class="mini">
+    <tr><th>#</th><th>组</th><th>球队</th><th>分</th><th>净</th><th>进</th><th>晋级区</th></tr>
+    {third_rows}
+  </table>
+</div>
+
+{highlight_html}
+
+<div class="gs-grid">
+{groups_html}
+</div>
+
+<p class="meta" style="margin-top:20px">战意模型已接入规则引擎推荐与 AI 分析上下文 · 仅供参考</p>
 </body></html>"""
 
 
@@ -1993,6 +2536,180 @@ def _settled_card(settled: dict | None) -> str:
   <p><strong>赛果 { _e(score) }</strong> · {_e(result_cn)} · 结算 {_e(settled_at)}</p>
   <p class="meta">终盘 {_e(closing)}</p>
   <p>预测 {_e(pick)} · 命中 {hit_1x2} 1X2 · {hit_sc} 比分</p>
+  <p class="meta">亚盘 {_e(settled.get('pick_ah_cn') or '—')} · 赢盘 {_hit_badge(settled.get('hit_ah'))}</p>
+</div>"""
+
+
+def _ah_stats_row(label: str, block: dict | None) -> str:
+    if not block or not block.get("count"):
+        return f"<tr><td>{_e(label)}</td><td colspan='3' class='meta'>样本不足</td></tr>"
+    return (
+        f"<tr><td>{_e(label)}</td>"
+        f"<td>{block.get('count')} 场</td>"
+        f"<td>{_rate_pct(block.get('ah_upper_win_rate'))}</td>"
+        f"<td>{_rate_pct(block.get('ah_lower_win_rate'))}</td></tr>"
+    )
+
+
+def _build_ah_analysis_card(prediction: dict | None, timeline: list[dict] | None = None) -> str:
+    from ah_analytics import ah_card_from_prediction
+
+    data = ah_card_from_prediction(prediction, timeline)
+    if not data:
+        return ""
+
+    open_line = data.get("open_line")
+    live_line = data.get("live_line")
+    line_txt = "—"
+    if open_line is not None or live_line is not None:
+        line_txt = f"初 {_e(open_line)} → 临 {_e(live_line)}"
+    water_txt = ""
+    if data.get("open_water") or data.get("live_water"):
+        water_txt = f" · 水位 初 {_e(data.get('open_water'))} → 临 {_e(data.get('live_water'))}"
+
+    pick_cn = data.get("pick_cn") or "观望"
+    reason = data.get("reason") or ""
+    stats_rows = _ah_stats_row("初盘相似", data.get("open_stats"))
+    stats_rows += _ah_stats_row("临盘相似", data.get("live_stats"))
+
+    return f"""
+<div class="card ah-card">
+  <h3>📊 亚盘赢盘分析</h3>
+  <p><strong class="pick">{_e(pick_cn)}</strong>{(' · ' + _e(reason)) if reason else ''}</p>
+  <p class="meta">盘口 {line_txt}{water_txt}</p>
+  <table class="mini ah-stats-table">
+    <tr><th>样本层</th><th>场次</th><th>上盘赢盘率</th><th>下盘赢盘率</th></tr>
+    {stats_rows}
+  </table>
+  <p class="meta">赢盘率来自相似历史样本的亚盘结算统计；推荐方向由历史净收益 + 临盘水位综合得出。
+  · <a href="/kelly?fixture_id={_e(prediction.get('fixture_id') if prediction else '')}">Kelly 仓位 →</a></p>
+</div>"""
+
+
+def _path_block(team: str, pick: dict) -> str:
+    paths = pick.get("paths") or {}
+    rows = ""
+    for key, label in (("first", "若夺头名"), ("second", "若拿第二"), ("third", "若第三(最佳8)")):
+        p = paths.get(key) or {}
+        summary = p.get("r32_summary") or p.get("r32_label") or "—"
+        r16 = p.get("r16_hint") or ""
+        extra = f"<br><span class='meta'>{_e(r16)}</span>" if r16 and r16 != "—" else ""
+        rows += (
+            f"<tr><td>{label}</td>"
+            f"<td>{_e(summary)}{extra}</td>"
+            f"<td>{p.get('difficulty_score', '—')}</td></tr>\n"
+        )
+    notes = pick.get("notes") or []
+    note_html = "".join(f"<li>{_e(x)}</li>" for x in notes[:3])
+    return f"""
+<div class="path-block">
+  <h4>{_e(team)} · 淘汰赛路径</h4>
+  <p class="meta">挑对手风险：<span class="tag">{_e(pick.get('picking_level_cn'))}</span>
+     · 相对更优路径：<strong>{_e(pick.get('preferred_path_cn'))}</strong></p>
+  <table class="mini">
+    <tr><th>名次</th><th>32强可能对阵</th><th>难度</th></tr>
+    {rows}
+  </table>
+  <ul class="meta path-notes">{note_html or '<li>—</li>'}</ul>
+</div>"""
+
+
+def _build_match_strategy_panel(match_name: str, prediction: dict | None = None) -> str:
+    from knockout_path import build_match_knockout_context
+
+    ctx = build_match_knockout_context(match_name)
+    if not ctx or not ctx.get("same_group"):
+        return ""
+
+    group = ctx.get("group")
+    standings = ctx.get("standings") or []
+    st_rows = ""
+    for r in standings:
+        st_rows += (
+            f"<tr><td>{r.get('rank')}</td><td><strong>{_e(r.get('team'))}</strong></td>"
+            f"<td>{r.get('points')}</td><td>{r.get('gd'):+d}</td><td>{r.get('played')}</td></tr>"
+        )
+
+    home = (ctx.get("home_knockout") or {}).get("team") or ""
+    away = (ctx.get("away_knockout") or {}).get("team") or ""
+    if not home or not away:
+        from share_card import split_teams
+        from wc_standings_fetch import normalize_team
+        hr, ar = split_teams(match_name)
+        home, away = normalize_team(hr), normalize_team(ar)
+
+    home_path = _path_block(home, ctx.get("home_knockout") or {})
+    away_path = _path_block(away, ctx.get("away_knockout") or {})
+
+    sc_rows = ""
+    for s in ctx.get("scenarios") or []:
+        sc_rows += (
+            f"<tr><td>{_e(s.get('label'))}</td>"
+            f"<td>{_e(s.get('score_effect'))}</td>"
+            f"<td class='meta'>{_e(s.get('note'))}</td></tr>"
+        )
+
+    hint = ctx.get("prediction_hint") or {}
+    mot = ctx.get("motivation") or {}
+    mt = hint.get("match_type_cn") or mot.get("match_type_cn") or "—"
+    tag_cls = _motivation_tag(mot.get("match_type") or "normal")
+
+    pred_1x2 = {"home": "主胜", "away": "客胜", "draw": "平局", "none": "观望"}.get(
+        hint.get("model_1x2_hint") or "none", "—",
+    )
+
+    notes = hint.get("notes") or []
+    note_p = "".join(f"<p class='meta' style='margin:4px 0'>{_e(x)}</p>" for x in notes[:4])
+
+    bracket_notes = "".join(f"<li>{_e(x)}</li>" for x in (ctx.get("bracket_notes") or [])[:2])
+
+    rs = ctx.get("round_summary") or {}
+    stage = rs.get("stage_label") or ""
+
+    return f"""
+<div class="card strategy-card">
+  <div class="strategy-head">
+    <h3>⚔️ 小组形势 · 淘汰赛路径</h3>
+    <span class="chip chip-grp">{_e(group)} 组</span>
+    <span class="meta">{_e(stage)}</span>
+    <a class="btn btn-sm" href="/worldcup/groups">全组看板 →</a>
+  </div>
+
+  <div class="strategy-grid">
+    <div class="strategy-col">
+      <h4>{_e(group)} 组积分榜</h4>
+      <table class="mini">
+        <tr><th>#</th><th>球队</th><th>分</th><th>净</th><th>赛</th></tr>
+        {st_rows}
+      </table>
+    </div>
+    <div class="strategy-col prediction-col">
+      <h4>战意预测</h4>
+      <p><span class="tag {tag_cls}">{_e(mt)}</span>
+         <span class="tag">挑对手 {_e(ctx.get('picking_level_cn'))}</span></p>
+      <p><strong>倾向</strong> {_e(hint.get('likely_direction_cn'))}
+         · <strong>模型方向</strong> {_e(pred_1x2)}
+         · <strong>亚盘</strong> {_e(hint.get('ah_hint') or '—')}</p>
+      {note_p}
+      <p class="meta picking-warn">{_e(hint.get('picking_note') or '')}</p>
+    </div>
+  </div>
+
+  <div class="path-grid">
+    {home_path}
+    {away_path}
+  </div>
+
+  <h4>本场赛果推演（积分）</h4>
+  <table class="mini">
+    <tr><th>赛果</th><th>赛后积分</th><th>战意解读</th></tr>
+    {sc_rows}
+  </table>
+
+  <details class="bracket-notes">
+    <summary>32强签位说明（FIFA 固定路径 + 第三待定）</summary>
+    <ul class="meta">{bracket_notes}</ul>
+  </details>
 </div>"""
 
 
@@ -2011,6 +2728,8 @@ def html_match_detail(
 
     pred_card = _build_pred_cards(prediction)
     settled_card = _settled_card(settled)
+    strategy_panel = _build_match_strategy_panel(name, prediction)
+    ah_card = _build_ah_analysis_card(prediction, timeline)
     latest_deep = (deep_records or [None])[0]
     deep_card = _deep_analysis_card(latest_deep)
 
@@ -2220,6 +2939,23 @@ def html_match_detail(
 .btn-deep { background: #0d9488; }
 .btn-deep:disabled { background: #94a3b8; opacity: 0.7; cursor: not-allowed; }
 .settled-card { border-left: 4px solid #059669; }
+.ah-card { border-left: 4px solid #7c3aed; margin-bottom: 12px; }
+.ah-stats-table { margin-top: 10px; }
+.strategy-card { border-left: 4px solid #059669; margin-bottom: 14px; }
+.strategy-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; }
+.strategy-head h3 { margin: 0; flex: 1; min-width: 200px; }
+.strategy-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.path-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.path-block { background: #f8fafc; border-radius: 10px; padding: 12px; border: 1px solid #e2e8f0; }
+.path-block h4 { margin: 0 0 8px; font-size: 14px; }
+.path-notes { margin: 8px 0 0 16px; padding: 0; line-height: 1.55; }
+.prediction-col { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 12px; }
+.picking-warn { color: #92400e; }
+.bracket-notes { margin-top: 12px; font-size: 13px; }
+.rec-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+@media (max-width: 900px) {{
+  .strategy-grid, .path-grid, .rec-grid {{ grid-template-columns: 1fr; }}
+}}
 .dual-hint { color: #b45309; background: #fffbeb; padding: 8px 12px; border-radius: 6px; }
 .eu-tabs { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
 .eu-tab { padding: 6px 16px; border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 8px;
@@ -2256,13 +2992,14 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
 </style>
 <script>{_AI_BTN_JS}{_AI_CHAT_JS}</script>
 </head><body>
-<p class="back"><a href="/">← 返回首页</a> · <a href="/daily">当日推荐</a></p>
+<p class="back"><a href="/">← 返回首页</a> · <a href="/daily">当日推荐</a> · <a href="/handicap">亚盘赢盘</a> · <a href="/kelly">Kelly</a></p>
 <p style="margin-bottom:16px">
   <button type="button" class="btn btn-ai" data-label="✨ AI 推荐本场"
     onclick="aiRecommend('{_e(fid)}', this)">✨ AI 推荐本场</button>
   {deep_btn}
   <button type="button" class="btn" style="background:#7c3aed" onclick="savePageLongImage(this)">📷 保存长图</button>
   <a class="btn" href="/share/match/{_e(fid)}" target="_blank" rel="noopener">📷 朋友圈分享图</a>
+  <a class="btn" style="background:#2563eb" href="/kelly?fixture_id={_e(fid)}">🧮 Kelly</a>
   <span class="tag">{len(timeline)} 快照</span>
   <span class="tag">{len(changes)} 变动</span>
 </p>
@@ -2275,8 +3012,12 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
   </div>
 {settled_card}
 {_ai_chat_card(scope="match", fid=fid)}
+{strategy_panel}
 {deep_card}
-{pred_card}
+<div class="rec-grid">
+  <div>{pred_card}</div>
+  <div>{ah_card}</div>
+</div>
 <div class="fold-stack">
 {market_fold}
 {charts_fold}

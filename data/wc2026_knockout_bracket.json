@@ -1,0 +1,53 @@
+{
+  "tournament": "2026 FIFA World Cup",
+  "source": "FIFA World Cup 2026 Regulations Annex C / FIFA.com R32 fixtures",
+  "r32": [
+    {"match": 73, "home": "2A", "away": "2B", "label": "2A vs 2B"},
+    {"match": 74, "home": "1C", "away": "2F", "label": "1C vs 2F"},
+    {"match": 75, "home": "1E", "away": "3rd", "third_pool": ["A", "B", "C", "D", "F"], "label": "1E vs 最佳第三(AB C D F)"},
+    {"match": 76, "home": "1F", "away": "2C", "label": "1F vs 2C"},
+    {"match": 77, "home": "2E", "away": "2I", "label": "2E vs 2I"},
+    {"match": 78, "home": "1I", "away": "3rd", "third_pool": ["C", "D", "F", "G", "H"], "label": "1I vs 最佳第三(C D F G H)"},
+    {"match": 79, "home": "1A", "away": "3rd", "third_pool": ["C", "E", "F", "H", "I"], "label": "1A vs 最佳第三(C E F H I)"},
+    {"match": 80, "home": "1L", "away": "3rd", "third_pool": ["E", "H", "I", "J", "K"], "label": "1L vs 最佳第三(E H I J K)"},
+    {"match": 81, "home": "1G", "away": "3rd", "third_pool": ["A", "E", "H", "I", "J"], "label": "1G vs 最佳第三(A E H I J)"},
+    {"match": 82, "home": "1D", "away": "3rd", "third_pool": ["B", "E", "F", "I", "J"], "label": "1D vs 最佳第三(B E F I J)"},
+    {"match": 83, "home": "1H", "away": "2J", "label": "1H vs 2J"},
+    {"match": 84, "home": "2K", "away": "2L", "label": "2K vs 2L"},
+    {"match": 85, "home": "1B", "away": "3rd", "third_pool": ["E", "F", "G", "I", "J"], "label": "1B vs 最佳第三(E F G I J)"},
+    {"match": 86, "home": "2D", "away": "2G", "label": "2D vs 2G"},
+    {"match": 87, "home": "1J", "away": "2H", "label": "1J vs 2H"},
+    {"match": 88, "home": "1K", "away": "3rd", "third_pool": ["D", "E", "I", "J", "L"], "label": "1K vs 最佳第三(D E I J L)"}
+  ],
+  "r16": [
+    {"match": 89, "home": "W73", "away": "W75"},
+    {"match": 90, "home": "W77", "away": "W74"},
+    {"match": 91, "home": "W76", "away": "W78"},
+    {"match": 92, "home": "W79", "away": "W80"},
+    {"match": 93, "home": "W83", "away": "W84"},
+    {"match": 94, "home": "W81", "away": "W82"},
+    {"match": 95, "home": "W86", "away": "W88"},
+    {"match": 96, "home": "W85", "away": "W87"}
+  ],
+  "qf": [
+    {"match": 97, "home": "W89", "away": "W90"},
+    {"match": 98, "home": "W91", "away": "W92"},
+    {"match": 99, "home": "W93", "away": "W94"},
+    {"match": 100, "home": "W95", "away": "W96"}
+  ],
+  "sf": [
+    {"match": 101, "home": "W97", "away": "W98"},
+    {"match": 102, "home": "W99", "away": "W100"}
+  ],
+  "final": {"match": 103, "home": "W101", "away": "W102"},
+  "third_place": {"match": 104, "home": "L101", "away": "L102"},
+  "bracket_halves": {
+    "upper": ["A", "B", "C", "D", "E", "F", "I", "L"],
+    "lower": ["G", "H", "J", "K"]
+  },
+  "notes": [
+    "8个最佳小组第三的对位需等72场小组赛全部结束后，按FIFA Annex C 495种组合表锁定，赛前仅展示各名次可能进入的签位池。",
+    "小组第一/第二的对阵路径在抽签时已固定；次轮/末轮存在为避开强敌而控分、争第二或最佳第三的动机。",
+    "K组第三若晋级，仅可能对阵1K(M88)；L组第三仅可能对阵1L(M80)——路径最窄，末轮战意特殊。"
+  ]
+}

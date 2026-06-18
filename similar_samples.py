@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ah_analytics import ah_breakdown
+
 RESULT_CN = {"home": "主胜", "draw": "平", "away": "客胜"}
 
 
@@ -50,6 +52,14 @@ def _compact_sample(row: dict) -> dict:
 def _compact_block(stats: dict, *, title: str, source: str) -> dict:
     count = stats.get("count") or 0
     top_scores = stats.get("score_top") or []
+    ah = ah_breakdown(stats) if count else {}
+    rate_text = (
+        f"主胜 {_pct(stats.get('home_win_rate'))} / "
+        f"平 {_pct(stats.get('draw_rate'))} / "
+        f"客胜 {_pct(stats.get('away_win_rate'))}"
+    )
+    if ah.get("ah_rate_text"):
+        rate_text += f" · {ah['ah_rate_text']}"
     return {
         "title": title,
         "source": source,
@@ -57,11 +67,8 @@ def _compact_block(stats: dict, *, title: str, source: str) -> dict:
         "home_win_rate": stats.get("home_win_rate"),
         "draw_rate": stats.get("draw_rate"),
         "away_win_rate": stats.get("away_win_rate"),
-        "rate_text": (
-            f"主胜 {_pct(stats.get('home_win_rate'))} / "
-            f"平 {_pct(stats.get('draw_rate'))} / "
-            f"客胜 {_pct(stats.get('away_win_rate'))}"
-        ),
+        **ah,
+        "rate_text": rate_text,
         "avg_total_goals": stats.get("avg_total_goals"),
         "top_scores": [
             {

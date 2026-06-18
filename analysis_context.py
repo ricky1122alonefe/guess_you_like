@@ -356,6 +356,26 @@ def attach_tournament_context(ctx: dict, output_root: str | Path) -> dict:
             "stats": chars.get("stats") or {},
             "cards": conc.get("cards") or [],
         }
+        from group_stage_model import build_group_stage_report
+        gs = build_group_stage_report()
+        if gs.get("ok"):
+            ctx["group_stage"] = {
+                "stage_label": (gs.get("round_summary") or {}).get("stage_label"),
+                "advance_rule_cn": gs.get("advance_rule_cn"),
+                "best_third_cutoff": gs.get("best_third_cutoff"),
+                "type_counts": gs.get("type_counts"),
+                "collusion_watch": gs.get("highlights", {}).get("collusion_watch", [])[:4],
+                "must_win": gs.get("highlights", {}).get("must_win", [])[:4],
+            }
     except Exception:
         ctx.setdefault("tournament_opening", {"sample_size": 0, "traits": []})
+    match_name = ctx.get("match_name")
+    if match_name:
+        try:
+            from group_stage_model import analyze_match_from_name
+            ma = analyze_match_from_name(match_name)
+            if ma:
+                ctx["group_stage_match"] = ma
+        except Exception:
+            pass
     return ctx

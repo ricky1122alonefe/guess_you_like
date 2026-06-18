@@ -330,9 +330,28 @@ def _build_group_state_context(
         ),
         key=lambda x: (-x["points"], -x["gd"], -x["gf"], x["team"]),
     )
-    for idx, row in enumerate(table, start=1):
-        row["rank"] = idx
-        row["last"] = row["last"][-2:]
+
+    try:
+        from group_stage_model import analyze_fixture_motivation, fetch_live_snapshot, rank_best_third_places
+        snap = fetch_live_snapshot()
+        live = (snap.get("standings") or {}).get(group or "") if snap.get("ok") else []
+        if live and (not group or len(live) >= len(table)):
+            table = live
+            for idx, row in enumerate(
+                sorted(table, key=lambda x: (-x["points"], -x["gd"], -x["gf"], x["team"])),
+                start=1,
+            ):
+                row["rank"] = idx
+    except Exception:
+        pass
+
+    for idx, row in enumerate(
+        sorted(table, key=lambda x: (-x["points"], -x["gd"], -x["gf"], x["team"])),
+        start=1,
+    ):
+        if "rank" not in row:
+            row["rank"] = idx
+        row["last"] = row.get("last", [])[-2:]
 
     notes: list[str] = []
     if matches:
@@ -350,6 +369,28 @@ def _build_group_state_context(
 
     secondary = _secondary_group_signals(table, home_team=home_team, away_team=away_team)
 
+    match_motivation = None
+    if home_team and away_team and group:
+        try:
+            snap = fetch_live_snapshot()
+            if snap.get("ok"):
+                best3 = rank_best_third_places(snap.get("standings") or {})
+                rnd = 2
+                for f in snap.get("fixtures") or []:
+                    if f.get("group") == group and f.get("home") == home_team and f.get("away") == away_team:
+                        rnd = int(f.get("round") or 2)
+                        break
+                match_motivation = analyze_fixture_motivation(
+                    home=home_team,
+                    away=away_team,
+                    group=group,
+                    standings=snap.get("standings") or {group: table},
+                    round_num=rnd,
+                    best_thirds=best3,
+                )
+        except Exception:
+            pass
+
     return {
         "group": group,
         "played_matches": len(matches),
@@ -357,6 +398,7 @@ def _build_group_state_context(
         "recent_results": matches[-4:],
         "motivation_notes": notes,
         "secondary_signals": secondary,
+        "match_motivation": match_motivation,
     }
 
 
@@ -829,6 +871,12 @@ def _record_from_row(row: dict) -> dict[str, Any]:
         "recommendation_source": pred.get("recommendation_source") or payload.get("recommendation_source"),
         "confidence_cn": pred.get("confidence_cn"),
         "asian_handicap_cn": pred.get("asian_handicap_cn"),
+        "asian_handicap_pick": pred.get("asian_handicap_pick"),
+        "asian_handicap_reason": pred.get("asian_handicap_reason"),
+        "pick_ah": row.get("pick_ah"),
+        "pick_ah_cn": row.get("pick_ah_cn"),
+        "hit_ah": row.get("hit_ah"),
+        "ah_settlement": row.get("ah_settlement"),
         "opening_odds": opening,
         "closing_odds": closing,
         "opening_favorite": payload.get("opening_favorite"),
@@ -915,6 +963,11 @@ def _attach_prediction(rec: dict, output_root: str | Path) -> None:
         pick_key = pred.get("result_1x2") or pred.get("pick_1x2")
         if actual and pick_key:
             rec["hit_1x2"] = pick_key == actual
+        pick_ah = pred.get("asian_handicap_pick")
+        if pick_ah in ("home", "away"):
+            rec["asian_handicap_pick"] = pick_ah
+            rec["asian_handicap_cn"] = pred.get("asian_handicap_cn")
+            rec["asian_handicap_reason"] = pred.get("asian_handicap_reason")
 
 
 def _record_from_finished_fixture(

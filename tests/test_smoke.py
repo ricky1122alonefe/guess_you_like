@@ -189,3 +189,49 @@ def test_knockout_path_group_a():
     assert pick["easiest_path_rank"] == 2
     assert pick["picking_level"] in ("watch", "medium")
     assert any("挑对手" in n or "第二" in n for n in pick["notes"])
+
+
+def test_prediction_archive_kickoff_compare():
+    import tempfile
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from prediction_archive import load_best_prediction
+    from time_utils import BEIJING, coerce_beijing_dt
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        runs = root / "runs" / "2026-06-17_1000"
+        runs.mkdir(parents=True)
+        (runs / "predictions.json").write_text(
+            json.dumps({
+                "generated_at": "2026-06-17 09:00:00",
+                "matches": [{"fixture_id": "1359218", "result_1x2_cn": "主胜"}],
+            }),
+            encoding="utf-8",
+        )
+        ko_aware = datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc)
+        pred = load_best_prediction(root, "1359218", kickoff_at=ko_aware)
+        assert pred is not None
+        assert pred.get("result_1x2_cn") == "主胜"
+
+        ko_naive = datetime(2026, 6, 17, 20, 0)
+        pred2 = load_best_prediction(root, "1359218", kickoff_at=ko_naive)
+        assert pred2 is not None
+        assert coerce_beijing_dt(ko_naive).tzinfo == BEIJING
+
+        # mimic DB naive kickoff vs UTC-aware predict_ts stored in memory
+        (runs / "predictions.json").write_text(
+            json.dumps({
+                "generated_at": "2026-06-17T09:00:00+00:00",
+                "matches": [{"fixture_id": "1359257", "result_1x2_cn": "平局"}],
+            }),
+            encoding="utf-8",
+        )
+        pred3 = load_best_prediction(
+            root,
+            "1359257",
+            kickoff_at=datetime(2026, 6, 17, 20, 0),  # naive, like psycopg2 + SET TIME ZONE
+        )
+        assert pred3 is not None
+        assert pred3.get("result_1x2_cn") == "平局"

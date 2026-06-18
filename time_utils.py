@@ -36,6 +36,16 @@ def to_beijing(dt: datetime) -> datetime:
     return dt.astimezone(BEIJING)
 
 
+def coerce_beijing_dt(value) -> datetime | None:
+    """Parse str/datetime and always return timezone-aware Beijing time."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return to_beijing(value)
+    dt = parse_ts(value)
+    return to_beijing(dt) if dt else None
+
+
 def format_beijing(dt: datetime | None, fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
     if dt is None:
         return "—"

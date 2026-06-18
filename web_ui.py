@@ -2864,37 +2864,7 @@ def html_match_detail(
         "eu_h": eu_h, "eu_d": eu_d, "eu_a": eu_a,
         "ah_l": ah_l, "ah_hw": ah_hw, "ah_aw": ah_aw,
         **bf_charts,
-        "eu_multi": eu_multi,
     }, ensure_ascii=False, default=_json_default)
-
-    eu_multi_inner = ""
-    if has_eu_multi:
-        n_anom = len(eu_multi.get("anomalies") or [])
-        eu_multi_inner = f"""
-  <p class="meta">{len(eu_multi.get('books') or [])} 家公司 · 北京时间 · 拖拽框选放大
-    {' · <span class="tag tag-warn">异动 ' + str(n_anom) + '</span>' if n_anom else ''}</p>
-  <div class="eu-tabs" role="tablist">
-    <button type="button" class="eu-tab active" role="tab" data-outcome="home">主胜</button>
-    <button type="button" class="eu-tab" role="tab" data-outcome="draw">平局</button>
-    <button type="button" class="eu-tab" role="tab" data-outcome="away">客胜</button>
-  </div>
-  <div class="eu-chart-toolbar export-hide">
-    <span class="meta eu-zoom-hint">Shift+拖拽平移 · 滚轮缩放</span>
-    <span class="eu-range-hint" id="euRangeHint">—</span>
-    <button type="button" class="btn eu-reset-btn" id="euResetZoom">重置</button>
-  </div>
-  <div class="eu-chart-wrap"><canvas id="euMultiChart"></canvas></div>"""
-        if n_anom:
-            eu_multi_inner += f"""
-  <table style="margin-top:12px">
-    <tr><th>时间</th><th>公司</th><th>项</th><th>赔率</th><th>说明</th></tr>
-    {''.join(
-        f"<tr><td>{_e(format_ts(a.get('ts')))}</td><td>{_e(a.get('book'))}</td>"
-        f"<td>{_e(a.get('outcome_cn'))}</td><td>{_e(a.get('value'))}</td>"
-        f"<td class='meta'>{_e(a.get('reason'))}</td></tr>"
-        for a in reversed((eu_multi.get('anomalies') or [])[-15:])
-    )}
-  </table>"""
 
     bf_charts_inner = ""
     if has_bf_trend or has_bf_poll:
@@ -2917,16 +2887,6 @@ def html_match_detail(
 </div>""",
         open=True,
     )
-    eu_books_fold = ""
-    if has_eu_multi:
-        n_anom = len(eu_multi.get("anomalies") or [])
-        eu_books_fold = _fold(
-            f"各公司欧赔走势（{len(eu_multi.get('books') or [])} 家"
-            + (f" · 异动 {n_anom}" if n_anom else "") + "）",
-            eu_multi_inner,
-            open=n_anom > 0,
-            muted=not n_anom,
-        )
     bf_fold = _fold("必发占比走势", bf_charts_inner, muted=True) if bf_charts_inner else ""
     changes_fold = _fold(
         f"推荐变动（{len(changes)} 次）",
@@ -2959,12 +2919,6 @@ def html_match_detail(
         open=True,
     ) if similar_body else ""
     team_form_fold = _team_form_fold_html(name)
-
-    zoom_scripts = ""
-    if has_eu_multi:
-        zoom_scripts = """
-<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>"""
 
     match_css = _shared_css("""
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -3012,12 +2966,6 @@ def html_match_detail(
   .strategy-grid, .path-grid, .rec-grid {{ grid-template-columns: 1fr; }}
 }}
 .dual-hint { color: #b45309; background: #fffbeb; padding: 8px 12px; border-radius: 6px; }
-.eu-tabs { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
-.eu-tab { padding: 6px 16px; border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 8px;
-           cursor: pointer; font-size: 13px; }
-.eu-tab.active { background: #2563eb; color: #fff; border-color: #2563eb; }
-.eu-chart-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
-.eu-chart-wrap { position: relative; height: min(48vh, 420px); min-height: 280px; }
 canvas { max-height: 260px; }
 tr.chg td { background: #fffbeb; }
 .style-clash-banner { margin-bottom: 8px; line-height: 1.5; }
@@ -3040,7 +2988,7 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
 <html lang="zh-CN"><head>
 <meta charset="utf-8"/>
 <title>{_e(name)} · 趋势</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>{zoom_scripts}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 {export_script}
 <style>
 {match_css}
@@ -3076,7 +3024,6 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
 <div class="fold-stack">
 {market_fold}
 {charts_fold}
-{eu_books_fold}
 {bf_fold}
 {changes_fold}
 {snapshot_fold}
@@ -3111,135 +3058,6 @@ lineChart('ahChart', [
   {{ label: '上水', data: D.ah_hw, borderColor: '#0891b2', tension: 0.2 }},
   {{ label: '下水', data: D.ah_aw, borderColor: '#ea580c', tension: 0.2 }},
 ]);
-function euMultiChart(outcome) {{
-  const M = D.eu_multi;
-  if (!M || !M.labels || !M.labels.length) return null;
-  const canvas = document.getElementById('euMultiChart');
-  if (!canvas) return null;
-  const series = (M.series || {{}})[outcome] || {{}};
-  const books = M.books || Object.keys(series);
-  const colors = M.book_colors || {{}};
-  const datasets = books.map(b => ({{
-    label: b,
-    data: series[b] || [],
-    borderColor: colors[b] || '#64748b',
-    backgroundColor: colors[b] || '#64748b',
-    tension: 0.2,
-    spanGaps: true,
-    pointRadius: 2,
-    borderWidth: b.includes('平博') || b.includes('Pinnacle') || b.includes('Pi') ? 2.5 : 1.5,
-  }}));
-  const pts = (M.anomaly_points || {{}})[outcome] || [];
-  if (pts.length) {{
-    const markData = M.labels.map((_, i) => {{
-      const hit = pts.find(p => p.idx === i);
-      return hit ? hit.value : null;
-    }});
-    datasets.push({{
-      label: '异动',
-      data: markData,
-      showLine: false,
-      pointRadius: 9,
-      pointStyle: 'triangle',
-      pointRotation: 0,
-      backgroundColor: '#dc2626',
-      borderColor: '#dc2626',
-    }});
-  }}
-  return new Chart(canvas, {{
-    type: 'line',
-    data: {{ labels: M.labels, datasets }},
-    options: {{
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: {{ mode: 'index', intersect: false }},
-      plugins: {{
-        legend: {{
-          position: 'bottom',
-          labels: {{ boxWidth: 12, font: {{ size: 11 }}, padding: 10, usePointStyle: true }},
-        }},
-        tooltip: {{
-          callbacks: {{
-            afterBody(items) {{
-              const i = items[0]?.dataIndex;
-              const hit = pts.filter(p => p.idx === i);
-              if (!hit.length) return '';
-              return hit.map(p => p.book + ': ' + p.reason).join('\\n');
-            }}
-          }}
-        }},
-        zoom: {{
-          limits: {{ x: {{ minRange: 3 }} }},
-          pan: {{
-            enabled: true,
-            mode: 'x',
-            modifierKey: 'shift',
-            onPanComplete: ({{ chart }}) => updateEuRangeHint(chart),
-          }},
-          zoom: {{
-            wheel: {{ enabled: true, speed: 0.08 }},
-            pinch: {{ enabled: true }},
-            drag: {{
-              enabled: true,
-              backgroundColor: 'rgba(37, 99, 235, 0.14)',
-              borderColor: 'rgba(37, 99, 235, 0.65)',
-              borderWidth: 1,
-              threshold: 6,
-            }},
-            mode: 'x',
-            onZoomComplete: ({{ chart }}) => updateEuRangeHint(chart),
-          }},
-        }},
-      }},
-      scales: {{
-        x: {{ ticks: {{ maxRotation: 0, autoSkip: true, maxTicksLimit: 14 }} }},
-        y: {{ beginAtZero: false }},
-      }},
-    }}
-  }});
-}}
-function updateEuRangeHint(chart) {{
-  const el = document.getElementById('euRangeHint');
-  if (!el || !chart) return;
-  const labels = chart.data.labels || [];
-  if (!labels.length) {{ el.textContent = '—'; return; }}
-  const x = chart.scales.x;
-  const minIdx = Math.max(0, Math.floor(x.min));
-  const maxIdx = Math.min(labels.length - 1, Math.ceil(x.max));
-  const full = minIdx <= 0 && maxIdx >= labels.length - 1;
-  el.textContent = full
-    ? '全时段 ' + labels[0] + ' — ' + labels[labels.length - 1]
-    : '聚焦 ' + labels[minIdx] + ' — ' + labels[maxIdx];
-}}
-function resetEuMultiZoom() {{
-  if (!euMultiChartInst) return;
-  if (typeof euMultiChartInst.resetZoom === 'function') {{
-    euMultiChartInst.resetZoom();
-  }}
-  updateEuRangeHint(euMultiChartInst);
-}}
-let euMultiChartInst = null;
-function switchEuMultiTab(outcome) {{
-  document.querySelectorAll('.eu-tab').forEach(btn => {{
-    const on = btn.dataset.outcome === outcome;
-    btn.classList.toggle('active', on);
-    btn.setAttribute('aria-selected', on ? 'true' : 'false');
-  }});
-  if (euMultiChartInst) {{
-    euMultiChartInst.destroy();
-    euMultiChartInst = null;
-  }}
-  euMultiChartInst = euMultiChart(outcome);
-  updateEuRangeHint(euMultiChartInst);
-}}
-if (D.eu_multi && D.eu_multi.labels && D.eu_multi.labels.length) {{
-  switchEuMultiTab('home');
-  document.querySelectorAll('.eu-tab').forEach(btn => {{
-    btn.addEventListener('click', () => switchEuMultiTab(btn.dataset.outcome));
-  }});
-  const resetBtn = document.getElementById('euResetZoom');
-  if (resetBtn) resetBtn.addEventListener('click', resetEuMultiZoom);
-}}
 function pctChart(id, labels, home, draw, away, title) {{
   if (!labels || !labels.length) return;
   new Chart(document.getElementById(id), {{

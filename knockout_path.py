@@ -396,8 +396,8 @@ def _combined_prediction_hint(
 
     notes = list((motivation or {}).get("reasoning") or [])[:2]
     if picking_level in ("medium", "watch"):
-        notes.extend(home_pick.get("notes") or [])[:1]
-        notes.extend(away_pick.get("notes") or [])[:1]
+        notes.extend((home_pick.get("notes") or [])[:1])
+        notes.extend((away_pick.get("notes") or [])[:1])
 
     return {
         "match_type_cn": mt,

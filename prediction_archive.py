@@ -8,22 +8,23 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from time_utils import parse_ts, to_beijing
+from time_utils import coerce_beijing_dt
 
 log = logging.getLogger(__name__)
 
 
 def _pred_ts(pred: dict, fallback: str = "") -> datetime | None:
     for key in ("generated_at", "predict_ts"):
-        if pred.get(key):
-            dt = parse_ts(str(pred[key]))
+        raw = pred.get(key)
+        if raw:
+            dt = coerce_beijing_dt(raw if isinstance(raw, datetime) else str(raw))
             if dt:
-                return to_beijing(dt) if dt.tzinfo else dt
+                return dt
     run_id = pred.get("run_id") or fallback
     if run_id and len(run_id) >= 16:
         try:
             dt = datetime.strptime(run_id[:16], "%Y-%m-%d_%H%M")
-            return dt
+            return coerce_beijing_dt(dt)
         except ValueError:
             pass
     return None
@@ -47,7 +48,7 @@ def load_best_prediction(
     output_root: str | Path,
     fixture_id: str,
     *,
-    kickoff_at: datetime | None = None,
+    kickoff_at: datetime | str | None = None,
 ) -> dict | None:
     """
     Last prediction before kickoff: scan latest.json + all runs/*/predictions.json.
@@ -80,9 +81,7 @@ def load_best_prediction(
     if not candidates:
         return None
 
-    ko = None
-    if kickoff_at is not None:
-        ko = to_beijing(kickoff_at)
+    ko = coerce_beijing_dt(kickoff_at)
 
     if ko:
         before = [(ts, m, rid) for ts, m, rid in candidates if ts and ts <= ko]

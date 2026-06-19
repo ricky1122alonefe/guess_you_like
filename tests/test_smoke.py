@@ -476,6 +476,43 @@ def test_ai_config_and_profiles():
     assert main(["version"]) == 0
 
 
+def test_analysis_rules_and_signals():
+    from analysis.rules import MIN_SAMPLES_FOR_PICK, build_recommendation
+    from analysis.signals import analyze_control, analyze_traps, build_market_signals
+
+    assert MIN_SAMPLES_FOR_PICK >= 1
+    cur = {
+        "match_name": "测试A vs 测试B",
+        "ah_open_line": -0.5,
+        "ah_line": -0.75,
+        "ah_open_home_water": 0.95,
+        "ah_home_water": 0.88,
+        "ah_open_away_water": 0.93,
+        "ah_away_water": 0.98,
+        "eu_open_home": 2.0,
+        "eu_open_draw": 3.3,
+        "eu_open_away": 3.8,
+        "eu_home": 1.85,
+        "eu_draw": 3.4,
+        "eu_away": 4.2,
+    }
+    sig = build_market_signals(cur)
+    assert sig.bias_1x2
+    ctrl = analyze_control(cur)
+    assert ctrl.level in ("low", "medium", "high")
+    trap = analyze_traps(cur, intensity=ctrl.intensity, level=ctrl.level)
+    assert trap.penalties
+    payload = {
+        "current": cur,
+        "stats": {"count": 0},
+        "eu_stats": {"count": 0},
+        "open_stats": {"count": 0},
+        "open_eu_stats": {"count": 0},
+    }
+    rec = build_recommendation(payload)
+    assert rec.insufficient_data
+
+
 def test_analysis_pipeline_modules():
     from analysis.pipeline import DEFAULT_STEPS, REUSE_STEPS, enrich_prediction
     from analysis.quant.bundle import run_quant_analysis

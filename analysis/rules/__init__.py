@@ -1,20 +1,22 @@
-"""Backward-compatible shim — use analysis.rules."""
+"""Rule-based recommendation engine."""
 
-from analysis.rules import (
-    AH_CN,
-    CONFIDENCE_CN,
-    MIN_SAMPLES_FOR_PICK,
-    OU_CN,
-    RESULT_CN,
-    Recommendation,
+from analysis.rules.engine import build_recommendation
+from analysis.rules.output import (
     apply_baseline_to_prediction,
-    build_recommendation,
     merge_expert_prediction,
     print_ai_recommendation,
     print_batch_summary,
     print_recommendation,
     recommendation_from_dict,
     recommendation_to_baseline,
+)
+from analysis.rules.types import (
+    AH_CN,
+    CONFIDENCE_CN,
+    MIN_SAMPLES_FOR_PICK,
+    OU_CN,
+    RESULT_CN,
+    Recommendation,
 )
 
 __all__ = [

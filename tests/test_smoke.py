@@ -440,3 +440,9 @@ def test_eu_ah_divergence_scoring():
     assert aligned.consistency == "aligned"
     assert aligned.divergence_score < 45
 
+
+def test_cli_version():
+    from scripts._entry import main
+
+    assert main(["version"]) == 0
+

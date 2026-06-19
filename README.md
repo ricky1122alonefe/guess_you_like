@@ -134,7 +134,7 @@ pytest -q
 ruff check .
 ```
 
-贡献指南见 [CONTRIBUTING.md](CONTRIBUTING.md)。变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+贡献指南见 [CONTRIBUTING.md](CONTRIBUTING.md)。变更记录见 [CHANGELOG.md](CHANGELOG.md)。安全问题见 [SECURITY.md](SECURITY.md)。
 
 ## License
 

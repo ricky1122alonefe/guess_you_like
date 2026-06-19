@@ -991,9 +991,12 @@ def scheduler_loop(
 
 
 def main(argv: list[str] | None = None) -> int:
+    from __version__ import __version__
+
     parser = argparse.ArgumentParser(
         description="HTTP 服务：每整点拉取赔率、分析，并提供比赛趋势二级页",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("-o", "--output", default="output/service", help="结果输出目录")

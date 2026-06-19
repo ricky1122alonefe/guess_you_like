@@ -78,7 +78,10 @@ def run_once(*, within_days: float, guard: ScraperGuard, leagues=DEFAULT_LEAGUES
 
 
 def main(argv: list[str] | None = None) -> int:
+    from __version__ import __version__
+
     parser = argparse.ArgumentParser(description="每 N 秒轻量抓取 500.com 赔率写入 Postgres")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--interval", type=int, default=300, help="轮询间隔秒，默认 300=5分钟")
     parser.add_argument("--days", type=float, default=7, help="只抓 N 天内比赛")
     parser.add_argument(

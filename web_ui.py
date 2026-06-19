@@ -122,6 +122,42 @@ function fillAiChat(scope, text) {
   const input = box.querySelector('.ai-chat-input');
   if (input) input.value = text;
 }
+
+async function initAiProviderSelects() {
+  const byRole = new Map();
+  document.querySelectorAll('[data-ai-provider-role]').forEach(sel => {
+    const role = sel.getAttribute('data-ai-provider-role') || 'chat';
+    if (!byRole.has(role)) byRole.set(role, []);
+    byRole.get(role).push(sel);
+  });
+  for (const [role, elements] of byRole.entries()) {
+    try {
+      const r = await fetch('/api/ai/providers?role=' + encodeURIComponent(role) + '&configured=1');
+      const d = await r.json();
+      const providers = d.providers || [];
+      elements.forEach(sel => {
+        sel.innerHTML = '';
+        providers.forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p.id;
+          opt.textContent = p.label;
+          sel.appendChild(opt);
+        });
+        if (!sel.options.length) {
+          const opt = document.createElement('option');
+          opt.value = 'deepseek';
+          opt.textContent = '未配置 AI';
+          sel.appendChild(opt);
+        }
+      });
+    } catch (e) { /* keep empty select */ }
+  }
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initAiProviderSelects);
+} else {
+  initAiProviderSelects();
+}
 """
 
 _PARLAY_JS = """
@@ -507,11 +543,10 @@ def _ai_chat_card(*, scope: str, fid: str = "") -> str:
     return f"""
 <div class="card ai-chat-card" id="{box_id}">
   <h3>人工干预 AI 对话 <span class="tag">SSE</span></h3>
-  <p class="meta">只用于复核与人工干预建议，不会自动改推荐。暂时支持 DeepSeek / Cursor。</p>
+  <p class="meta">只用于复核与人工干预；下拉列表来自 <code>/api/ai/providers</code>（密钥仍在 .env）。</p>
   <div class="ai-chat-toolbar export-hide">
-    <select class="ai-chat-provider">
-      <option value="deepseek">DeepSeek</option>
-      <option value="cursor">Cursor Composer</option>
+    <select class="ai-chat-provider" data-ai-provider-role="chat">
+      <option value="deepseek">加载中…</option>
     </select>
     <button type="button" class="btn ai-chat-send" onclick="startAiChat('{scope}', '{_e(fid)}')">发送给AI</button>
   </div>
@@ -762,9 +797,8 @@ def html_dashboard(
             onclick="analyzeParlay(false)">2串1 分析</button>
     <button type="button" class="btn btn-sm btn-ai" id="parlay-ai-btn" disabled
             onclick="analyzeParlay(true)">AI 简评（可选）</button>
-    <select id="list-parlay-provider" class="ai-chat-provider">
-      <option value="deepseek">DeepSeek</option>
-      <option value="cursor">Cursor</option>
+    <select id="list-parlay-provider" class="ai-chat-provider" data-ai-provider-role="parlay">
+      <option value="deepseek">加载中…</option>
     </select>
     <button type="button" class="btn btn-sm btn-ai" id="list-parlay-ai-btn"
             onclick="analyzeListParlayAi()">AI自动选2串1</button>

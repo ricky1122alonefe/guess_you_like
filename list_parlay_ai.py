@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from ai_prompt import _extract_json_text
-from ai_profiles import _cursor_profile, _deepseek_profile
+from ai_profiles import get_profile_by_id
 from custom_parlay import analyze_custom_parlay
 from daily_picks import _best_actionable_pick, _combined_odds, _eu_odds, _kickoff_date, load_kickoff_map
 from deepseek_client import chat
@@ -54,13 +54,14 @@ SYSTEM_PROMPT = """你是竞彩2串1风控筛选助手。你只能从用户给�
 }"""
 
 
-def _profile(provider: str):
+def _profile(provider: str, output_root: str | None = None):
+    from ai_profiles import get_profile_by_id
+
     provider = (provider or "deepseek").strip().lower()
-    if provider == "cursor":
-        return _cursor_profile()
-    if provider == "deepseek":
-        return _deepseek_profile()
-    raise ValueError("provider 仅支持 deepseek 或 cursor")
+    prof = get_profile_by_id(provider, output_root=output_root)
+    if prof:
+        return prof
+    raise ValueError(f"未配置或不可用的 AI provider: {provider}")
 
 
 def _odds_move(m: dict) -> dict[str, Any]:
@@ -188,12 +189,13 @@ def recommend_list_parlay(
     provider: str = "deepseek",
     kickoff_map: dict | None = None,
     target_date: str | None = None,
+    output_root: str | None = None,
 ) -> dict[str, Any]:
     kickoff_map = kickoff_map or load_kickoff_map()
     all_candidates = [c for m in matches if (c := _candidate(m, kickoff_map))]
     match_date, candidates = _pick_same_day_candidates(all_candidates, target_date=target_date)
 
-    prof = _profile(provider)
+    prof = _profile(provider, output_root=output_root)
     api_key = prof.resolve_api_key()
     if not api_key:
         raise ValueError(f"未配置 {prof.api_key_env}")

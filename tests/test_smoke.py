@@ -441,7 +441,25 @@ def test_eu_ah_divergence_scoring():
     assert aligned.divergence_score < 45
 
 
-def test_cli_version():
+def test_ai_config_and_profiles():
+    from ai_config import list_provider_entries, load_raw_config, public_config_summary
+    from ai_profiles import get_profile_by_id, load_profiles
+
+    cfg = load_raw_config()
+    assert cfg.get("primary_id")
+    assert isinstance(cfg.get("providers"), list)
+    summary = public_config_summary()
+    assert "predict_mode" in summary
+    chat_providers = list_provider_entries(cfg, role="chat", configured_only=False)
+    assert any(p["id"] == "deepseek" for p in chat_providers)
+
+    profiles = load_profiles(dual=False, role="predict")
+    assert isinstance(profiles, list)
+
+    prof = get_profile_by_id("deepseek")
+    if prof and prof.resolve_api_key():
+        assert prof.provider_id == "deepseek"
+
     from scripts._entry import main
 
     assert main(["version"]) == 0

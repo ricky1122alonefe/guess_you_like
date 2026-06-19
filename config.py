@@ -61,6 +61,8 @@ SERVICE_WITHIN_DAYS = 7.0            # 世界杯小组赛程跨度大，默认 7
 # ── 定时 AI 节流（整点任务：距上次 AI 不足此间隔则跳过）────
 AI_AUTO_ENABLED = False             # False=仅手动触发 AI；True=整点任务可自动跑 AI
 AI_INTERVAL_MINUTES = 150            # 自动 AI 时约 2.5h 一次（AI_AUTO_ENABLED=True 时生效）
+# AI 模型注册表：data/ai_providers.example.json → 复制为 data/ai_providers.json
+# 或运行时 output/service/ai_config.json（POST /api/ai/config 写入）
 
 # ── 异动 / 诱盘惩罚（乘在有效概率上，0.85=扣15%）──────
 TRAP_PENALTY_LINE_UP_WATER_DOWN = 0.85      # 升盘+上盘降水 → 诱上盘/主胜

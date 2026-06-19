@@ -99,6 +99,27 @@ docker compose up -d
 
 详见 `.env.example` 与 `local_secrets.example.py`。
 
+### AI 模型配置（非密钥）
+
+模型注册表默认见 `data/ai_providers.example.json`。可任选一种方式覆盖：
+
+```bash
+# 方式 A：项目级（可提交模板，勿提交含密钥的文件）
+cp data/ai_providers.example.json data/ai_providers.json
+
+# 方式 B：运行时目录（推荐，随 output 走）
+# POST /api/ai/config 写入 output/service/ai_config.json
+```
+
+查询已启用模型：
+
+```bash
+curl -s http://127.0.0.1:8765/api/ai/providers?role=chat | python3 -m json.tool
+curl -s http://127.0.0.1:8765/api/ai/config | python3 -m json.tool
+```
+
+`predict_mode`：`single` 仅主模型 · `multi` 全部启用 · `primary_only` 同 single。环境变量 `AI_PREDICT_MODE` / `AI_PRIMARY_ID` 可临时覆盖。
+
 ## 项目结构
 
 ```

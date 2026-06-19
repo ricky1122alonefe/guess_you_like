@@ -162,15 +162,14 @@ def _compact_match_for_chat(m: dict | None) -> dict:
     }
 
 
-def _chat_profile(provider: str):
+def _chat_profile(provider: str, output_root: Path | None = None):
+    from ai_profiles import get_profile_by_id
+
     provider = (provider or "deepseek").strip().lower()
-    if provider == "cursor":
-        from ai_profiles import _cursor_profile
-        return _cursor_profile()
-    if provider == "deepseek":
-        from ai_profiles import _deepseek_profile
-        return _deepseek_profile()
-    raise ValueError("provider 仅支持 deepseek 或 cursor")
+    prof = get_profile_by_id(provider, output_root=output_root)
+    if prof:
+        return prof
+    raise ValueError(f"未配置或不可用的 AI provider: {provider}")
 
 
 def _parse_chat_answer(text: str) -> str:
@@ -184,10 +183,17 @@ def _parse_chat_answer(text: str) -> str:
     return text
 
 
-def _ask_ai_chat(*, provider: str, prompt: str, context: dict, scope: str) -> tuple[str, str]:
+def _ask_ai_chat(
+    *,
+    provider: str,
+    prompt: str,
+    context: dict,
+    scope: str,
+    output_root: Path | str | None = None,
+) -> tuple[str, str]:
     from deepseek_client import chat
 
-    prof = _chat_profile(provider)
+    prof = _chat_profile(provider, output_root=Path(output_root or "output/service"))
     api_key = prof.resolve_api_key()
     if not api_key:
         raise RuntimeError(f"未配置 {prof.api_key_env}")
@@ -230,14 +236,28 @@ def _sse_write(handler: BaseHTTPRequestHandler, event: str, data: str) -> None:
     handler.wfile.flush()
 
 
-def _send_chat_sse(handler: BaseHTTPRequestHandler, *, provider: str, prompt: str, context: dict, scope: str) -> None:
+def _send_chat_sse(
+    handler: BaseHTTPRequestHandler,
+    *,
+    provider: str,
+    prompt: str,
+    context: dict,
+    scope: str,
+    output_root: Path | str | None = None,
+) -> None:
     handler.send_response(200)
     handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
     handler.send_header("Cache-Control", "no-cache")
     handler.send_header("Connection", "keep-alive")
     handler.end_headers()
     try:
-        label, answer = _ask_ai_chat(provider=provider, prompt=prompt, context=context, scope=scope)
+        label, answer = _ask_ai_chat(
+            provider=provider,
+            prompt=prompt,
+            context=context,
+            scope=scope,
+            output_root=output_root or getattr(handler, "output_root", None),
+        )
         _sse_write(handler, "chunk", f"【{label}】\n")
         step = 80
         for i in range(0, len(answer), step):
@@ -476,7 +496,10 @@ class Handler(BaseHTTPRequestHandler):
                     "latest": (idx.get("timeline") or [])[-1:] if isinstance(idx.get("timeline"), list) else [],
                 },
             }
-            _send_chat_sse(self, provider=provider, prompt=prompt, context=context, scope="match")
+            _send_chat_sse(
+                self, provider=provider, prompt=prompt, context=context,
+                scope="match", output_root=self.output_root,
+            )
             return
 
         if path == "/":
@@ -509,7 +532,10 @@ class Handler(BaseHTTPRequestHandler):
                 "active_matches": [_compact_match_for_chat(m) for m in active[:20]],
                 "latest_generated_at": latest_payload.get("generated_at"),
             }
-            _send_chat_sse(self, provider=provider, prompt=prompt, context=context, scope="dashboard")
+            _send_chat_sse(
+                self, provider=provider, prompt=prompt, context=context,
+                scope="dashboard", output_root=self.output_root,
+            )
             return
         if path == "/daily":
             qs = parse_qs(urlparse(self.path).query)
@@ -638,11 +664,38 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/status" or path == "/health":
             from ai_schedule import ai_schedule_info
+            from ai_config import public_config_summary
+
             state = get_state()
             state["ai_schedule"] = ai_schedule_info(self.output_root)
             state["ai_auto_enabled"] = app_cfg.AI_AUTO_ENABLED
             state["ai_interval_minutes"] = app_cfg.AI_INTERVAL_MINUTES
+            state["ai_config"] = public_config_summary(self.output_root)
             self._send_json(state)
+            return
+        if path == "/api/ai/providers":
+            from ai_config import list_provider_entries, load_raw_config
+
+            qs = parse_qs(urlparse(self.path).query)
+            role = (qs.get("role", [None])[0] or "").strip() or None
+            configured_only = qs.get("configured", ["0"])[0] in ("1", "true", "yes")
+            cfg = load_raw_config(self.output_root)
+            providers = list_provider_entries(
+                cfg,
+                role=role,
+                configured_only=configured_only,
+            )
+            self._send_json({
+                "role": role,
+                "primary_id": cfg.get("primary_id"),
+                "predict_mode": cfg.get("predict_mode"),
+                "providers": providers,
+            })
+            return
+        if path == "/api/ai/config":
+            from ai_config import public_config_summary
+
+            self._send_json(public_config_summary(self.output_root))
             return
         if path == "/api/latest":
             data = _read_json(root / "latest.json")
@@ -702,6 +755,29 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/settle":
             from match_settlement import run_settlement
             self._send_json(run_settlement(self.output_root))
+            return
+        if path == "/api/ai/config":
+            try:
+                from ai_config import public_config_summary, save_config, validate_config_patch
+
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b"{}"
+                payload = json.loads(raw.decode("utf-8"))
+                errors = validate_config_patch(payload)
+                if errors:
+                    self._send_json({"ok": False, "errors": errors}, 400)
+                    return
+                path_saved = save_config(payload, self.output_root)
+                self._send_json({
+                    "ok": True,
+                    "path": str(path_saved),
+                    "config": public_config_summary(self.output_root),
+                })
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "请求体须为 JSON"}, 400)
+            except Exception as exc:
+                log.exception("保存 AI 配置失败")
+                self._send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/kelly/calc":
             try:
@@ -834,6 +910,7 @@ class Handler(BaseHTTPRequestHandler):
                     provider=provider,
                     kickoff_map=kickoff_map,
                     target_date=target_date,
+                    output_root=str(self.output_root),
                 )
                 self._send_json(result)
             except json.JSONDecodeError:

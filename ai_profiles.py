@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import copy
+import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+log = logging.getLogger(__name__)
 
 DOUBAO_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
@@ -46,16 +49,24 @@ class AiProfile:
     model: str
     base_url: str
     api_key_env: str
+    alt_api_key_envs: tuple[str, ...] = field(default_factory=tuple)
+    client: str = "openai"
 
     def resolve_api_key(self) -> str | None:
-        env_names = [self.api_key_env]
+        env_names = [self.api_key_env, *self.alt_api_key_envs]
         if self.provider_id == "doubao":
             env_names.extend(["DOUBAO_API_KEY", "ARK_API_KEY"])
         elif self.provider_id == "kimi":
             env_names.extend(["KIMI_API_KEY", "MOONSHOT_API_KEY"])
         elif self.provider_id == "cursor":
             env_names.extend(["CURSOR_API_KEY"])
+        elif self.provider_id == "deepseek":
+            env_names.append("DEEPSEEK_API_KEY")
+        seen: set[str] = set()
         for name in env_names:
+            if not name or name in seen:
+                continue
+            seen.add(name)
             key = os.environ.get(name)
             if key:
                 return key.strip()
@@ -79,10 +90,48 @@ class AiProfile:
         if self.provider_id == "cursor":
             key = getattr(secrets, "CURSOR_API_KEY", None)
             return key.strip() if key else None
+        for name in env_names:
+            if not name:
+                continue
+            key = getattr(secrets, name, None)
+            if key:
+                return key.strip()
         return None
 
 
-def _deepseek_profile(model: str | None = None) -> AiProfile:
+def profile_from_entry(entry: dict) -> AiProfile:
+    alts = entry.get("alt_api_key_envs") or []
+    return AiProfile(
+        provider_id=str(entry.get("id") or ""),
+        label=str(entry.get("label") or entry.get("id") or ""),
+        model=str(entry.get("model") or ""),
+        base_url=str(entry.get("base_url") or ""),
+        api_key_env=str(entry.get("api_key_env") or ""),
+        alt_api_key_envs=tuple(str(x) for x in alts),
+        client=str(entry.get("client") or "openai"),
+    )
+
+
+def _apply_overrides(
+    prof: AiProfile,
+    *,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> AiProfile:
+    if not model and not base_url:
+        return prof
+    return AiProfile(
+        provider_id=prof.provider_id,
+        label=prof.label,
+        model=model or prof.model,
+        base_url=base_url or prof.base_url,
+        api_key_env=prof.api_key_env,
+        alt_api_key_envs=prof.alt_api_key_envs,
+        client=prof.client,
+    )
+
+
+def _legacy_deepseek_profile(model: str | None = None) -> AiProfile:
     return AiProfile(
         provider_id="deepseek",
         label="DeepSeek 精算师",
@@ -92,17 +141,11 @@ def _deepseek_profile(model: str | None = None) -> AiProfile:
     )
 
 
-def _doubao_profile(model: str | None = None) -> AiProfile:
+def _legacy_doubao_profile(model: str | None = None) -> AiProfile:
     if not model:
         model = os.environ.get("DOUBAO_MODEL") or os.environ.get("DOUBAO_ENDPOINT")
         if not model:
-            try:
-                import local_secrets as secrets
-                _local_model = getattr(secrets, "DOUBAO_MODEL", None)
-            except ImportError:
-                _local_model = None
-            if _local_model:
-                model = _local_model.strip()
+            model = _local_secret("DOUBAO_MODEL")
         if not model:
             model = DOUBAO_DEFAULT_MODEL
     return AiProfile(
@@ -111,35 +154,11 @@ def _doubao_profile(model: str | None = None) -> AiProfile:
         model=model,
         base_url=os.environ.get("DOUBAO_BASE_URL", DOUBAO_BASE_URL),
         api_key_env="DOUBAO_API_KEY",
+        alt_api_key_envs=("ARK_API_KEY",),
     )
 
 
-def _kimi_profile(model: str | None = None) -> AiProfile:
-    if not model:
-        model = os.environ.get("KIMI_MODEL") or os.environ.get("MOONSHOT_MODEL")
-        if not model:
-            try:
-                import local_secrets as secrets
-                model = getattr(secrets, "KIMI_MODEL", None) or getattr(secrets, "MOONSHOT_MODEL", None)
-            except ImportError:
-                model = None
-        if not model:
-            model = KIMI_DEFAULT_MODEL
-    base = (
-        os.environ.get("KIMI_BASE_URL")
-        or os.environ.get("MOONSHOT_BASE_URL")
-        or KIMI_BASE_URL
-    )
-    return AiProfile(
-        provider_id="kimi",
-        label="Kimi 精算师",
-        model=model,
-        base_url=base,
-        api_key_env="MOONSHOT_API_KEY",
-    )
-
-
-def _cursor_profile(model: str | None = None) -> AiProfile:
+def _legacy_cursor_profile(model: str | None = None) -> AiProfile:
     if not model or model == "deepseek-chat":
         model = os.environ.get("CURSOR_MODEL") or _local_secret("CURSOR_MODEL", CURSOR_DEFAULT_MODEL)
     return AiProfile(
@@ -148,16 +167,89 @@ def _cursor_profile(model: str | None = None) -> AiProfile:
         model=model,
         base_url=CURSOR_BASE_URL,
         api_key_env="CURSOR_API_KEY",
+        client="cursor",
     )
 
 
-def get_primary_profile(model: str | None = None, base_url: str | None = None) -> AiProfile:
+def _legacy_kimi_profile(model: str | None = None) -> AiProfile:
+    if not model:
+        model = os.environ.get("KIMI_MODEL") or os.environ.get("MOONSHOT_MODEL")
+        if not model:
+            model = _local_secret("KIMI_MODEL") or _local_secret("MOONSHOT_MODEL")
+        if not model:
+            model = KIMI_DEFAULT_MODEL
+    base = os.environ.get("KIMI_BASE_URL") or os.environ.get("MOONSHOT_BASE_URL") or KIMI_BASE_URL
+    return AiProfile(
+        provider_id="kimi",
+        label="Kimi 精算师",
+        model=model,
+        base_url=base,
+        api_key_env="MOONSHOT_API_KEY",
+        alt_api_key_envs=("KIMI_API_KEY",),
+    )
+
+
+# Backward-compatible aliases used elsewhere in the codebase
+_deepseek_profile = _legacy_deepseek_profile
+_doubao_profile = _legacy_doubao_profile
+_cursor_profile = _legacy_cursor_profile
+_kimi_profile = _legacy_kimi_profile
+
+
+def get_profile_by_id(
+    provider_id: str,
+    *,
+    output_root: str | os.PathLike | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> AiProfile | None:
+    from ai_config import entry_requires_env, load_raw_config, provider_entry, resolve_api_key
+
+    pid = (provider_id or "").strip().lower()
+    cfg = load_raw_config(output_root)
+    entry = provider_entry(cfg, pid)
+    if entry:
+        if not entry_requires_env(entry):
+            return None
+        if not resolve_api_key(entry):
+            return None
+        prof = profile_from_entry(entry)
+        return _apply_overrides(prof, model=model, base_url=base_url)
+
+    legacy = {
+        "deepseek": _legacy_deepseek_profile,
+        "doubao": _legacy_doubao_profile,
+        "cursor": _legacy_cursor_profile,
+        "kimi": _legacy_kimi_profile,
+    }.get(pid)
+    if not legacy:
+        return None
+    prof = legacy(model)
+    if not prof.resolve_api_key():
+        return None
+    return _apply_overrides(prof, model=model, base_url=base_url)
+
+
+def get_primary_profile(
+    model: str | None = None,
+    base_url: str | None = None,
+    *,
+    output_root: str | os.PathLike | None = None,
+) -> AiProfile:
+    from ai_config import load_raw_config, provider_entry, resolve_api_key
+
+    cfg = load_raw_config(output_root)
+    primary_id = str(cfg.get("primary_id") or primary_provider()).strip().lower()
+    entry = provider_entry(cfg, primary_id)
+    if entry and resolve_api_key(entry):
+        return _apply_overrides(profile_from_entry(entry), model=model, base_url=base_url)
+
     provider = primary_provider()
     if provider == "cursor":
-        prof = _cursor_profile(model)
-        return AiProfile(prof.provider_id, prof.label, prof.model, base_url or prof.base_url, prof.api_key_env)
-    prof = _deepseek_profile(model)
-    return AiProfile(prof.provider_id, prof.label, prof.model, base_url or prof.base_url, prof.api_key_env)
+        prof = _legacy_cursor_profile(model)
+        return _apply_overrides(prof, model=model, base_url=base_url or prof.base_url)
+    prof = _legacy_deepseek_profile(model)
+    return _apply_overrides(prof, model=model, base_url=base_url or prof.base_url)
 
 
 def load_profiles(
@@ -168,52 +260,88 @@ def load_profiles(
     secondary_model: str | None = None,
     secondary_base_url: str | None = None,
     kimi_model: str | None = None,
+    output_root: str | os.PathLike | None = None,
+    role: str = "predict",
 ) -> list[AiProfile]:
-    """Return enabled profiles with valid API keys.
+    """Return enabled profiles with valid API keys (config-driven)."""
+    from ai_config import entry_requires_env, load_raw_config, resolve_api_key
 
-    When dual=True, loads DeepSeek + every optional provider with a key
-    (豆包、Cursor；Kimi 需 AI_ENABLE_KIMI=1).
-    """
-    profiles: list[AiProfile] = []
-
-    primary = get_primary_profile(primary_model, primary_base_url)
-    if primary.resolve_api_key():
-        profiles.append(primary)
-
+    cfg = load_raw_config(output_root)
+    predict_mode = str(cfg.get("predict_mode") or "multi").lower()
     if dual:
-        import logging
-        log = logging.getLogger(__name__)
+        predict_mode = "multi"
 
-        db = _doubao_profile(secondary_model)
-        if secondary_base_url:
-            db = AiProfile(
-                db.provider_id, db.label, db.model, secondary_base_url, db.api_key_env,
-            )
-        if db.resolve_api_key():
-            profiles.append(db)
-        else:
-            log.warning(
-                "豆包未配置：请设置 ARK_API_KEY（或 DOUBAO_API_KEY），"
-                "可选 DOUBAO_MODEL（默认 %s）",
-                DOUBAO_DEFAULT_MODEL,
-            )
+    entries = [e for e in (cfg.get("providers") or []) if e.get("enabled", True)]
+    entries.sort(key=lambda e: e.get("order", 999))
 
-        if primary.provider_id != "cursor":
-            cu = _cursor_profile()
-            if cu.resolve_api_key():
-                profiles.append(cu)
-            else:
-                log.warning("Cursor 未配置：请设置 CURSOR_API_KEY（可选 CURSOR_MODEL）")
+    def _to_profile(entry: dict, *, model=None, base_url=None) -> AiProfile | None:
+        if role not in (entry.get("roles") or []):
+            return None
+        if not entry_requires_env(entry):
+            return None
+        if not resolve_api_key(entry):
+            return None
+        prof = profile_from_entry(entry)
+        if entry.get("id") == "doubao" and secondary_model:
+            model = secondary_model
+            base_url = secondary_base_url or base_url
+        if entry.get("id") == "kimi" and kimi_model:
+            model = kimi_model
+        if entry.get("id") == cfg.get("primary_id") and primary_model:
+            model = primary_model
+            base_url = primary_base_url or base_url
+        return _apply_overrides(prof, model=model, base_url=base_url)
 
-        km = _kimi_profile(kimi_model)
-        if kimi_enabled():
-            if km.resolve_api_key():
-                profiles.append(km)
-            else:
+    profiles: list[AiProfile] = []
+    primary_id = str(cfg.get("primary_id") or "deepseek")
+
+    if predict_mode == "primary_only" or predict_mode == "single":
+        entry = next((e for e in entries if e.get("id") == primary_id), None)
+        if entry:
+            prof = _to_profile(entry, model=primary_model, base_url=primary_base_url)
+            if prof:
+                profiles.append(prof)
+        if not profiles:
+            primary = get_primary_profile(primary_model, primary_base_url, output_root=output_root)
+            if primary.resolve_api_key():
+                profiles.append(primary)
+        return profiles
+
+    for entry in entries:
+        prof = _to_profile(entry)
+        if prof:
+            profiles.append(prof)
+
+    if not profiles:
+        primary = get_primary_profile(primary_model, primary_base_url, output_root=output_root)
+        if primary.resolve_api_key():
+            profiles.append(primary)
+        if dual:
+            db = _legacy_doubao_profile(secondary_model)
+            if secondary_base_url:
+                db = _apply_overrides(db, base_url=secondary_base_url)
+            if db.resolve_api_key():
+                profiles.append(db)
+
+    if dual and len(profiles) <= 1:
+        for pid in ("doubao", "cursor", "kimi"):
+            if any(p.provider_id == pid for p in profiles):
+                continue
+            if pid == "kimi" and not kimi_enabled():
+                continue
+            legacy = {
+                "doubao": lambda: _legacy_doubao_profile(secondary_model),
+                "cursor": _legacy_cursor_profile,
+                "kimi": lambda: _legacy_kimi_profile(kimi_model),
+            }[pid]()
+            if pid == "doubao" and secondary_base_url:
+                legacy = _apply_overrides(legacy, base_url=secondary_base_url)
+            if legacy.resolve_api_key():
+                profiles.append(legacy)
+            elif pid == "doubao":
                 log.warning(
-                    "Kimi 已开启但未配置：请设置 MOONSHOT_API_KEY（或 KIMI_API_KEY），"
-                    "可选 KIMI_MODEL（默认 %s）",
-                    KIMI_DEFAULT_MODEL,
+                    "豆包未配置：请设置 ARK_API_KEY（或 DOUBAO_API_KEY），可选 DOUBAO_MODEL（默认 %s）",
+                    DOUBAO_DEFAULT_MODEL,
                 )
 
     return profiles

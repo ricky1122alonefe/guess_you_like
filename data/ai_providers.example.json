@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "primary_id": "deepseek",
+  "predict_mode": "multi",
+  "providers": [
+    {
+      "id": "deepseek",
+      "label": "DeepSeek 精算师",
+      "enabled": true,
+      "model": "deepseek-chat",
+      "base_url": "https://api.deepseek.com",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "client": "openai",
+      "roles": ["predict", "chat", "parlay", "daily", "watch"],
+      "order": 10
+    },
+    {
+      "id": "doubao",
+      "label": "豆包 精算师",
+      "enabled": true,
+      "model": "doubao-seed-2-0-lite-260428",
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key_env": "ARK_API_KEY",
+      "alt_api_key_envs": ["DOUBAO_API_KEY"],
+      "client": "openai",
+      "roles": ["predict", "watch"],
+      "order": 20
+    },
+    {
+      "id": "cursor",
+      "label": "Cursor Composer",
+      "enabled": true,
+      "model": "composer-2.5",
+      "base_url": "cursor-sdk",
+      "api_key_env": "CURSOR_API_KEY",
+      "client": "cursor",
+      "roles": ["predict", "chat", "parlay"],
+      "order": 30
+    },
+    {
+      "id": "kimi",
+      "label": "Kimi 精算师",
+      "enabled": false,
+      "model": "moonshot-v1-32k",
+      "base_url": "https://api.moonshot.cn/v1",
+      "api_key_env": "MOONSHOT_API_KEY",
+      "alt_api_key_envs": ["KIMI_API_KEY"],
+      "client": "openai",
+      "roles": ["predict"],
+      "requires_env": ["AI_ENABLE_KIMI"],
+      "order": 40
+    }
+  ],
+  "multi": {
+    "on_disagreement": "skip"
+  }
+}

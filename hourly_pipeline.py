@@ -320,6 +320,7 @@ def run_single_match_ai(
             primary_base_url=ai_base_url,
             secondary_model=ai_model_b,
             secondary_base_url=ai_base_url_b,
+            output_root=root,
         )
         if not profiles:
             raise RuntimeError(
@@ -518,6 +519,7 @@ def run_hourly_job(
                         primary_base_url=ai_base_url,
                         secondary_model=ai_model_b,
                         secondary_base_url=ai_base_url_b,
+                        output_root=root,
                     ) if ai_for_match else []
 
                     if ai_for_match and len(profiles) > 1:

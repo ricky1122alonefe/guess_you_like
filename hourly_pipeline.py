@@ -408,10 +408,14 @@ def run_hourly_job(
     ai_model_b: str | None = None,
     ai_base_url_b: str | None = None,
     skip_unchanged: bool = True,
-    ai_interval_sec: int = 3600,
+    ai_interval_sec: int | None = None,
     force_ai: bool = False,
 ) -> RunSummary:
     """Download upcoming fixtures from 500.com, then predict each match."""
+    import config as app_cfg
+
+    if ai_interval_sec is None:
+        ai_interval_sec = app_cfg.AI_INTERVAL_MINUTES * 60
     if not _run_lock.acquire(blocking=False):
         raise RuntimeError("已有任务在运行，请稍后再试")
 
@@ -429,7 +433,14 @@ def run_hourly_job(
     )
 
     use_ai_effective = use_ai
-    if use_ai and not should_run_ai(root, interval_sec=ai_interval_sec, force=force_ai):
+    import config as app_cfg
+
+    if ai_interval_sec is None:
+        ai_interval_sec = app_cfg.AI_INTERVAL_MINUTES * 60
+    if use_ai and not app_cfg.AI_AUTO_ENABLED:
+        use_ai_effective = False
+        log.info("定时 AI 已关闭（config.AI_AUTO_ENABLED=False），本轮仅抓数 + 规则引擎")
+    elif use_ai and not should_run_ai(root, interval_sec=ai_interval_sec, force=force_ai):
         use_ai_effective = False
         summary.ai_throttled = True
 

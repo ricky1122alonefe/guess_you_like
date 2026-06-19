@@ -11,12 +11,13 @@ from db.connection import ping
 from db.repository import (
     get_closing_tick,
     get_opening_tick,
+    list_fixtures_for_resettlement,
     list_fixtures_pending_settlement,
     list_match_results_map,
     upsert_match_result,
 )
 from download_500 import DEFAULT_LEAGUES, _session
-from live_scores_500 import LiveScore, fetch_live_scoreboard
+from live_scores_500 import LiveScore, align_score_to_fixture, fetch_live_scoreboard
 from market_patterns import analyze_market_patterns
 from match_status import evaluate_prediction_hits, match_phase, RESULT_CN
 from prediction_archive import load_best_prediction, prediction_snapshot
@@ -199,12 +200,14 @@ def run_settlement(
     output_root: str | Path,
     *,
     leagues=DEFAULT_LEAGUES,
+    resettle: bool = False,
 ) -> dict[str, Any]:
     root = Path(output_root)
     summary: dict[str, Any] = {
         "ok": False,
         "settled": 0,
         "skipped_no_score": 0,
+        "resettle": resettle,
         "errors": [],
     }
     if not ping():
@@ -212,6 +215,12 @@ def run_settlement(
         return summary
 
     pending = list_fixtures_pending_settlement(source=SOURCE)
+    if resettle:
+        seen = {int(fx["id"]) for fx in pending}
+        for fx in list_fixtures_for_resettlement(source=SOURCE):
+            if int(fx["id"]) not in seen:
+                pending.append(fx)
+                seen.add(int(fx["id"]))
     if not pending:
         summary["ok"] = True
         try:
@@ -233,6 +242,8 @@ def run_settlement(
         if not score:
             summary["skipped_no_score"] += 1
             continue
+        if score.source != "wc_api":
+            score = align_score_to_fixture(score, fx)
         try:
             settle_fixture(fx, score, output_root=root)
             summary["settled"] += 1

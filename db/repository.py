@@ -224,6 +224,30 @@ def list_fixtures_pending_settlement(
         return list(cur.fetchall())
 
 
+def list_fixtures_for_resettlement(
+    *,
+    source: str = "500",
+    limit: int = 200,
+    min_minutes_after_kickoff: float = 105,
+) -> list[dict]:
+    """Fixtures that already have match_results but may need score correction."""
+    with cursor() as cur:
+        cur.execute(
+            """
+            SELECT f.*
+            FROM fixtures f
+            INNER JOIN match_results r ON r.fixture_id = f.id
+            WHERE f.source = %s
+              AND f.kickoff_at IS NOT NULL
+              AND f.kickoff_at <= NOW() - (%s || ' minutes')::interval
+            ORDER BY f.kickoff_at DESC
+            LIMIT %s
+            """,
+            (source, str(min_minutes_after_kickoff), limit),
+        )
+        return list(cur.fetchall())
+
+
 def _match_result_values(row: dict[str, Any]) -> tuple[Any, ...]:
     cols = (
         "fixture_id", "status", "home_score", "away_score", "score_text",

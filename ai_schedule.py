@@ -11,7 +11,22 @@ from time_utils import BEIJING, now_beijing, now_beijing_str
 
 log = logging.getLogger(__name__)
 
-DEFAULT_AI_INTERVAL_SEC = 3600  # 1 hour
+import config as app_cfg
+
+DEFAULT_AI_INTERVAL_SEC = app_cfg.AI_INTERVAL_MINUTES * 60
+
+
+def format_ai_interval(minutes: int | None = None) -> str:
+    """Human label for AI throttle interval."""
+    m = app_cfg.AI_INTERVAL_MINUTES if minutes is None else minutes
+    if m <= 0:
+        return "不限"
+    if m % 60 == 0:
+        return f"{m // 60} 小时"
+    h = m / 60
+    if abs(h - round(h)) < 0.05:
+        return f"{int(round(h))} 小时"
+    return f"约 {h:.1f} 小时"
 
 
 def _path(output_root: str | Path) -> Path:

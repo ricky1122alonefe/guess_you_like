@@ -374,3 +374,69 @@ def test_attach_quant_analysis():
     assert pred.get("model_likely_scores")
     assert pred["quant"].get("score_model")
     assert pred["quant"].get("elo")
+
+
+def test_parse_fulltime_score_not_halftime():
+    from bs4 import BeautifulSoup
+    from live_scores_500 import _parse_score_from_tr, align_score_to_fixture, LiveScore
+
+    html = """
+    <tr>
+      <td>世界杯</td>
+      <td class="teamvs">
+        <span class="score">2 - 0</span>
+        <span class="score2">半场：1-0</span>
+      </td>
+      <td>完</td>
+    </tr>
+    """
+    tr = BeautifulSoup(html, "html.parser").find("tr")
+    h, a, txt = _parse_score_from_tr(tr)
+    assert (h, a, txt) == (2, 0, "2-0")
+
+    row_html = """
+    <tr>
+      <td>世界杯</td>
+      <td>墨西哥</td>
+      <td>南非</td>
+      <td>半场：1-0</td>
+      <td>2-0</td>
+      <td>完</td>
+    </tr>
+    """
+    tr2 = BeautifulSoup(row_html, "html.parser").find("tr")
+    h2, a2, txt2 = _parse_score_from_tr(tr2)
+    assert (h2, a2, txt2) == (2, 0, "2-0")
+
+    score = LiveScore("1", 0, 2, "0-2", home_name="南非", away_name="墨西哥")
+    aligned = align_score_to_fixture(score, {
+        "home_team": "墨西哥",
+        "away_team": "南非",
+        "match_name": "墨西哥VS南非",
+    })
+    assert aligned.score_text == "2-0"
+    assert aligned.home_score == 2 and aligned.away_score == 0
+
+
+def test_eu_ah_divergence_scoring():
+    from eu_ah_divergence import analyze_eu_ah_divergence
+
+    # 欧赔支持主让0.75，实际仅主让0.25 → 巨大浅盘分歧
+    shallow = analyze_eu_ah_divergence({
+        "eu_home": 1.55, "eu_draw": 4.0, "eu_away": 5.5,
+        "ah_line": -0.25,
+        "eu_open_home": 1.60, "eu_open_draw": 4.0, "eu_open_away": 5.2,
+        "ah_open_line": -0.5,
+    }, fixture_id="1", match="测试A")
+    assert shallow is not None
+    assert shallow.consistency == "ah_shallow"
+    assert shallow.divergence_score >= 45
+
+    aligned = analyze_eu_ah_divergence({
+        "eu_home": 2.10, "eu_draw": 3.20, "eu_away": 3.40,
+        "ah_line": -0.25,
+    }, fixture_id="2", match="测试B")
+    assert aligned is not None
+    assert aligned.consistency == "aligned"
+    assert aligned.divergence_score < 45
+

@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import config as app_cfg
 from hourly_pipeline import (
     get_history,
     get_state,
@@ -32,7 +33,7 @@ from timeline_merge import load_latest_poll_meta, merge_match_indexes
 from time_utils import now_beijing
 from daily_picks import load_daily_picks_from_output, save_daily_picks
 from share_card import build_parlay_share_context, build_share_context, html_share_match, html_share_parlay
-from web_ui import html_ah_analytics, html_daily_picks, html_dashboard, html_group_stage, html_kelly_calculator, html_match_detail, html_quant_analytics, html_worldcup_ledger
+from web_ui import html_ah_analytics, html_daily_picks, html_dashboard, html_eu_ah_divergence, html_group_stage, html_kelly_calculator, html_match_detail, html_quant_analytics, html_worldcup_ledger
 
 
 def _error_html(body: str) -> str:
@@ -300,7 +301,7 @@ class Handler(BaseHTTPRequestHandler):
     ai_model_b: str | None = None
     ai_base_url_b: str | None = None
     skip_unchanged: bool = True
-    ai_interval_sec: int = 3600
+    ai_interval_sec: int = app_cfg.AI_INTERVAL_MINUTES * 60
     force_ai: bool = False
 
     def log_message(self, fmt, *args):
@@ -566,6 +567,18 @@ class Handler(BaseHTTPRequestHandler):
             report["updated_at"] = now_beijing_str()
             self._send_html(html_quant_analytics(report))
             return
+        if path == "/divergence":
+            from eu_ah_divergence import build_divergence_report
+
+            qs = parse_qs(urlparse(self.path).query)
+            min_score = qs.get("min_score", [None])[0]
+            try:
+                min_score_int = int(min_score) if min_score else None
+            except ValueError:
+                min_score_int = None
+            report = build_divergence_report(root, min_score=min_score_int)
+            self._send_html(html_eu_ah_divergence(report))
+            return
         if path == "/kelly":
             qs = parse_qs(urlparse(self.path).query)
             fid = (qs.get("fixture_id", [None])[0] or "").strip()
@@ -603,6 +616,17 @@ class Handler(BaseHTTPRequestHandler):
             report["updated_at"] = now_beijing_str()
             self._send_json(report)
             return
+        if path == "/api/divergence/report":
+            from eu_ah_divergence import build_divergence_report
+
+            qs = parse_qs(urlparse(self.path).query)
+            min_score = qs.get("min_score", [None])[0]
+            try:
+                min_score_int = int(min_score) if min_score else None
+            except ValueError:
+                min_score_int = None
+            self._send_json(build_divergence_report(root, min_score=min_score_int))
+            return
         if path == "/api/worldcup/ledger":
             from worldcup_analytics import build_tournament_ledger
             self._send_json(build_tournament_ledger(
@@ -616,6 +640,8 @@ class Handler(BaseHTTPRequestHandler):
             from ai_schedule import ai_schedule_info
             state = get_state()
             state["ai_schedule"] = ai_schedule_info(self.output_root)
+            state["ai_auto_enabled"] = app_cfg.AI_AUTO_ENABLED
+            state["ai_interval_minutes"] = app_cfg.AI_INTERVAL_MINUTES
             self._send_json(state)
             return
         if path == "/api/latest":
@@ -930,7 +956,7 @@ def scheduler_loop(
     ai_base_url_b: str | None = None,
     run_on_start: bool,
     skip_unchanged: bool = True,
-    ai_interval_sec: int = 3600,
+    ai_interval_sec: int = app_cfg.AI_INTERVAL_MINUTES * 60,
 ):
     job_kw = dict(
         within_days=within_days,
@@ -991,8 +1017,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-on-start", action="store_true", help="启动后立即跑一轮")
     parser.add_argument("--no-scheduler", action="store_true", help="仅 HTTP，不自动整点")
     parser.add_argument(
-        "--ai-interval-minutes", type=int, default=60,
-        help="AI 最短调用间隔（分钟），默认 60；0=不限制",
+        "--ai-interval-minutes", type=int, default=app_cfg.AI_INTERVAL_MINUTES,
+        help=f"AI 最短调用间隔（分钟），默认 {app_cfg.AI_INTERVAL_MINUTES}（约 2～3 小时）；0=不限制",
     )
     parser.add_argument(
         "--force-analyze", action="store_true",

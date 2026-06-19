@@ -645,6 +645,7 @@ def html_dashboard(
     within_days: float | None = None,
 ) -> str:
     import config as app_cfg
+    from ai_schedule import format_ai_interval
     from daily_picks import load_dashboard_matches, load_kickoff_map
     from match_settlement import classify_matches, load_settled_map
     from match_timeline import list_match_indexes
@@ -668,9 +669,17 @@ def html_dashboard(
         finished_rows = "<tr><td colspan='6'>暂无已结算完场（开球 105 分钟后自动抓取赛果）</td></tr>"
 
     wc_teaser = _worldcup_teaser(output_root)
+    div_teaser = _divergence_teaser(output_root)
+
+    import config as app_cfg
+    from ai_schedule import format_ai_interval
 
     lr = state.get("last_run") or {}
     run_status = "运行中" if state.get("running") else "空闲"
+    if app_cfg.AI_AUTO_ENABLED:
+        ai_schedule_txt = f"定时 AI 每 {format_ai_interval()}"
+    else:
+        ai_schedule_txt = "定时 AI 已关闭 · 请手动点「AI 推荐本场」"
     service_body = f"""
   <p>状态：<strong>{run_status}</strong>
      · 上次成功 <code>{_e(format_ts(state.get('last_success_at')))}</code>
@@ -679,7 +688,7 @@ def html_dashboard(
      · 下载 {lr.get('download_ok', 0)} · 分析 {lr.get('predict_ok', 0)}
      · AI {lr.get('ai_called', 0)} 次
      {'· 结算 ' + str(lr.get('settled_count', 0)) + ' 场' if lr.get('settled_count') else ''}</p>
-  <p class="meta">定时 AI 每小时 · 仅 <strong>24h 内</strong>开赛 · poll 窗口 {window:g} 天</p>
+  <p class="meta">{ai_schedule_txt} · 仅 <strong>24h 内</strong>开赛 · poll 窗口 {window:g} 天</p>
   <p class="meta" id="db-line">数据库：加载中…</p>
   <script>
   fetch('/api/db/status').then(r=>r.json()).then(d=>{{
@@ -736,11 +745,13 @@ def html_dashboard(
   <a href="/daily">📋 当日 2串1</a> · <a href="/worldcup">🏆 开盘套路</a>
   · <a href="/worldcup/groups">⚔️ 小组战意</a>
   · <a href="/handicap">📊 亚盘赢盘</a>
+  · <a href="/divergence">⚡ 欧亚分歧</a>
   · <a href="/quant">📈 量化回测</a>
   · <a href="/kelly">🧮 Kelly</a>
   · 状态 <strong>{run_status}</strong>
 </nav>
 <button class="btn" style="margin-bottom:14px" onclick="fetch('/api/run',{{method:'POST'}}).then(r=>r.json()).then(d=>showToast(d.message||d.error||'已触发', !d.ok))">立即执行一次</button>
+{div_teaser}
 {wc_teaser}
 {_ai_chat_card(scope="dashboard")}
 <div class="card">
@@ -2868,6 +2879,100 @@ def html_quant_analytics(report: dict) -> str:
     {elo_rows}
   </table>
   <p class="meta">种子来自 wc2026 档位，完场后自动迭代更新。</p>
+</div>
+
+<p class="meta" style="margin-top:20px">公益体彩 量力而行 · 仅供参考 不构成投注建议</p>
+</body></html>"""
+
+
+def _divergence_teaser(output_root: Path) -> str:
+    try:
+        from eu_ah_divergence import build_divergence_report
+
+        report = build_divergence_report(output_root)
+        rows = report.get("matches") or []
+        if not rows:
+            return ""
+        huge = sum(1 for r in rows if r.get("severity") == "extreme")
+        top = rows[0]
+        hint = (
+            f"最大分歧：{_e(top.get('match'))}（{top.get('divergence_score')} 分，"
+            f"{_e(top.get('severity_cn'))}）"
+        )
+        return f"""
+<div class="card" style="border-left:4px solid #dc2626;margin-bottom:14px">
+  <p style="margin:0"><a href="/divergence"><strong>⚡ 欧亚分歧</strong></a>
+     <span class="meta"> · {len(rows)} 场需关注 · {huge} 场巨大分歧</span></p>
+  <p class="meta" style="margin:6px 0 0">{hint}</p>
+</div>"""
+    except Exception:
+        return ""
+
+
+def html_eu_ah_divergence(report: dict) -> str:
+    rows_data = report.get("matches") or []
+    notes = "".join(f"<li>{_e(x)}</li>" for x in (report.get("notes") or []))
+    min_score = report.get("min_score", 45)
+    updated = report.get("updated_at") or now_beijing_str()
+
+    if not rows_data:
+        table = "<p class='meta empty-hint'>当前窗口内暂无达到阈值的欧亚分歧场次。</p>"
+    else:
+        trs = ""
+        for r in rows_data:
+            sev = r.get("severity") or "major"
+            sev_cls = {"extreme": "sev-extreme", "major": "sev-major", "moderate": "sev-mod"}.get(sev, "")
+            sigs = " · ".join(_e(x) for x in (r.get("signals") or [])[:3]) or "—"
+            fid = r.get("fixture_id") or ""
+            trs += f"""
+<tr class="{sev_cls}">
+  <td><span class="score-badge">{r.get('divergence_score', 0)}</span><br><span class="meta">{_e(r.get('severity_cn'))}</span></td>
+  <td><a href="/match/{_e(fid)}">{_e(r.get('match'))}</a><br><span class="meta">{_e(r.get('kickoff'))}</span></td>
+  <td>{_e(r.get('consistency_cn'))}<br><span class="meta">gap {_e(r.get('line_gap'))}</span></td>
+  <td><span class="meta">欧→亚</span> {_e(r.get('eu_to_ah_line_cn'))}<br><span class="meta">实际</span> {_e(r.get('ah_line_cn'))}</td>
+  <td><span class="meta">初欧</span> {_e(r.get('open_eu'))}<br><span class="meta">临欧</span> {_e(r.get('live_eu'))}</td>
+  <td><span class="meta">初亚</span> {_e(r.get('open_ah'))}<br><span class="meta">临亚</span> {_e(r.get('live_ah'))}</td>
+  <td class="sig-cell">{sigs}<p class="meta advice">{_e(r.get('advice') or '')}</p></td>
+</tr>"""
+        table = f"""<table>
+<tr><th>分歧分</th><th>比赛</th><th>类型</th><th>盘口对照</th><th>欧赔</th><th>亚盘</th><th>信号 / 建议</th></tr>
+{trs}
+</table>"""
+
+    div_css = _shared_css("""
+.hero-card { background: linear-gradient(135deg, #fef2f2 0%, #fff 55%); border: 1px solid #fecaca; }
+.sev-extreme td:first-child { background: #fef2f2; }
+.sev-major td:first-child { background: #fff7ed; }
+.score-badge { font-size: 1.25rem; font-weight: 800; color: #b91c1c; }
+.sig-cell { font-size: 13px; line-height: 1.5; max-width: 280px; }
+.sig-cell .advice { margin: 6px 0 0; color: #475569; }
+""")
+
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>欧亚分歧扫描</title>
+<style>
+{div_css}
+</style>
+</head><body>
+<p class="back page-nav"><a href="/">← 返回首页</a> · <a href="/worldcup">开盘套路</a> · <a href="/daily">当日推荐</a> · <a href="/handicap">亚盘赢盘</a> · <a href="/quant">量化回测</a> · <a href="/kelly">Kelly</a></p>
+
+<div class="card hero-card">
+  <h1>⚡ 欧亚分歧扫描</h1>
+  <p class="meta">{_e(report.get('headline') or '')} · 阈值 ≥{min_score} 分 · 更新 {_e(updated)}</p>
+  <p class="meta">扫描 {report.get('scanned', 0)} 场赛程 · 本地计算，不调用 AI</p>
+</div>
+
+<div class="card">
+  <h2>分歧场次（按分数降序）</h2>
+  {table}
+</div>
+
+<div class="card">
+  <h3>说明</h3>
+  <ul class="meta">{notes or '<li>—</li>'}</ul>
 </div>
 
 <p class="meta" style="margin-top:20px">公益体彩 量力而行 · 仅供参考 不构成投注建议</p>

@@ -4,8 +4,8 @@
 #   bash scripts/run_local.sh ai-dual   # poll + web + 多模型 AI（DeepSeek + 豆包）
 #   豆包：ARK_API_KEY + 可选 DOUBAO_MODEL（默认 doubao-seed-2-0-lite-260428）
 #   Kimi（默认关闭）：AI_ENABLE_KIMI=1 + MOONSHOT_API_KEY
-#   bash scripts/run_local.sh ai        # poll + web + 整点AI（1小时节流）
-#   bash scripts/run_local.sh           # 同上但不调 AI（省钱）
+#   bash scripts/run_local.sh ai        # poll + web + 整点抓数（AI 仅手动）
+#   bash scripts/run_local.sh           # 同上
 #   bash scripts/run_local.sh kill      # 停掉旧进程
 #   bash scripts/run_local.sh once      # 只抓一轮赔率
 set -euo pipefail
@@ -56,12 +56,12 @@ run_dev() {
   echo "DATABASE_URL=$DATABASE_URL"
   if [[ "$with_ai" == "1" ]]; then
     if [[ "$dual_ai" == "1" ]]; then
-      echo "模式: poll 5分钟 | 多模型 AI（DeepSeek+豆包）1小时一次 → http://127.0.0.1:$PORT"
+      echo "模式: poll 5分钟 | 整点抓数+规则 | AI 仅手动（多模型就绪）→ http://127.0.0.1:$PORT"
     else
-      echo "模式: 爬赔率 5分钟一次 | AI 分析 1小时一次 → http://127.0.0.1:$PORT"
+      echo "模式: poll 5分钟 | 整点抓数+规则 | AI 仅手动 → http://127.0.0.1:$PORT"
     fi
   else
-    echo "模式: 爬赔率 5分钟一次 | 无 AI → http://127.0.0.1:$PORT"
+    echo "模式: poll 5分钟 | 整点抓数+规则 | AI 仅手动 → http://127.0.0.1:$PORT"
   fi
   echo "poll 日志: $LOG_DIR/poll.log  |  Ctrl+C 全部停止"
   echo "----------------------------------------"
@@ -73,19 +73,14 @@ run_dev() {
     | tee -a "$LOG_DIR/poll.log" \
     | prefix_lines poll &
 
-  SERVE_ARGS=(serve.py --host 127.0.0.1 --port "$PORT")
-  if [[ "$with_ai" == "1" ]]; then
-    SERVE_ARGS+=(--with-ai --ai-interval-minutes 60 --run-on-start)
-    if [[ "$dual_ai" == "1" ]]; then
-      SERVE_ARGS+=(--dual-ai)
-      if [[ -n "${DOUBAO_ENDPOINT:-}" ]]; then
-        SERVE_ARGS+=(--ai-model-b "$DOUBAO_ENDPOINT")
-      elif [[ -n "${DOUBAO_MODEL:-}" ]]; then
-        SERVE_ARGS+=(--ai-model-b "$DOUBAO_MODEL")
-      fi
+  SERVE_ARGS=(serve.py --host 127.0.0.1 --port "$PORT" --run-on-start)
+  if [[ "$dual_ai" == "1" ]]; then
+    SERVE_ARGS+=(--dual-ai)
+    if [[ -n "${DOUBAO_ENDPOINT:-}" ]]; then
+      SERVE_ARGS+=(--ai-model-b "$DOUBAO_ENDPOINT")
+    elif [[ -n "${DOUBAO_MODEL:-}" ]]; then
+      SERVE_ARGS+=(--ai-model-b "$DOUBAO_MODEL")
     fi
-  else
-    SERVE_ARGS+=(--no-scheduler --run-on-start)
   fi
 
   "$PY" "${SERVE_ARGS[@]}" 2>&1 | prefix_lines web &

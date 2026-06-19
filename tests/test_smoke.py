@@ -460,6 +460,17 @@ def test_ai_config_and_profiles():
     if prof and prof.resolve_api_key():
         assert prof.provider_id == "deepseek"
 
+    errors = __import__("ai_config", fromlist=["validate_config_patch"]).validate_config_patch(
+        {"predict_mode": "invalid"}
+    )
+    assert errors
+
+    editable = __import__(
+        "ai_config", fromlist=["editable_config_summary"]
+    ).editable_config_summary()
+    assert editable.get("providers")
+    assert all("api_key" not in p for p in editable["providers"])
+
     from scripts._entry import main
 
     assert main(["version"]) == 0

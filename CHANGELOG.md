@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- (your changes here)
+- Config-driven multi-AI provider registry (`data/ai_providers.example.json`, `/api/ai/*`)
+- Web admin page `/settings/ai` — enable models, roles, connectivity test
 
 ## [0.1.0] - 2026-06-20
 

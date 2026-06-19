@@ -13,6 +13,7 @@
 - **小组战意** `/worldcup/groups`：12 组实时积分、最佳第三排名、次轮/末轮默契球与拼命球预测（已接入推荐引擎）
 - **亚盘赢盘** `/handicap`：相似样本上下盘赢盘率、推荐回测、盘口区间规律
 - **欧亚分歧** `/divergence`：扫描欧赔与亚盘巨大分歧场次（诱盘/控盘预警）
+- **AI 设置** `/settings/ai`：后台配置多模型启用、角色、测试连通
 - **量化回测** `/quant`：Dixon-Coles、Elo、竞彩 EV、小组 MC
 - **Kelly 计算器** `/kelly`：根据胜率与赔率计算最优仓位（支持半 Kelly / ¼ Kelly）
 
@@ -84,6 +85,8 @@ Web 默认：<http://127.0.0.1:8765>
 
 ```bash
 docker compose up -d
+# web → guess-you-like serve · poll → guess-you-like poll
+# 镜像内 pip install -e .，与本地 CLI 一致
 ```
 
 ## 环境变量
@@ -119,6 +122,8 @@ curl -s http://127.0.0.1:8765/api/ai/config | python3 -m json.tool
 ```
 
 `predict_mode`：`single` 仅主模型 · `multi` 全部启用 · `primary_only` 同 single。环境变量 `AI_PREDICT_MODE` / `AI_PRIMARY_ID` 可临时覆盖。
+
+Web 设置页：<http://127.0.0.1:8765/settings/ai> — 勾选启用、修改 model/roles、测试 API 连通（密钥仍在 `.env`）。
 
 ## 项目结构
 

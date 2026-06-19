@@ -30,6 +30,7 @@
 cd guess_you_like
 python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install -U pip setuptools wheel   # 建议 ≥23，支持 pyproject 可编辑安装
 pip install -e ".[dev]"
 
 # 或仅运行时依赖

@@ -44,8 +44,8 @@ Repository = "https://github.com/ricky1122alonefe/guess_you_like"
 Issues = "https://github.com/ricky1122alonefe/guess_you_like/issues"
 
 [project.scripts]
-guess-you-like = "cli:main"
-gyl = "cli:main"
+guess-you-like = "scripts._entry:main"
+gyl = "scripts._entry:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

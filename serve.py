@@ -109,11 +109,9 @@ def _ensure_similarity_analysis(pred: dict | None, output_root: Path | None = No
     if not ah or not eu:
         return
     try:
-        from predict import build_payload
-        from similar_samples import build_similarity_analysis
+        from analysis.pipeline import ensure_similarity
 
-        payload = build_payload(str(ah), str(eu), history=get_history(), sample_limit=10)
-        pred["similarity_analysis"] = build_similarity_analysis(payload)
+        ensure_similarity(pred, ah_path=ah, eu_path=eu, history=get_history())
     except Exception:
         log.exception("相似样本临时重算失败")
 
@@ -129,9 +127,9 @@ def _ensure_quant_analysis(pred: dict | None, idx: dict | None = None) -> None:
             for k, v in latest_odds.items():
                 cur.setdefault(k, v)
     try:
-        from quant_analytics import attach_quant_analysis
+        from analysis.pipeline import ensure_quant
 
-        attach_quant_analysis(pred, cur=cur or None)
+        ensure_quant(pred, cur=cur or None)
     except Exception:
         log.exception("量化分析附加失败")
 

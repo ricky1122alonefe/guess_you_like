@@ -27,8 +27,9 @@ from odds_cache import (
 )
 from parser import parse_match_pair
 from predict import build_payload
-from jingcai_pick import attach_jingcai_recommendation, final_recommendation_cn
-from eu_implied_metrics import compute_eu_implied
+from jingcai_pick import final_recommendation_cn
+from analysis.pipeline import REUSE_STEPS, enrich_prediction
+from core.context import EnrichmentContext
 from time_utils import format_beijing, now_beijing, now_beijing_str
 from predict_sheet import rec_to_row, save_csv
 from recommend import build_recommendation, recommendation_from_dict, recommendation_to_baseline
@@ -42,7 +43,6 @@ from daily_picks_ai import build_daily_picks_auto
 from match_settlement import run_settlement
 from timeline_merge import load_latest_poll_meta
 from match_timeline import append_ai_record, append_hourly_snapshot
-from similar_samples import build_similarity_analysis
 
 log = logging.getLogger(__name__)
 
@@ -157,30 +157,30 @@ def set_next_scheduled(when: datetime) -> None:
         _state.next_scheduled_at = format_beijing(when)
 
 
-def _attach_odds_snapshot(pred: dict, ah_path: Path, eu_path: Path) -> None:
-    cur = parse_match_pair(str(ah_path), str(eu_path))
-    pred["odds_snapshot"] = {
-        "ah_line": cur.ah_line,
-        "ah_open_line": cur.ah_open_line,
-        "ah_home_water": cur.ah_home_water,
-        "ah_away_water": cur.ah_away_water,
-        "ah_open_home_water": cur.ah_open_home_water,
-        "ah_open_away_water": cur.ah_open_away_water,
-        "eu_home": cur.eu_home,
-        "eu_draw": cur.eu_draw,
-        "eu_away": cur.eu_away,
-        "eu_open_home": cur.eu_open_home,
-        "eu_open_draw": cur.eu_open_draw,
-        "eu_open_away": cur.eu_open_away,
-    }
-    m = compute_eu_implied(cur.eu_home, cur.eu_draw, cur.eu_away)
-    if m:
-        pred["eu_implied"] = m.to_dict()
-        pred["eu_implied_anomaly"] = m.is_anomaly
-
-
-def _attach_similarity_analysis(pred: dict, payload: dict) -> None:
-    pred["similarity_analysis"] = build_similarity_analysis(payload)
+def _enrich_prediction(
+    pred: dict,
+    *,
+    ah_path: Path | None = None,
+    eu_path: Path | None = None,
+    payload: dict | None = None,
+    poll_meta: dict | None = None,
+    cur=None,
+    steps: tuple[str, ...] | None = None,
+) -> dict:
+    cur_dict = cur
+    if cur is not None and not isinstance(cur, dict):
+        cur_dict = vars(cur)
+    return enrich_prediction(
+        EnrichmentContext(
+            pred=pred,
+            ah_path=ah_path,
+            eu_path=eu_path,
+            payload=payload,
+            poll_meta=poll_meta,
+            cur=cur_dict,
+        ),
+        steps=steps,
+    )
 
 
 def _predict_one(
@@ -226,11 +226,14 @@ def _predict_one(
         )
         rec = recommendation_from_dict(result)
         result["predict_row"] = rec_to_row(rec, cur=cur, predict_date=predict_date)
-        _attach_odds_snapshot(result, ah_path, eu_path)
-        _attach_similarity_analysis(result, _payload)
-        attach_jingcai_recommendation(result, (poll_meta or {}).get("jingcai"))
-        from quant_analytics import attach_quant_analysis
-        attach_quant_analysis(result, cur=vars(cur))
+        _enrich_prediction(
+            result,
+            ah_path=ah_path,
+            eu_path=eu_path,
+            payload=_payload,
+            poll_meta=poll_meta,
+            cur=cur,
+        )
         return result
 
     payload = build_payload(str(ah_path), str(eu_path), history=history, sample_limit=10)
@@ -241,11 +244,14 @@ def _predict_one(
     base["predict_row"] = row
     base["analysis_basis"] = base.get("analysis_basis") or []
     base["recommendation_source"] = "rule_engine"
-    _attach_odds_snapshot(base, ah_path, eu_path)
-    _attach_similarity_analysis(base, payload)
-    attach_jingcai_recommendation(base, (poll_meta or {}).get("jingcai"))
-    from quant_analytics import attach_quant_analysis
-    attach_quant_analysis(base, cur=vars(cur))
+    _enrich_prediction(
+        base,
+        ah_path=ah_path,
+        eu_path=eu_path,
+        payload=payload,
+        poll_meta=poll_meta,
+        cur=cur,
+    )
     return base
 
 
@@ -502,9 +508,12 @@ def run_hourly_job(
                         match_name=dl.match_name,
                     )
                     poll_meta = load_latest_poll_meta(fid)
-                    attach_jingcai_recommendation(pred, (poll_meta or {}).get("jingcai"))
-                    from quant_analytics import attach_quant_analysis
-                    attach_quant_analysis(pred, cur=pred.get("odds_snapshot") or {})
+                    _enrich_prediction(
+                        pred,
+                        poll_meta=poll_meta,
+                        cur=pred.get("odds_snapshot") or {},
+                        steps=REUSE_STEPS,
+                    )
                     results.append(pred)
                     summary.predict_ok += 1
                     summary.predict_skipped += 1

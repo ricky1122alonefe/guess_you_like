@@ -49,7 +49,7 @@ gyl = "scripts._entry:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["db*", "scripts*"]
+include = ["analysis*", "core*", "db*", "scripts*"]
 
 [tool.setuptools]
 include-package-data = true

@@ -475,3 +475,25 @@ def test_ai_config_and_profiles():
 
     assert main(["version"]) == 0
 
+
+def test_analysis_pipeline_modules():
+    from analysis.pipeline import DEFAULT_STEPS, REUSE_STEPS, enrich_prediction
+    from analysis.quant.bundle import run_quant_analysis
+    from core.context import EnrichmentContext
+
+    assert "quant" in DEFAULT_STEPS
+    assert REUSE_STEPS == ("jingcai", "quant")
+
+    pred = {"match": "A vs B", "result_1x2": "home"}
+    enrich_prediction(
+        EnrichmentContext(pred=pred, poll_meta={"jingcai": {}}),
+        steps=REUSE_STEPS,
+    )
+    run_quant_analysis(
+        {
+            "match": "巴西 vs 阿根廷",
+            "result_1x2": "home",
+            "odds_snapshot": {"eu_home": 2.1, "eu_draw": 3.2, "eu_away": 3.5},
+        }
+    )
+

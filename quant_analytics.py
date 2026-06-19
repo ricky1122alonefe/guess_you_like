@@ -1,93 +1,22 @@
-"""Attach Poisson/Elo/EV/MC bundle to predictions + quant backtest report."""
+"""Attach Poisson/Elo/EV/MC bundle to predictions + quant backtest report.
+
+Implementation lives under analysis/quant/; this module keeps the public API stable.
+"""
 
 from __future__ import annotations
 
 import json
-from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from elo_ratings import apply_finished_results, load_ratings, match_elo_context
-from eu_implied_metrics import compute_eu_implied
-from group_mc import simulate_for_match
-from jingcai_ev import compute_jingcai_ev
-from score_models import build_score_model
+from analysis.quant.bundle import run_quant_analysis
+from elo_ratings import apply_finished_results, load_ratings
 from share_card import split_teams
-
-
-def _coerce_odds_dict(cur) -> dict:
-    """Accept odds snapshot dict or parser.MatchOdds dataclass."""
-    if not cur:
-        return {}
-    if isinstance(cur, dict):
-        return cur
-    d = getattr(cur, "__dict__", None)
-    return d if isinstance(d, dict) else {}
 
 
 def attach_quant_analysis(pred: dict, *, cur: dict | None = None) -> dict:
     """Mutate pred with quant block (score model, EV, Elo, optional MC)."""
-    cur = _coerce_odds_dict(cur or pred.get("odds_snapshot") or {})
-    eu_imp = pred.get("eu_implied")
-    if not eu_imp:
-        m = compute_eu_implied(cur.get("eu_home"), cur.get("eu_draw"), cur.get("eu_away"))
-        if m:
-            eu_imp = m.to_dict()
-            pred["eu_implied"] = eu_imp
-
-    avg_goals = None
-    sim = pred.get("similarity_analysis") or {}
-    for block in sim.get("open") or []:
-        if block.get("avg_total_goals"):
-            avg_goals = block.get("avg_total_goals")
-            break
-
-    pick = pred.get("result_1x2")
-    sm = build_score_model(
-        eu_home=cur.get("eu_home"),
-        eu_draw=cur.get("eu_draw"),
-        eu_away=cur.get("eu_away"),
-        fair_home_pct=(eu_imp or {}).get("fair_home_pct"),
-        fair_draw_pct=(eu_imp or {}).get("fair_draw_pct"),
-        fair_away_pct=(eu_imp or {}).get("fair_away_pct"),
-        avg_total_goals=avg_goals,
-        ah_line=cur.get("ah_line"),
-        pick_1x2=pick if pick in ("home", "draw", "away") else None,
-    )
-
-    quant: dict[str, Any] = {}
-    if sm:
-        quant["score_model"] = sm
-        pred["model_likely_scores"] = sm.get("likely_scores") or []
-        pred["model_likely_scores_detail"] = sm.get("likely_scores_detail") or []
-        pred["model_stretch_scores"] = [s.get("score") for s in sm.get("stretch_scores") or []]
-
-    hr, ar = split_teams(pred.get("match") or "")
-    if hr and ar:
-        try:
-            from wc_standings_fetch import normalize_team
-
-            hr, ar = normalize_team(hr), normalize_team(ar)
-        except Exception:
-            pass
-        quant["elo"] = match_elo_context(hr, ar, ratings=load_ratings())
-
-    pred["quant"] = quant
-    ev = compute_jingcai_ev(pred)
-    if ev:
-        quant["jingcai_ev"] = ev
-        pred["jingcai_ev"] = ev
-        if ev.get("value_bet"):
-            pred["value_bet"] = True
-
-    try:
-        mc = simulate_for_match(hr, ar, n_sims=2000)
-        if mc:
-            quant["group_mc"] = mc
-    except Exception:
-        pass
-
-    return pred
+    return run_quant_analysis(pred, cur=cur)
 
 
 def refresh_elo_from_settled(output_root: str | Path) -> dict[str, float]:

@@ -2,7 +2,7 @@
 
 世界杯 / 竞彩赛事 **赔率分析 + AI 推荐** 本地服务。抓取 500.com 亚盘/欧赔/必发，结合历史相似样本、欧亚互转、盘口套路与多模型 AI，提供 Web 看板、单场详情、当日推荐与世界杯盘路总结。
 
-> **免责声明**：仅供个人学习与研究，不构成任何投注建议。请遵守当地法律法规与数据来源网站的使用条款。
+> **免责声明**：仅供个人学习与研究，不构成任何投注建议。请遵守当地法律法规与数据来源网站的使用条款。数据出处见 [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md)。
 
 ## 功能概览
 
@@ -12,13 +12,15 @@
 - **世界杯盘路** `/worldcup`：完赛套路归纳、未来 24h 观察、AI 小组战意分析
 - **小组战意** `/worldcup/groups`：12 组实时积分、最佳第三排名、次轮/末轮默契球与拼命球预测（已接入推荐引擎）
 - **亚盘赢盘** `/handicap`：相似样本上下盘赢盘率、推荐回测、盘口区间规律
+- **欧亚分歧** `/divergence`：扫描欧赔与亚盘巨大分歧场次（诱盘/控盘预警）
+- **量化回测** `/quant`：Dixon-Coles、Elo、竞彩 EV、小组 MC
 - **Kelly 计算器** `/kelly`：根据胜率与赔率计算最优仓位（支持半 Kelly / ¼ Kelly）
 
 ## 快速开始
 
 ### 1. 环境
 
-- Python 3.11+（Docker 镜像使用 3.11）
+- Python **3.9+**（推荐 3.11；Docker 镜像使用 3.11）
 - PostgreSQL 16（本地或 Docker）
 - 可选：Node.js 18+（仅 Cursor SDK 桥接需要）
 
@@ -28,11 +30,25 @@
 cd guess_you_like
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e ".[dev]"
+
+# 或仅运行时依赖
+# pip install -e .
 
 # Cursor 桥接（可选）
 npm install
 ```
+
+安装后可使用统一 CLI：
+
+```bash
+guess-you-like --help
+guess-you-like serve --host 127.0.0.1 --port 8765
+guess-you-like poll --interval 300 --days 7
+guess-you-like settle --resettle
+```
+
+（别名：`gyl`）
 
 ### 3. 配置密钥
 
@@ -86,30 +102,38 @@ docker compose up -d
 
 ```
 guess_you_like/
+├── pyproject.toml        # 包元数据 & 依赖（pip install -e .）
+├── cli.py                # 统一 CLI：guess-you-like serve|poll|settle
 ├── serve.py              # HTTP 服务入口
 ├── poll_service.py       # 赔率轮询
 ├── hourly_pipeline.py    # 整点预测 / AI
 ├── web_ui.py             # 页面渲染
 ├── db/                   # PostgreSQL schema & repository
 ├── data/                 # 历史 CSV、世界杯小组配置等
+├── docs/                 # 文档（数据来源说明等）
 ├── scripts/              # 本地启动、结算、ledger 刷新
 └── output/service/       # 运行时输出（git 忽略）
 ```
 
 ## 数据说明
 
+- 详见 [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md)
 - `data/wc2026_groups.json`：2026 世界杯 48 队小组与赛制策略
 - `data/leagues/`、`data/americas/`：历史联赛/美洲样本（football-data 等）
-- `data/WorldCup2026.xlsx`：世界杯/预选赛历史赛果（本地分析用）
+- `data/WorldCup2026.xlsx`：世界杯/预选赛历史赛果（本地分析用，可选）
 
 首次使用若缺少大文件，可运行 `python download_data.py` 补充部分联赛 CSV。
 
 ## 开发
 
 ```bash
-python -m py_compile serve.py web_ui.py
+pip install -e ".[dev]"
+python -m compileall -q .
 pytest -q
+ruff check .
 ```
+
+贡献指南见 [CONTRIBUTING.md](CONTRIBUTING.md)。变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## License
 

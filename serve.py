@@ -33,7 +33,7 @@ from timeline_merge import load_latest_poll_meta, merge_match_indexes
 from time_utils import now_beijing
 from daily_picks import load_daily_picks_from_output, save_daily_picks
 from share_card import build_parlay_share_context, build_share_context, html_share_match, html_share_parlay
-from web_ui import html_ah_analytics, html_daily_picks, html_dashboard, html_eu_ah_divergence, html_group_stage, html_kelly_calculator, html_match_detail, html_quant_analytics, html_worldcup_ledger
+from web_ui import html_ah_analytics, html_ai_settings, html_daily_picks, html_dashboard, html_eu_ah_divergence, html_group_stage, html_kelly_calculator, html_match_detail, html_quant_analytics, html_worldcup_ledger
 
 
 def _error_html(body: str) -> str:
@@ -605,6 +605,11 @@ class Handler(BaseHTTPRequestHandler):
             report = build_divergence_report(root, min_score=min_score_int)
             self._send_html(html_eu_ah_divergence(report))
             return
+        if path == "/settings/ai":
+            from ai_config import editable_config_summary
+
+            self._send_html(html_ai_settings(editable_config_summary(root)))
+            return
         if path == "/kelly":
             qs = parse_qs(urlparse(self.path).query)
             fid = (qs.get("fixture_id", [None])[0] or "").strip()
@@ -758,7 +763,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/ai/config":
             try:
-                from ai_config import public_config_summary, save_config, validate_config_patch
+                from ai_config import editable_config_summary, save_config, validate_config_patch
 
                 length = int(self.headers.get("Content-Length", 0))
                 raw = self.rfile.read(length) if length else b"{}"
@@ -771,12 +776,31 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({
                     "ok": True,
                     "path": str(path_saved),
-                    "config": public_config_summary(self.output_root),
+                    "config": editable_config_summary(self.output_root),
                 })
             except json.JSONDecodeError:
                 self._send_json({"ok": False, "error": "请求体须为 JSON"}, 400)
             except Exception as exc:
                 log.exception("保存 AI 配置失败")
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/ai/test":
+            try:
+                from ai_config import test_provider_connection
+
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b"{}"
+                payload = json.loads(raw.decode("utf-8"))
+                provider_id = str(payload.get("provider_id") or qs.get("provider_id", [""])[0]).strip()
+                if not provider_id:
+                    self._send_json({"ok": False, "error": "provider_id required"}, 400)
+                    return
+                result = test_provider_connection(provider_id, output_root=self.output_root)
+                self._send_json(result, 200 if result.get("ok") else 502)
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "请求体须为 JSON"}, 400)
+            except Exception as exc:
+                log.exception("AI 连通测试失败")
                 self._send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/kelly/calc":

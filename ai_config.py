@@ -199,11 +199,31 @@ def public_config_summary(output_root: str | Path | None = None) -> dict[str, An
     }
 
 
+def editable_config_summary(output_root: str | Path | None = None) -> dict[str, Any]:
+    """Full provider rows for settings UI (no secrets)."""
+    cfg = load_raw_config(output_root)
+    providers: list[dict[str, Any]] = []
+    for entry in cfg.get("providers") or []:
+        row = copy.deepcopy(entry)
+        row["configured"] = is_provider_configured(entry)
+        providers.append(row)
+    return {
+        "version": cfg.get("version", 1),
+        "primary_id": cfg.get("primary_id"),
+        "predict_mode": cfg.get("predict_mode", "multi"),
+        "multi": cfg.get("multi") or {},
+        "config_path": str(resolve_config_path(output_root) or ""),
+        "providers": providers,
+    }
+
+
 def validate_config_patch(patch: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     if "predict_mode" in patch:
         if patch["predict_mode"] not in ("single", "multi", "primary_only"):
             errors.append("predict_mode 须为 single / multi / primary_only")
+    if "primary_id" in patch and not str(patch.get("primary_id") or "").strip():
+        errors.append("primary_id 不能为空")
     if "providers" in patch:
         if not isinstance(patch["providers"], list):
             errors.append("providers 必须是数组")
@@ -212,3 +232,43 @@ def validate_config_patch(patch: dict[str, Any]) -> list[str]:
                 if not p.get("id"):
                     errors.append(f"providers[{i}] 缺少 id")
     return errors
+
+
+def test_provider_connection(
+    provider_id: str,
+    output_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """Minimal live ping — uses real API key from env."""
+    from ai_profiles import get_profile_by_id
+
+    pid = (provider_id or "").strip().lower()
+    prof = get_profile_by_id(pid, output_root=output_root)
+    if not prof:
+        return {"ok": False, "provider_id": pid, "error": "未启用或未配置 API Key"}
+    api_key = prof.resolve_api_key()
+    if not api_key:
+        return {"ok": False, "provider_id": pid, "error": f"缺少 {prof.api_key_env}"}
+
+    from deepseek_client import DeepSeekError, chat
+
+    try:
+        reply = chat(
+            [{"role": "user", "content": "只回复一个单词：OK"}],
+            api_key=api_key,
+            model=prof.model,
+            base_url=prof.base_url,
+            temperature=0,
+            max_tokens=16,
+            timeout=45,
+        )
+        return {
+            "ok": True,
+            "provider_id": pid,
+            "label": prof.label,
+            "model": prof.model,
+            "sample": (reply or "").strip()[:120],
+        }
+    except DeepSeekError as exc:
+        return {"ok": False, "provider_id": pid, "error": str(exc)}
+    except Exception as exc:
+        return {"ok": False, "provider_id": pid, "error": str(exc)}

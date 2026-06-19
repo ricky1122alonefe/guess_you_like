@@ -782,6 +782,7 @@ def html_dashboard(
   · <a href="/handicap">📊 亚盘赢盘</a>
   · <a href="/divergence">⚡ 欧亚分歧</a>
   · <a href="/quant">📈 量化回测</a>
+  · <a href="/settings/ai">🤖 AI 设置</a>
   · <a href="/kelly">🧮 Kelly</a>
   · 状态 <strong>{run_status}</strong>
 </nav>
@@ -3010,6 +3011,206 @@ def html_eu_ah_divergence(report: dict) -> str:
 </div>
 
 <p class="meta" style="margin-top:20px">公益体彩 量力而行 · 仅供参考 不构成投注建议</p>
+</body></html>"""
+
+
+def html_ai_settings(config: dict) -> str:
+    import json as _json
+
+    cfg_json = _json.dumps(config, ensure_ascii=False)
+    cfg_path = config.get("config_path") or "（将写入 output/service/ai_config.json）"
+    settings_css = _shared_css("""
+.hero-card { background: linear-gradient(135deg, #eef2ff 0%, #fff 55%); border: 1px solid #c7d2fe; }
+.ai-global { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; }
+.ai-global label { display:block; font-size:13px; color:#475569; margin-bottom:4px; }
+.ai-global select { width:100%; padding:8px 10px; border:1px solid #cbd5e1; border-radius:8px; }
+.provider-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap:12px; }
+.provider-card { border:1px solid #e2e8f0; border-radius:12px; padding:14px 16px; background:#fff; }
+.provider-card.off { opacity:.72; background:#f8fafc; }
+.provider-head { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:10px; }
+.provider-head h3 { margin:0; font-size:1rem; }
+.status-pill { font-size:11px; font-weight:700; padding:3px 10px; border-radius:999px; }
+.status-ok { background:#dcfce7; color:#166534; }
+.status-bad { background:#fee2e2; color:#991b1b; }
+.field { margin:8px 0; }
+.field label { display:block; font-size:12px; color:#64748b; margin-bottom:3px; }
+.field input[type=text] { width:100%; padding:7px 9px; border:1px solid #cbd5e1; border-radius:8px; font-size:13px; }
+.roles { display:flex; flex-wrap:wrap; gap:8px 12px; margin-top:6px; }
+.roles label { font-size:12px; color:#334155; }
+.toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:16px 0; }
+#save-status { font-size:13px; color:#64748b; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; }
+""")
+
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>AI 模型设置</title>
+<style>{settings_css}</style>
+</head><body>
+<p class="back page-nav"><a href="/">← 返回首页</a> · <a href="/daily">当日推荐</a> · <a href="/divergence">欧亚分歧</a></p>
+
+<div class="card hero-card">
+  <h1>🤖 AI 模型设置</h1>
+  <p class="meta">在此调整启用状态、模型 ID、用途角色；<strong>API Key 仍在 .env / local_secrets.py</strong>，不会写入配置文件。</p>
+  <p class="meta">当前配置来源：<code class="mono">{_e(cfg_path)}</code></p>
+</div>
+
+<div class="card">
+  <h2>全局</h2>
+  <div class="ai-global">
+    <div>
+      <label for="primary-id">主模型 primary_id</label>
+      <select id="primary-id"></select>
+    </div>
+    <div>
+      <label for="predict-mode">预测模式 predict_mode</label>
+      <select id="predict-mode">
+        <option value="multi">multi — 全部已启用模型</option>
+        <option value="single">single — 仅主模型</option>
+        <option value="primary_only">primary_only — 同 single</option>
+      </select>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Provider 列表</h2>
+  <div id="provider-grid" class="provider-grid"></div>
+</div>
+
+<div class="toolbar">
+  <button type="button" class="btn" id="save-btn">保存配置</button>
+  <button type="button" class="btn" style="background:#64748b" onclick="location.reload()">重新加载</button>
+  <span id="save-status"></span>
+</div>
+
+<div class="card">
+  <h3>说明</h3>
+  <ul class="meta">
+    <li><code>predict</code>：单场 AI 推荐 / 整点分析</li>
+    <li><code>chat</code>：首页/单场人工对话</li>
+    <li><code>parlay</code>：列表 AI 2串1</li>
+    <li>Kimi 需在配置中启用且设置 <code>AI_ENABLE_KIMI=1</code></li>
+    <li>保存后写入 <code>output/service/ai_config.json</code>，立即对新请求生效（无需重启）</li>
+  </ul>
+</div>
+
+<script>
+let AI_CFG = {cfg_json};
+
+const ALL_ROLES = ['predict', 'chat', 'parlay', 'daily', 'watch'];
+
+function esc(s) {{
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+}}
+
+function renderProviders() {{
+  const grid = document.getElementById('provider-grid');
+  const primary = document.getElementById('primary-id');
+  grid.innerHTML = '';
+  primary.innerHTML = '';
+  (AI_CFG.providers || []).sort((a,b) => (a.order||999)-(b.order||999)).forEach(p => {{
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = p.label || p.id;
+    primary.appendChild(opt);
+    const roles = p.roles || [];
+    const roleChecks = ALL_ROLES.map(r => {{
+      const checked = roles.includes(r) ? 'checked' : '';
+      return `<label><input type="checkbox" data-role="${{r}}" data-pid="${{esc(p.id)}}" ${{checked}}/> ${{r}}</label>`;
+    }}).join('');
+    const card = document.createElement('div');
+    card.className = 'provider-card' + (p.enabled ? '' : ' off');
+    card.innerHTML = `
+      <div class="provider-head">
+        <h3>${{esc(p.label || p.id)}} <span class="meta">(${{esc(p.id)}})</span></h3>
+        <span class="status-pill ${{p.configured ? 'status-ok' : 'status-bad'}}">${{p.configured ? '密钥已配置' : '未配置密钥'}}</span>
+      </div>
+      <label><input type="checkbox" class="en-check" data-pid="${{esc(p.id)}}" ${{p.enabled ? 'checked' : ''}}/> 启用</label>
+      <div class="field"><label>model</label><input type="text" class="model-inp" data-pid="${{esc(p.id)}}" value="${{esc(p.model||'')}}"/></div>
+      <div class="field"><label>base_url</label><input type="text" class="url-inp" data-pid="${{esc(p.id)}}" value="${{esc(p.base_url||'')}}"/></div>
+      <div class="field"><label>api_key_env</label><input type="text" class="env-inp" data-pid="${{esc(p.id)}}" value="${{esc(p.api_key_env||'')}}"/></div>
+      <div class="roles">${{roleChecks}}</div>
+      <button type="button" class="btn btn-sm test-btn" data-pid="${{esc(p.id)}}" style="margin-top:10px">测试连通</button>
+      <span class="meta test-out" data-pid="${{esc(p.id)}}"></span>`;
+    grid.appendChild(card);
+  }});
+  primary.value = AI_CFG.primary_id || (AI_CFG.providers[0] && AI_CFG.providers[0].id) || '';
+  document.getElementById('predict-mode').value = AI_CFG.predict_mode || 'multi';
+}}
+
+function collectConfig() {{
+  const providers = (AI_CFG.providers || []).map(p => {{
+    const pid = p.id;
+    const roles = [];
+    document.querySelectorAll(`input[data-role][data-pid="${{pid}}"]`).forEach(el => {{
+      if (el.checked) roles.push(el.getAttribute('data-role'));
+    }});
+    const enabledEl = document.querySelector(`.en-check[data-pid="${{pid}}"]`);
+    const modelEl = document.querySelector(`.model-inp[data-pid="${{pid}}"]`);
+    const urlEl = document.querySelector(`.url-inp[data-pid="${{pid}}"]`);
+    const envEl = document.querySelector(`.env-inp[data-pid="${{pid}}"]`);
+    return {{
+      ...p,
+      enabled: enabledEl ? enabledEl.checked : p.enabled,
+      model: modelEl ? modelEl.value.trim() : p.model,
+      base_url: urlEl ? urlEl.value.trim() : p.base_url,
+      api_key_env: envEl ? envEl.value.trim() : p.api_key_env,
+      roles,
+    }};
+  }});
+  return {{
+    version: AI_CFG.version || 1,
+    primary_id: document.getElementById('primary-id').value,
+    predict_mode: document.getElementById('predict-mode').value,
+    multi: AI_CFG.multi || {{ on_disagreement: 'skip' }},
+    providers,
+  }};
+}}
+
+document.getElementById('save-btn').addEventListener('click', async () => {{
+  const status = document.getElementById('save-status');
+  status.textContent = '保存中…';
+  try {{
+    const body = collectConfig();
+    const r = await fetch('/api/ai/config', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify(body),
+    }});
+    const d = await r.json();
+    if (!d.ok) throw new Error((d.errors && d.errors.join('; ')) || d.error || '保存失败');
+    AI_CFG = d.config || body;
+    renderProviders();
+    status.textContent = '已保存 → ' + (d.path || '');
+  }} catch (e) {{
+    status.textContent = '失败: ' + e.message;
+  }}
+}});
+
+document.getElementById('provider-grid').addEventListener('click', async ev => {{
+  const btn = ev.target.closest('.test-btn');
+  if (!btn) return;
+  const pid = btn.getAttribute('data-pid');
+  const out = document.querySelector(`.test-out[data-pid="${{pid}}"]`);
+  out.textContent = ' 测试中…';
+  try {{
+    const r = await fetch('/api/ai/test', {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ provider_id: pid }}),
+    }});
+    const d = await r.json();
+    out.textContent = d.ok ? (' ✓ ' + (d.sample || 'OK')) : (' ✗ ' + (d.error || '失败'));
+  }} catch (e) {{
+    out.textContent = ' ✗ ' + e.message;
+  }}
+}});
+
+renderProviders();
+</script>
 </body></html>"""
 
 

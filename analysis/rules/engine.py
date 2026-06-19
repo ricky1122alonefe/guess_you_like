@@ -425,7 +425,7 @@ def build_recommendation(payload: dict) -> Recommendation:
     gs_analysis = None
     if pick is not None and match_name:
         try:
-            from group_stage_model import analyze_match_from_name, adjust_rates_for_group_stage
+            from analysis.tournament.group_stage import analyze_match_from_name, adjust_rates_for_group_stage
 
             gs_analysis = analyze_match_from_name(match_name)
             if gs_analysis and not gs_analysis.get("is_finished"):
@@ -450,7 +450,7 @@ def build_recommendation(payload: dict) -> Recommendation:
                 result, result_cn = new_key, RESULT_CN[new_key]
                 pick = (result, result_cn, hist_rates, combined, hist_best)
 
-            from knockout_path import build_match_knockout_context
+            from analysis.tournament.knockout import build_match_knockout_context
 
             kctx = build_match_knockout_context(match_name)
             if kctx and kctx.get("same_group") and not (kctx.get("motivation") or {}).get("is_finished"):

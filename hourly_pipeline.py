@@ -200,7 +200,7 @@ def _predict_one(
     poll_meta = load_latest_poll_meta(fixture_id) if fixture_id else {}
 
     if use_ai:
-        from predict_ai import run_one_match
+        from analysis.ai.predict import run_one_match
         from recommend import recommendation_from_dict
 
         prof = ai_profile

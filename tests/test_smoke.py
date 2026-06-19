@@ -534,3 +534,33 @@ def test_analysis_pipeline_modules():
         }
     )
 
+
+def test_analysis_p1_modules():
+    from analysis.ai import run_one_match
+    from analysis.ai.deep import has_prior_ai_analysis
+    from analysis.signals.eu_ah_divergence import analyze_eu_ah_divergence
+    from analysis.tournament import build_match_knockout_context, rank_best_third_places
+    from analysis.tournament.group_stage import MATCH_TYPES
+
+    assert callable(run_one_match)
+    assert has_prior_ai_analysis({"recommendation_source": "ai_expert"}) is True
+    assert "must_win" in MATCH_TYPES
+    assert callable(rank_best_third_places)
+    div = analyze_eu_ah_divergence(
+        {
+            "eu_home": 1.55,
+            "eu_draw": 4.0,
+            "eu_away": 5.5,
+            "ah_line": -0.5,
+            "eu_open_home": 1.6,
+            "eu_open_draw": 3.9,
+            "eu_open_away": 5.0,
+            "ah_open_line": -1.0,
+        },
+        fixture_id="1",
+        match="测试",
+    )
+    assert div is not None
+    ctx = build_match_knockout_context("墨西哥 vs 南非")
+    assert ctx is None or isinstance(ctx, dict)
+

@@ -10,7 +10,7 @@ from typing import Any
 import config as cfg
 
 from elo_ratings import expected_score, load_ratings
-from group_stage_model import rank_best_third_places
+from analysis.tournament.group_stage import rank_best_third_places
 
 SIMS = getattr(cfg, "MC_SIMULATIONS", 3000)
 GROUPS_PATH = Path(__file__).resolve().parent / "data" / "wc2026_groups.json"

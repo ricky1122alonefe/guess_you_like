@@ -169,14 +169,20 @@ def compute_jingcai_pick(pred: dict, jc: dict | None) -> dict[str, Any]:
                 _collect_scores(pred), int(handicap),
             )
     else:
-        pick_key = pred.get("result_1x2") or "skip"
-        cn = pred.get("result_1x2_cn") or ""
+        pick_key = pred.get("reference_result_1x2") or pred.get("result_1x2") or "skip"
+        cn = pred.get("reference_result_1x2_cn") or pred.get("result_1x2_cn") or ""
         if pick_key == "skip" and cn in KEY_FROM_SP_CN:
             pick_key = KEY_FROM_SP_CN[cn]
+        div = pred.get("jingcai_divergence") or {}
         if pick_key == "skip":
-            reason = "赛果分析为观望"
+            reason = "参考研判为观望"
+        elif div.get("divergence"):
+            reason = (
+                f"竞彩可购{SP_CN[pick_key]}（参考研判{div.get('reference_cn') or SP_CN[pick_key]}，"
+                f"SP隐含偏{div.get('jingcai_implied_cn') or '—'}）"
+            )
         else:
-            reason = "竞彩胜平负与赛果分析一致"
+            reason = f"竞彩胜平负可购{SP_CN[pick_key]}，与欧亚参考研判一致"
 
     if mode == "rqsp" and ai_rq_cn in KEY_FROM_RQ_CN and pick_key == "skip":
         pick_key = KEY_FROM_RQ_CN[ai_rq_cn]
@@ -241,10 +247,18 @@ def attach_jingcai_recommendation(pred: dict, jingcai: dict | None) -> dict:
         pred["jingcai_snapshot"] = jingcai
 
     row = dict(pred.get("predict_row") or {})
-    analytical = _analytical_result_cn(pred)
+    analytical = pred.get("reference_result_1x2_cn") or _analytical_result_cn(pred)
     if analytical not in ("—", NO_JINGCAI, ""):
         row["赛果预测"] = analytical
         pred["match_result_1x2_cn"] = analytical
+
+    div = pred.get("jingcai_divergence")
+    if div:
+        pred["jingcai_divergence"] = div
+        tags = list(pred.get("alert_tags") or [])
+        if "竞彩·参考分歧" not in tags:
+            tags.append("竞彩·参考分歧")
+        pred["alert_tags"] = tags
 
     mode = info.get("jingcai_market") or "none"
     if mode == "none":

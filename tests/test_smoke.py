@@ -155,8 +155,8 @@ def test_group_stage_does_not_flip_clear_open_home():
     assert new_key == "home"
 
 
-def test_odds_first_blend():
-    from analysis.signals.odds_probs import blend_odds_1x2
+def test_odds_reference_blend():
+    from analysis.signals.odds_probs import blend_reference_1x2, check_jingcai_reference_divergence
 
     cur = {
         "eu_home": 1.85,
@@ -173,12 +173,34 @@ def test_odds_first_blend():
         "ah_away_water": 0.98,
     }
     hist = {"home": 0.55, "draw": 0.25, "away": 0.20}
-    jc = {"has_sp": True, "sp_home": 1.95, "sp_draw": 3.10, "sp_away": 3.60}
-    blended, summary, shares = blend_odds_1x2(cur, hist, jc)
+    blended, summary, shares = blend_reference_1x2(cur, hist)
     assert blended["home"] > blended["away"]
-    assert "临盘欧" in summary
-    assert "竞彩" in summary
-    assert shares.get("live_eu", 0) > 0
+    assert "参考融合" in summary
+    assert "竞彩" not in summary
+    assert "hist" in shares
+
+    ref = {"home": 0.52, "draw": 0.24, "away": 0.24}
+    jc = {"has_sp": True, "sp_home": 2.80, "sp_draw": 2.05, "sp_away": 3.50}
+    div = check_jingcai_reference_divergence("home", ref, jc)
+    assert div is not None
+    assert div["jingcai_implied_key"] == "draw"
+
+
+def test_jingcai_attach_uses_reference():
+    from jingcai_pick import attach_jingcai_recommendation
+
+    pred = {
+        "result_1x2": "home",
+        "result_1x2_cn": "主胜",
+        "reference_result_1x2": "home",
+        "reference_result_1x2_cn": "主胜",
+    }
+    jc = {"has_sp": True, "sp_home": 1.95, "sp_draw": 3.10, "sp_away": 3.60}
+    attach_jingcai_recommendation(pred, jc)
+    row = pred["predict_row"]
+    assert row["赛果预测"] == "主胜"
+    assert row["竞彩推荐"] == "主胜"
+    assert row["竞彩SP"] == 1.95
 
 
 def test_qualification_divergence_alert():

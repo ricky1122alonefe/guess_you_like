@@ -484,20 +484,32 @@ def build_recommendation(payload: dict) -> Recommendation:
 
     open_cn, open_prob_txt = _open_prob_summary(open_stats, open_eu)
     jingcai = payload.get("jingcai")
-    odds_blend_summary = ""
+    reference_blend_summary = odds_blend_summary = ""
     odds_base = None
     if cfg.ODDS_FIRST_ENABLED:
-        from analysis.signals.odds_probs import blend_odds_1x2
+        from analysis.signals.odds_probs import blend_reference_1x2
 
         hist_for_blend = None
         got = _get_hist_rates(open_stats, open_eu)
         if got:
             hist_for_blend, _ = got
-        odds_base, odds_blend_summary, _ = blend_odds_1x2(cur, hist_for_blend, jingcai)
+        odds_base, reference_blend_summary, _ = blend_reference_1x2(cur, hist_for_blend)
+        odds_blend_summary = reference_blend_summary
 
     pick = _pick_1x2_combined(open_stats, open_eu, control, trap, odds_base=odds_base)
     if pick is None:
         pick = _pick_1x2_combined(stats, eu, control, trap, odds_base=odds_base)
+
+    reference_key = reference_cn = ""
+    jingcai_div = None
+    if pick is not None:
+        reference_key, reference_cn, hist_rates_ref, combined_ref, hist_best_ref = pick
+        if jingcai:
+            from analysis.signals.odds_probs import check_jingcai_reference_divergence
+
+            jingcai_div = check_jingcai_reference_divergence(
+                reference_key, combined_ref, jingcai,
+            )
 
     gs_notes: list[str] = []
     gs_analysis = None
@@ -556,6 +568,9 @@ def build_recommendation(payload: dict) -> Recommendation:
             if qual_alert:
                 alert_tags.extend(qual_alert.get("alert_tags") or [])
                 gs_notes.insert(0, qual_alert["advice"])
+            if jingcai_div:
+                alert_tags.append("竞彩·参考分歧")
+                gs_notes.insert(0, jingcai_div["note"])
         except Exception:
             pass
 
@@ -594,6 +609,8 @@ def build_recommendation(payload: dict) -> Recommendation:
         )
 
     result, result_cn, hist_rates, combined_rates, hist_best = pick
+    if reference_key:
+        result, result_cn = reference_key, reference_cn
     count = max(open_ah_count, open_eu_count)
 
     ah_pick, ah_reason = _pick_ah(
@@ -616,6 +633,11 @@ def build_recommendation(payload: dict) -> Recommendation:
         count, combined_rates, hist_best=hist_best, final_pick=result, control=control,
         trap=trap, ah_conflict=ah_downgrade,
     )
+    if jingcai_div and conf == "high":
+        conf = "medium"
+        conf_reason = f"{conf_reason}；竞彩SP与参考研判分歧，置信降档" if conf_reason else "竞彩SP与参考研判分歧，置信降档"
+    elif jingcai_div and conf == "medium":
+        conf_reason = f"{conf_reason}；竞彩SP结构需对照" if conf_reason else "竞彩SP结构需对照"
 
     ah_line = cur.get("ah_line")
     if ah_pick == "home":
@@ -626,8 +648,8 @@ def build_recommendation(payload: dict) -> Recommendation:
         ah_cn = AH_CN["skip"]
 
     pattern_ref = (
-        odds_blend_summary
-        if cfg.ODDS_FIRST_ENABLED and odds_blend_summary
+        reference_blend_summary
+        if cfg.ODDS_FIRST_ENABLED and reference_blend_summary
         else f"{int(control.pattern_weight * 100)}%（{LEVEL_CN[control.level]}控盘）"
     )
     mp = trap.market_patterns
@@ -638,14 +660,23 @@ def build_recommendation(payload: dict) -> Recommendation:
     if gs_notes:
         all_notes.extend(gs_notes)
 
+    jc_sp_txt = ""
+    if jingcai_div and jingcai_div.get("jingcai_sp_summary"):
+        jc_sp_txt = jingcai_div["jingcai_sp_summary"]
+    elif jingcai:
+        from analysis.signals.odds_probs import jingcai_sp_summary
+        jc_sp_txt = jingcai_sp_summary(jingcai)
+
     summary = (
         f"【赛事概率】{open_prob_txt}。"
         f"【资金解读】{funds_txt}。"
-        f"【综合推荐】{result_cn}，比分 {'、'.join(scores_detail[:3]) if scores_detail else '—'}。"
-        f"{'【权重】' if cfg.ODDS_FIRST_ENABLED and odds_blend_summary else '规律权重 '}{pattern_ref}。"
+        f"【参考研判】{reference_cn or result_cn}（{pattern_ref}）。"
+        f"【竞彩可购】{result_cn}"
+        f"{('，' + jc_sp_txt) if jc_sp_txt else ''}。"
+        f"比分 {'、'.join(scores_detail[:3]) if scores_detail else '—'}。"
     )
-    if hist_best != result:
-        summary += f"（初盘单项最高 {RESULT_CN[hist_best]}，临盘风控调整后为 {result_cn}）"
+    if hist_best != (reference_key or result):
+        summary += f"（初盘单项最高 {RESULT_CN[hist_best]}，临盘风控调整后参考 {reference_cn or result_cn}）"
     if auto_relaxed:
         summary += "（已自动放宽匹配条件）"
     if gs_analysis:
@@ -682,7 +713,11 @@ def build_recommendation(payload: dict) -> Recommendation:
         open_eu_sample_count=open_eu_count,
         market_pattern_summary=mp_summary,
         market_pattern_names=mp_names or None,
-        odds_blend_summary=odds_blend_summary,
+        odds_blend_summary=reference_blend_summary,
+        reference_result_1x2=reference_key or result,
+        reference_result_1x2_cn=reference_cn or result_cn,
+        reference_blend_summary=reference_blend_summary,
+        jingcai_divergence=jingcai_div,
         alert_tags=alert_tags or None,
         qualification_divergence=qual_alert,
         eu_ah_divergence_score=(qual_alert or {}).get("divergence_score"),

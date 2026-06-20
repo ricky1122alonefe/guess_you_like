@@ -46,6 +46,10 @@ class Recommendation:
     market_pattern_summary: str = ""
     market_pattern_names: list[str] | None = None
     odds_blend_summary: str = ""
+    reference_result_1x2: str = ""
+    reference_result_1x2_cn: str = ""
+    reference_blend_summary: str = ""
+    jingcai_divergence: dict | None = None
     alert_tags: list[str] | None = None
     qualification_divergence: dict | None = None
     eu_ah_divergence_score: int | None = None

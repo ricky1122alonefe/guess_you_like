@@ -246,9 +246,14 @@ def _predict_one(
     if jc:
         payload["jingcai"] = jc
     rec = build_recommendation(payload)
-    row = rec_to_row(rec, cur=cur, predict_date=predict_date)
     base = recommendation_to_baseline(rec)
     base["match"] = rec.match
+    if jc:
+        from jingcai_pick import attach_jingcai_recommendation
+        attach_jingcai_recommendation(base, jc)
+    row = rec_to_row(rec, cur=cur, predict_date=predict_date)
+    if base.get("predict_row"):
+        row.update({k: v for k, v in base["predict_row"].items() if v not in (None, "")})
     base["predict_row"] = row
     base["analysis_basis"] = base.get("analysis_basis") or []
     base["recommendation_source"] = "rule_engine"

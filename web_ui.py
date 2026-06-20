@@ -429,6 +429,7 @@ a {{ color: #2563eb; text-decoration: none; word-break: break-word; }}
         border-radius: 4px; font-size: 12px; margin: 2px 4px 2px 0; max-width: 100%; }}
 .tag-live {{ background: #fef3c7; color: #b45309; }}
 .tag-qual-div {{ background: #fff7ed; color: #c2410c; border: 1px solid #fdba74; font-weight: 700; }}
+.meta.warn {{ color: #b45309; font-weight: 600; }}
 .qual-div-banner {{ background: linear-gradient(135deg,#fff7ed,#ffedd5); border: 1px solid #fdba74;
   border-radius: 12px; padding: 14px 16px; margin: 12px 0 16px; }}
 .qual-div-banner p {{ margin: 8px 0 0; font-size: 14px; line-height: 1.55; }}
@@ -1252,13 +1253,19 @@ def _pred_card(pred: dict, *, title: str = "最新推荐") -> str:
         meta = f"{reasoning}\n{meta}" if meta else reasoning
     scores = row.get("推荐比分") or "、".join(pred.get("likely_scores_detail") or pred.get("likely_scores") or [])
     pick = final_recommendation_cn(pred)
+    ref = pred.get("reference_result_1x2_cn") or row.get("赛果预测") or pred.get("match_result_1x2_cn") or ""
     jc_play = row.get("竞彩玩法") or ""
     jc_sp = row.get("竞彩SP")
     sp_txt = f" · SP {jc_sp}" if jc_sp else ""
-    match_pred = row.get("赛果预测") or pred.get("match_result_1x2_cn") or ""
-    match_line = ""
-    if match_pred and match_pred not in (pick, "—", ""):
-        match_line = f"<p class='meta'>赛果参考：{_e(match_pred)}</p>"
+    ref_line = ""
+    if ref and ref not in (pick, "—", ""):
+        ref_line = f"<p class='meta'><strong>参考研判：</strong>{_e(ref)} <span class='meta'>(欧亚盘口)</span></p>"
+    buy_line = f"<p class='meta'><strong>竞彩可购：</strong>{_e(pick)}{sp_txt}"
+    if jc_play and jc_play != "—":
+        buy_line += f" · {_e(jc_play)}"
+    buy_line += "</p>"
+    div = pred.get("jingcai_divergence") or {}
+    div_line = f"<p class='meta warn'>{_e(div.get('note') or '')}</p>" if div.get("divergence") else ""
     meta_block = _fold("分析逻辑", f"<p class='meta'>{_e(meta)}</p>", muted=True) if meta else ""
     market_summary = pred.get("market_pattern_summary") or ""
     market_names = pred.get("market_pattern_names") or []
@@ -1277,10 +1284,12 @@ def _pred_card(pred: dict, *, title: str = "最新推荐") -> str:
   <h3>{_e(title)} <span class="tag">{_e(src_label)}</span>{alert_html}</h3>
   <p><strong class="pick">{_e(pick)}</strong>{sp_txt}
      {f"<span class='tag'>{_e(jc_play)}</span>" if jc_play and jc_play != "—" else ""}</p>
+  {ref_line}
+  {buy_line}
+  {div_line}
   <p>比分 {_e(scores)}
      · 亚盘 {_e(row.get('亚盘') or pred.get('asian_handicap_cn'))}
      · 置信 {_e(row.get('置信度') or pred.get('confidence_cn'))}</p>
-  {match_line}
   {odds_line}
   {market_block}
   {meta_block}

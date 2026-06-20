@@ -21,7 +21,13 @@ from analysis.signals.patterns import (
 )
 from analysis.signals.traps import TrapAnalysis, analyze_traps, apply_penalties
 
-from analysis.signals.odds_probs import blend_odds_1x2, eu_fair_rates, jingcai_sp_rates
+from analysis.signals.odds_probs import (
+    blend_odds_1x2,
+    blend_reference_1x2,
+    check_jingcai_reference_divergence,
+    eu_fair_rates,
+    jingcai_sp_rates,
+)
 from analysis.signals.qualification_alert import build_qualification_divergence_alert
 
 __all__ = [
@@ -43,6 +49,8 @@ __all__ = [
     "scan_eu_ah_divergence",
     "build_divergence_report",
     "blend_odds_1x2",
+    "blend_reference_1x2",
+    "check_jingcai_reference_divergence",
     "eu_fair_rates",
     "jingcai_sp_rates",
     "build_qualification_divergence_alert",

@@ -28,6 +28,7 @@ def rec_to_row(rec, *, cur=None, predict_date: str = "") -> dict:
     row = {
         "预测日期": predict_date,
         "比赛": rec.match,
+        "赛果预测": rec.reference_result_1x2_cn or rec.result_1x2_cn,
         "胜平负": rec.result_1x2_cn,
         "推荐比分": scores,
         "亚盘": ah,
@@ -66,7 +67,7 @@ def rec_to_row(rec, *, cur=None, predict_date: str = "") -> dict:
 
 # 竞彩字段由 jingcai_pick.attach 后追加；各场可能不全，导出 CSV 须合并列
 _CSV_COLUMN_ORDER = [
-    "预测日期", "比赛", "胜平负", "推荐比分", "亚盘", "大小球", "置信度", "置信原因",
+    "预测日期", "比赛", "赛果预测", "胜平负", "推荐比分", "亚盘", "大小球", "置信度", "置信原因",
     "诱盘解读", "初盘倾向", "初盘概率", "规律参考", "控盘", "风险",
     "初盘样本", "临盘样本", "实际赛果", "实际比分", "1X2命中", "比分命中", "备注",
     "临盘盘口", "临盘欧赔", "初盘盘口",

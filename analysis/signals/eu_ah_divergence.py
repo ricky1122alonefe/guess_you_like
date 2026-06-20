@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import config as cfg
-from market_patterns import (
+from analysis.signals.patterns import (
     MarketPatternAnalysis,
     _line_desc,
     analyze_market_patterns,

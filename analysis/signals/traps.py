@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import config as cfg
-from market_patterns import analyze_market_patterns, pattern_penalties
+from analysis.signals.patterns import analyze_market_patterns, pattern_penalties
 
 
 @dataclass

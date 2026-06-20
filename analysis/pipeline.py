@@ -8,10 +8,12 @@ from analysis.enrich.jingcai import JingcaiEnricher
 from analysis.enrich.odds_snapshot import OddsSnapshotEnricher
 from analysis.enrich.similarity import SimilarityEnricher
 from analysis.quant.bundle import run_quant_analysis
+from analysis.registry import enrichment_steps
 from core.context import EnrichmentContext
 
-DEFAULT_STEPS: tuple[str, ...] = ("odds_snapshot", "similarity", "jingcai", "quant")
-REUSE_STEPS: tuple[str, ...] = ("jingcai", "quant")
+DEFAULT_STEPS: tuple[str, ...] = enrichment_steps("default")
+REUSE_STEPS: tuple[str, ...] = enrichment_steps("reuse")
+REUSE_STEPS: tuple[str, ...] = enrichment_steps("reuse")
 
 _ENRICHERS = {
     "odds_snapshot": OddsSnapshotEnricher(),
@@ -23,11 +25,14 @@ _ENRICHERS = {
 def enrich_prediction(
     ctx: EnrichmentContext,
     steps: Sequence[str] | None = None,
+    *,
+    output_root=None,
 ) -> dict:
     """Run selected enrichment steps; returns the same pred dict (mutated)."""
-    for step_id in steps or DEFAULT_STEPS:
+    resolved = tuple(steps) if steps is not None else enrichment_steps("default", output_root)
+    for step_id in resolved:
         if step_id == "quant":
-            run_quant_analysis(ctx.pred, cur=ctx.cur)
+            run_quant_analysis(ctx.pred, cur=ctx.cur, output_root=output_root)
             continue
         enricher = _ENRICHERS.get(step_id)
         if enricher:
@@ -41,6 +46,7 @@ def ensure_similarity(
     ah_path,
     eu_path,
     history,
+    output_root=None,
 ) -> None:
     if not pred or pred.get("similarity_analysis"):
         return
@@ -52,10 +58,11 @@ def ensure_similarity(
     enrich_prediction(
         EnrichmentContext(pred=pred, payload=payload),
         steps=("similarity",),
+        output_root=output_root,
     )
 
 
-def ensure_quant(pred: dict, *, cur: dict | None = None) -> None:
+def ensure_quant(pred: dict, *, cur: dict | None = None, output_root=None) -> None:
     if not pred or pred.get("quant"):
         return
-    run_quant_analysis(pred, cur=cur)
+    run_quant_analysis(pred, cur=cur, output_root=output_root)

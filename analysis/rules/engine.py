@@ -61,6 +61,12 @@ def _get_hist_rates(stats: dict, eu_stats: dict) -> tuple[dict[str, float], str]
     return None
 
 
+def _pct(v) -> str:
+    if v is None:
+        return "n/a"
+    return f"{v * 100:.1f}%"
+
+
 def _pick_1x2(
     stats: dict,
     eu_stats: dict,

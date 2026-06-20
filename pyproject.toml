@@ -33,9 +33,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+api = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.4",
+    "fastapi>=0.110",
+    "httpx>=0.27",
+    "uvicorn[standard]>=0.27",
 ]
 
 [project.urls]
@@ -49,7 +56,7 @@ gyl = "scripts._entry:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["analysis*", "core*", "db*", "scripts*"]
+include = ["analysis*", "apps*", "core*", "db*", "scripts*"]
 
 [tool.setuptools]
 include-package-data = true

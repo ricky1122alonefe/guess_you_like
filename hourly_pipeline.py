@@ -28,7 +28,8 @@ from odds_cache import (
 from parser import parse_match_pair
 from predict import build_payload
 from jingcai_pick import final_recommendation_cn
-from analysis.pipeline import REUSE_STEPS, enrich_prediction
+from analysis.pipeline import enrich_prediction
+from analysis.registry import enrichment_steps
 from core.context import EnrichmentContext
 from time_utils import format_beijing, now_beijing, now_beijing_str
 from predict_sheet import rec_to_row, save_csv
@@ -166,6 +167,7 @@ def _enrich_prediction(
     poll_meta: dict | None = None,
     cur=None,
     steps: tuple[str, ...] | None = None,
+    output_root: Path | None = None,
 ) -> dict:
     cur_dict = cur
     if cur is not None and not isinstance(cur, dict):
@@ -180,6 +182,7 @@ def _enrich_prediction(
             cur=cur_dict,
         ),
         steps=steps,
+        output_root=output_root,
     )
 
 
@@ -512,7 +515,8 @@ def run_hourly_job(
                         pred,
                         poll_meta=poll_meta,
                         cur=pred.get("odds_snapshot") or {},
-                        steps=REUSE_STEPS,
+                        steps=enrichment_steps("reuse", root),
+                        output_root=root,
                     )
                     results.append(pred)
                     summary.predict_ok += 1

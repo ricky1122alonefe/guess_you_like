@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "enrichment": {
+    "default_steps": ["odds_snapshot", "similarity", "jingcai", "quant"],
+    "reuse_steps": ["jingcai", "quant"],
+    "enabled": {
+      "odds_snapshot": true,
+      "similarity": true,
+      "jingcai": true,
+      "quant": true
+    }
+  },
+  "quant": {
+    "enabled": {
+      "poisson": true,
+      "elo": true,
+      "ev": true,
+      "mc": true
+    }
+  }
+}

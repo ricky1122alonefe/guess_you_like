@@ -10,6 +10,7 @@ from __version__ import __version__
 EPILOG = """
 Examples:
   guess-you-like serve --host 127.0.0.1 --port 8765
+  guess-you-like api --port 8766 -o output/service
   guess-you-like poll --interval 300 --days 7
   guess-you-like settle --resettle
   bash scripts/run_local.sh          # local dev (poll + web)
@@ -21,6 +22,7 @@ def _print_help() -> None:
 
 Usage:
   guess-you-like serve [args...]   Start web UI + hourly pipeline
+  guess-you-like api [args...]     Read-only JSON API (FastAPI)
   guess-you-like poll [args...]    Poll odds into PostgreSQL
   guess-you-like settle [args...]  Settle finished match results
   guess-you-like version           Print version
@@ -50,6 +52,11 @@ def main(argv: list[str] | None = None) -> int:
         from serve import main as serve_main
 
         return serve_main(rest) or 0
+
+    if cmd == "api":
+        from apps.api.main import main as api_main
+
+        return api_main(rest) or 0
 
     if cmd == "poll":
         from poll_service import main as poll_main

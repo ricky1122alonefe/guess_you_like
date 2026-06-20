@@ -513,18 +513,41 @@ def test_analysis_rules_and_signals():
     assert rec.insufficient_data
 
 
+def test_open_prob_summary_pct():
+    from analysis.rules.engine import _open_prob_summary
+
+    cn, txt = _open_prob_summary(
+        {"count": 100, "home_win_rate": 0.5, "draw_rate": 0.25, "away_win_rate": 0.25},
+        {"count": 100, "home_win_rate": 0.5, "draw_rate": 0.25, "away_win_rate": 0.25},
+    )
+    assert cn == "主胜"
+    assert "50.0%" in txt
+
+
+def test_analysis_registry():
+    from analysis.registry import enrichment_steps, load_raw_config, public_config_summary, quant_steps
+
+    cfg = load_raw_config()
+    assert cfg.get("version") == 1
+    assert "quant" in enrichment_steps("default")
+    assert quant_steps() == ("poisson", "elo", "ev", "mc")
+    summary = public_config_summary()
+    assert "enrichment_default" in summary
+
+
 def test_analysis_pipeline_modules():
-    from analysis.pipeline import DEFAULT_STEPS, REUSE_STEPS, enrich_prediction
+    from analysis.pipeline import DEFAULT_STEPS, enrich_prediction
+    from analysis.registry import enrichment_steps
     from analysis.quant.bundle import run_quant_analysis
     from core.context import EnrichmentContext
 
     assert "quant" in DEFAULT_STEPS
-    assert REUSE_STEPS == ("jingcai", "quant")
+    assert enrichment_steps("reuse") == ("jingcai", "quant")
 
     pred = {"match": "A vs B", "result_1x2": "home"}
     enrich_prediction(
         EnrichmentContext(pred=pred, poll_meta={"jingcai": {}}),
-        steps=REUSE_STEPS,
+        steps=enrichment_steps("reuse"),
     )
     run_quant_analysis(
         {
@@ -563,4 +586,22 @@ def test_analysis_p1_modules():
     assert div is not None
     ctx = build_match_knockout_context("墨西哥 vs 南非")
     assert ctx is None or isinstance(ctx, dict)
+
+
+def test_api_app():
+    pytest = __import__("pytest")
+    fastapi = pytest.importorskip("fastapi")
+    httpx = pytest.importorskip("httpx")
+    from fastapi.testclient import TestClient
+
+    from apps.api.main import create_app
+
+    app = create_app(ROOT / "output" / "service", within_days=7)
+    client = TestClient(app)
+    r = client.get("/health")
+    assert r.status_code == 200
+    assert r.json().get("ok") is True
+    r2 = client.get("/v1/analysis/config")
+    assert r2.status_code == 200
+    assert "enrichment_default" in r2.json()
 

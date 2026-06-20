@@ -54,6 +54,12 @@ def attach_post_recommendation(pred: dict) -> dict:
     """Attach buy tier after jingcai + predict_row are finalized."""
     from jingcai_tier import attach_buy_tier
 
+    try:
+        from analysis.score_recommend import attach_score_recommendation
+
+        attach_score_recommendation(pred)
+    except Exception:
+        pass
     attach_buy_tier(pred)
     return pred
 

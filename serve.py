@@ -58,6 +58,7 @@ _SHARE_RE = re.compile(r"^/share/match/(\d+)$")
 _API_FID_RE = re.compile(r"^/api/match/(\d+)/timeline$")
 _API_RECOMMEND_RE = re.compile(r"^/api/match/(\d+)/recommend$")
 _API_DEEP_RE = re.compile(r"^/api/match/(\d+)/deep-analyze$")
+_API_SCORE_RE = re.compile(r"^/api/match/(\d+)/score-recommend$")
 _API_CHAT_RE = re.compile(r"^/api/match/(\d+)/chat-stream$")
 _daily_ai_lock = threading.Lock()
 _daily_ai_running = False
@@ -128,6 +129,12 @@ def _ensure_quant_analysis(pred: dict | None, idx: dict | None = None) -> None:
         ensure_quant(pred, cur=cur or None)
     except Exception:
         log.exception("量化分析附加失败")
+    try:
+        from analysis.score_recommend import attach_score_recommendation
+
+        attach_score_recommendation(pred)
+    except Exception:
+        log.exception("比分推荐附加失败")
 
 
 from jingcai_pick import final_recommendation_cn
@@ -468,6 +475,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "not found"}, 404)
             else:
                 self._send_json(idx)
+            return
+
+        sm = _API_SCORE_RE.match(path)
+        if sm:
+            fid = sm.group(1)
+            pred = _load_latest_pred(root, fid)
+            if pred is None:
+                self._send_json({"ok": False, "error": "not found"}, 404)
+                return
+            _ensure_quant_analysis(pred, _load_match_index(root, fid))
+            from score_recommend import build_score_recommendation
+
+            self._send_json(build_score_recommendation(pred))
             return
 
         cm = _API_CHAT_RE.match(path)

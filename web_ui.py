@@ -2961,6 +2961,82 @@ def _quant_panel(prediction: dict | None) -> str:
 </div>"""
 
 
+def _score_recommend_panel(prediction: dict | None) -> str:
+    if not prediction:
+        return ""
+    from score_recommend import build_score_recommendation
+
+    sr = prediction.get("score_recommend") or build_score_recommendation(prediction)
+    if not sr.get("ok"):
+        reason = sr.get("reason") or "暂无数据"
+        return f"""
+<div class="card score-rec-card muted">
+  <h3>⚽ 比分推荐 <span class="tag">基础分析</span></h3>
+  <p class="meta">{_e(reason)}</p>
+</div>"""
+
+    primary = sr.get("primary") or []
+    rows = ""
+    for i, p in enumerate(primary):
+        rank = "主推" if i == 0 else ("备选" if i == 1 else "延伸")
+        align = "✓" if p.get("aligned") else "—"
+        prob = f"{p['prob_pct']}%" if p.get("prob_pct") is not None else "—"
+        rows += (
+            f"<tr><td><strong>{rank}</strong></td>"
+            f"<td class='score-cell'><strong>{_e(p.get('score'))}</strong></td>"
+            f"<td>{prob}</td>"
+            f"<td>{_e(p.get('outcome_cn') or '—')}</td>"
+            f"<td>{align}</td>"
+            f"<td class='meta'>{_e(p.get('source') or '—')}</td></tr>"
+        )
+
+    stretch = sr.get("stretch") or []
+    stretch_line = ""
+    if stretch:
+        stretch_line = f"<p class='meta'>模型延伸：{' · '.join(_e(str(x)) for x in stretch)}</p>"
+
+    track_summary = sr.get("track_summary") or {}
+    hist_txt = track_summary.get("historical") or "—"
+    model_txt = track_summary.get("model") or "—"
+
+    meta = sr.get("model_meta") or {}
+    meta_line = ""
+    if meta.get("lambda_home") is not None:
+        probs = meta.get("prob_1x2_pct") or {}
+        meta_line = (
+            f"<p class='meta'>Poisson λ 主 {meta.get('lambda_home')} · 客 {meta.get('lambda_away')}"
+            f" · 模型 1X2 {probs.get('home')}/{probs.get('draw')}/{probs.get('away')}%</p>"
+        )
+
+    fid = prediction.get("fixture_id") or ""
+    api_link = ""
+    if fid:
+        api_link = (
+            f'<p class="meta"><a href="/api/match/{_e(str(fid))}/score-recommend" '
+            f'target="_blank" rel="noopener">JSON API</a></p>'
+        )
+
+    return f"""
+<div class="card score-rec-card">
+  <h3>⚽ 比分推荐 <span class="tag">基础分析</span></h3>
+  <p class="score-headline">参考赛果 <strong>{_e(sr.get('pick_1x2_cn') or '—')}</strong>
+     · 主推 <strong>{_e(sr.get('headline') or '—')}</strong></p>
+  <p class="meta">{_e(sr.get('summary') or '')}</p>
+  <table class="mini score-rec-table">
+    <tr><th>档位</th><th>比分</th><th>概率</th><th>赛果</th><th>一致</th><th>来源</th></tr>
+    {rows}
+  </table>
+  {stretch_line}
+  <div class="score-track-row">
+    <div><span class="side-label">历史轨</span> {_e(hist_txt)}</div>
+    <div><span class="side-label">模型轨</span> {_e(model_txt)}</div>
+  </div>
+  <p class="meta">总进球 {_e(sr.get('total_goals_hint') or '—')} · 大小球 {_e(sr.get('over_under_cn') or '—')} · 置信 {_e(sr.get('confidence_cn') or '—')}</p>
+  {meta_line}
+  {api_link}
+</div>"""
+
+
 def _review_row(r: dict) -> str:
     fid = r.get("fixture_id") or ""
     name = r.get("match_name") or fid
@@ -3683,6 +3759,7 @@ def html_match_detail(
     pred_card = _build_pred_cards(prediction)
     settled_card = _settled_card(settled)
     strategy_panel = _build_match_strategy_panel(name, prediction)
+    score_rec_panel = _score_recommend_panel(prediction)
     quant_panel = _quant_panel(prediction)
     ah_card = _build_ah_analysis_card(prediction, timeline)
     latest_deep = (deep_records or [None])[0]
@@ -3864,6 +3941,10 @@ def html_match_detail(
 .ah-stats-table { margin-top: 10px; }
 .strategy-card { border-left: 4px solid #059669; margin-bottom: 14px; }
 .quant-card { border-left: 4px solid #059669; margin-bottom: 14px; }
+.score-rec-card { border-left: 4px solid #ea580c; margin-bottom: 14px; }
+.score-headline { font-size: 1.05rem; margin: 8px 0; }
+.score-rec-table .score-cell { font-size: 1.1rem; letter-spacing: 0.02em; }
+.score-track-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 8px; margin: 10px 0; font-size: 0.92rem; }
 .quant-score-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px; margin: 10px 0; }
 .quant-track { background: #f8fafc; border-radius: 8px; padding: 10px; border: 1px solid #e2e8f0; }
 .quant-track.model-track { background: #ecfdf5; border-color: #bbf7d0; }
@@ -3949,6 +4030,7 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
 {settled_card}
 {_ai_chat_card(scope="match", fid=fid)}
 {strategy_panel}
+{score_rec_panel}
 {quant_panel}
 {deep_card}
 <div class="rec-grid">

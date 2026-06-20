@@ -42,4 +42,10 @@ def run_quant_analysis(
         apply_ev(pred, quant or pred.setdefault("quant", {}))
     if "mc" in active:
         apply_mc(pred, home, away, pred.setdefault("quant", {}))
+    try:
+        from analysis.score_recommend import attach_score_recommendation
+
+        attach_score_recommendation(pred)
+    except Exception:
+        pass
     return pred

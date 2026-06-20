@@ -476,6 +476,39 @@ def test_attach_quant_analysis():
     assert pred["quant"].get("elo")
 
 
+def test_score_recommendation_module():
+    from score_recommend import attach_score_recommendation, build_score_recommendation
+
+    pred = {
+        "match": "荷兰 vs 瑞典",
+        "fixture_id": "1359204",
+        "result_1x2": "home",
+        "result_1x2_cn": "主胜",
+        "confidence_cn": "中",
+        "over_under_cn": "大2.5",
+        "likely_scores": ["2-1", "2-0", "1-0"],
+        "likely_scores_detail": ["2-1(14.8%)", "2-0(12.1%)", "1-0(9.5%)"],
+        "model_likely_scores": ["2-0", "1-0", "2-1"],
+        "model_likely_scores_detail": ["2-0(13.6%)", "1-0(8.9%)", "2-1(6.1%)"],
+        "quant": {
+            "score_model": {
+                "lambda_home": 1.45,
+                "lambda_away": 0.92,
+                "avg_total_goals": 2.37,
+                "prob_1x2_pct": {"home": 56.5, "draw": 22.1, "away": 21.4},
+                "stretch_scores": [{"score": "3-1"}],
+            }
+        },
+    }
+    sr = build_score_recommendation(pred)
+    assert sr["ok"] is True
+    assert len(sr["primary"]) == 3
+    assert sr["primary"][0]["score"] in {"2-1", "2-0", "1-0"}
+    assert sr["pick_1x2_cn"] == "主胜"
+    attach_score_recommendation(pred)
+    assert pred["score_recommend"]["headline"]
+
+
 def test_parse_fulltime_score_not_halftime():
     from bs4 import BeautifulSoup
     from live_scores_500 import _parse_score_from_tr, align_score_to_fixture, LiveScore

@@ -304,8 +304,10 @@ def load_ai_records(output_root: str | Path, fixture_id: str, *, limit: int = 30
                 records.append(json.loads(line))
             except json.JSONDecodeError:
                 continue
-    if not records:
-        records = _backfill_ai_records_from_runs(root, fixture_id)
+    if not records or not any(r.get("analyses") for r in records):
+        backfilled = _backfill_ai_records_from_runs(root, fixture_id)
+        if backfilled:
+            records = backfilled
     records.sort(key=lambda r: r.get("ts") or "", reverse=True)
     return records[:limit]
 

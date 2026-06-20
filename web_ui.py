@@ -54,6 +54,13 @@ function aiRecommend(fid, btn) {
       }
       const n = (d.ai_providers && d.ai_providers.length) || (d.ai_analyses ? Object.keys(d.ai_analyses).length : 1);
       showToast('✅ 已保存 ' + n + ' 个模型分析，刷新页面…');
+      document.querySelectorAll('.btn-deep').forEach(el => {
+        el.disabled = false;
+        el.title = '';
+        el.onclick = () => aiDeepAnalyze(fid, el);
+        el.textContent = el.dataset.label || '🔍 AI 深度分析';
+      });
+      document.querySelectorAll('.deep-gate-hint').forEach(el => { el.remove(); });
       setTimeout(() => location.reload(), 900);
     })
     .catch(e => {
@@ -63,9 +70,9 @@ function aiRecommend(fid, btn) {
 }
 
 function aiDeepAnalyze(fid, btn) {
-  if (!confirm('基于已有 AI 分析做二次深度研判？\\n综合多模型结论、细化比分与竞彩方案，约 30–60 秒。')) return;
+  if (!confirm('AI 深度分析：若尚未跑过首轮，会先自动做 AI 推荐，再二次综合研判。\\n多模型约 1–3 分钟，请稍候。')) return;
   const b = btn || (typeof event !== 'undefined' && event.target);
-  if (b) { b.disabled = true; b.textContent = '深度分析中…'; }
+  if (b) { b.disabled = true; b.textContent = '分析中…'; }
   fetch('/api/match/' + fid + '/deep-analyze', {method:'POST'})
     .then(r => r.json())
     .then(d => {
@@ -74,7 +81,7 @@ function aiDeepAnalyze(fid, btn) {
         if (b) { b.disabled = false; b.textContent = b.dataset.label || '🔍 AI 深度分析'; }
         return;
       }
-      showToast('✅ ' + (d.headline || '深度分析完成') + '，刷新页面…');
+      showToast('✅ ' + (d.headline || '深度分析完成') + (d.auto_first_pass ? '（含自动首轮 AI）' : '') + '，刷新页面…');
       setTimeout(() => location.reload(), 900);
     })
     .catch(e => {
@@ -166,6 +173,11 @@ const parlaySelected = new Map();
 function toggleParlayPick(el) {
   const fid = el.dataset.fid;
   if (el.checked) {
+    const tier = el.dataset.tier || '';
+    if (tier && tier !== 'A') {
+      const label = tier === 'B' ? '可单关' : '仅参考';
+      showToast('该场档位为「' + label + '」，串关建议优先选「可串」', true);
+    }
     if (parlaySelected.size >= 2) {
       el.checked = false;
       showToast('最多选 2 场', true);
@@ -429,10 +441,22 @@ a {{ color: #2563eb; text-decoration: none; word-break: break-word; }}
         border-radius: 4px; font-size: 12px; margin: 2px 4px 2px 0; max-width: 100%; }}
 .tag-live {{ background: #fef3c7; color: #b45309; }}
 .tag-qual-div {{ background: #fff7ed; color: #c2410c; border: 1px solid #fdba74; font-weight: 700; }}
+.tag-buy-tier-a {{ background: #ecfdf5; color: #047857; border: 1px solid #6ee7b7; font-weight: 700; }}
+.tag-buy-tier-b {{ background: #eff6ff; color: #1d4ed8; border: 1px solid #93c5fd; font-weight: 700; }}
+.tag-buy-tier-c {{ background: #f3f4f6; color: #6b7280; border: 1px solid #d1d5db; font-weight: 600; }}
 .meta.warn {{ color: #b45309; font-weight: 600; }}
 .qual-div-banner {{ background: linear-gradient(135deg,#fff7ed,#ffedd5); border: 1px solid #fdba74;
   border-radius: 12px; padding: 14px 16px; margin: 12px 0 16px; }}
 .qual-div-banner p {{ margin: 8px 0 0; font-size: 14px; line-height: 1.55; }}
+.buy-tier-banner {{ border-radius: 10px; padding: 12px 16px; margin: 12px 0; border: 1px solid #e5e7eb; }}
+.buy-tier-banner h3 {{ margin: 0 0 6px; font-size: 16px; }}
+.buy-tier-banner p {{ margin: 0; font-size: 14px; line-height: 1.5; color: #374151; }}
+.buy-tier-tier-a {{ background: linear-gradient(135deg,#ecfdf5,#d1fae5); border-color: #6ee7b7; }}
+.buy-tier-tier-a h3 {{ color: #047857; }}
+.buy-tier-tier-b {{ background: linear-gradient(135deg,#eff6ff,#dbeafe); border-color: #93c5fd; }}
+.buy-tier-tier-b h3 {{ color: #1d4ed8; }}
+.buy-tier-tier-c {{ background: linear-gradient(135deg,#f9fafb,#f3f4f6); border-color: #d1d5db; }}
+.buy-tier-tier-c h3 {{ color: #6b7280; }}
 .tag-ok {{ background: #ecfdf5; color: #047857; }}
 .tag-miss {{ background: #fef2f2; color: #b91c1c; }}
 .tag-active {{ background: #1d4ed8; color: #fff; }}
@@ -606,6 +630,17 @@ def _closing_odds_txt(settled: dict) -> str:
     return " · ".join(parts) if parts else "—"
 
 
+def _tier_badge_html(m: dict, row: dict | None = None) -> str:
+    row = row or {}
+    cn = m.get("buy_tier_cn") or row.get("购买档位") or ""
+    if not cn:
+        return ""
+    css = {"可串": "tier-a", "可单关": "tier-b", "仅参考": "tier-c"}.get(cn, "tier-c")
+    tip = m.get("buy_tier_reason") or row.get("档位说明") or ""
+    title = f' title="{_e(tip)}"' if tip else ""
+    return f' <span class="tag tag-buy-{css}"{title}>{_e(cn)}</span>'
+
+
 def _alert_tags_html(m: dict, row: dict | None = None) -> str:
     tags = list(m.get("alert_tags") or [])
     row = row or {}
@@ -631,12 +666,14 @@ def _dashboard_active_row(m: dict, indexes: dict) -> str:
     scores = row.get("推荐比分") or "、".join(m.get("likely_scores_detail") or [])
     ah = row.get("亚盘") or m.get("asian_handicap_cn") or "—"
     conf = row.get("置信度") or m.get("confidence_cn") or "—"
+    tier_cn = m.get("buy_tier_cn") or row.get("购买档位") or "—"
     n_pts = (indexes.get(fid) or {}).get("point_count", 0)
     phase = m.get("match_phase") or "upcoming"
     phase_tag = ""
     if phase == "live":
         phase_tag = ' <span class="tag tag-live">进行中</span>'
     alert_tag = _alert_tags_html(m, row)
+    tier_tag = _tier_badge_html(m, row)
     detail = f'<a href="/match/{_e(fid)}">趋势 ({n_pts})</a>' if fid else "—"
     ai_btn = (
         f'<button type="button" class="btn btn-sm btn-ai" '
@@ -645,12 +682,14 @@ def _dashboard_active_row(m: dict, indexes: dict) -> str:
     )
     cb = (
         f'<input type="checkbox" class="parlay-cb" data-fid="{_e(fid)}" '
+        f'data-tier="{_e(m.get("buy_tier") or "")}" '
         f'data-name="{_e(name)}" onchange="toggleParlayPick(this)" title="加入 2串1">'
         if fid else "—"
     )
     return (
         f"<tr><td class='parlay-pick'>{cb}</td>"
-        f"<td><a href=\"/match/{_e(fid)}\">{_e(name)}</a>{phase_tag}{alert_tag}</td>"
+        f"<td><a href=\"/match/{_e(fid)}\">{_e(name)}</a>{phase_tag}{tier_tag}{alert_tag}</td>"
+        f"<td>{_e(tier_cn)}</td>"
         f"<td>{pick_cell}</td><td>{_e(scores)}</td>"
         f"<td>{_e(ah)}</td><td>{_e(conf)}</td><td>{detail}</td>"
         f"<td>{ai_btn}</td></tr>\n"
@@ -674,6 +713,14 @@ def _dashboard_finished_row(m: dict, indexes: dict) -> str:
     score = settled.get("score_text") or "—"
     result_cn = settled.get("result_1x2_cn") or "—"
     pick = settled.get("pick_jingcai_cn") or _format_dual_pick(m) if m.get("predict_row") else "—"
+    from recommendation_review import _compare_summary
+
+    cmp_txt = _compare_summary(
+        pick_cn=str(pick or ""),
+        result_cn=str(result_cn),
+        hit=settled.get("hit_1x2"),
+    )
+    cmp_cls = "cmp-ok" if settled.get("hit_1x2") is True else ("cmp-bad" if settled.get("hit_1x2") is False else "meta")
     closing = _closing_odds_txt(settled)
     hit_1x2 = _hit_badge(settled.get("hit_1x2"))
     hit_sc = _hit_badge(settled.get("hit_score"))
@@ -682,10 +729,11 @@ def _dashboard_finished_row(m: dict, indexes: dict) -> str:
     return (
         f"<tr><td><a href=\"/match/{_e(fid)}\">{_e(name)}</a></td>"
         f"<td><strong>{_e(score)}</strong> {_e(result_cn)}</td>"
+        f"<td class='{cmp_cls}'>{_e(cmp_txt)}</td>"
         f"<td class='meta'>{_e(closing)}</td>"
         f"<td>{_e(pick)}</td>"
         f"<td>{hit_1x2} 1X2 · {hit_sc} 比分</td>"
-        f"<td>{detail}</td></tr>\n"
+        f"<td>{detail} · <a href='/review'>复盘表</a></td></tr>\n"
     )
 
 
@@ -718,7 +766,7 @@ def html_dashboard(
 
     finished_rows = "".join(_dashboard_finished_row(m, indexes) for m in finished)
     if not finished_rows:
-        finished_rows = "<tr><td colspan='6'>暂无已结算完场（开球 105 分钟后自动抓取赛果）</td></tr>"
+        finished_rows = "<tr><td colspan='7'>暂无已结算完场（开球 105 分钟后自动抓取赛果）</td></tr>"
 
     wc_teaser = _worldcup_teaser(output_root)
     div_teaser = _divergence_teaser(output_root)
@@ -753,9 +801,9 @@ def html_dashboard(
 
     finished_fold = _fold(
         f"已完场（{len(finished)} 场）",
-        f"""<p class="meta">开球约 105 分钟后抓取赛果 · 终盘为 kickoff 前最后一次 poll</p>
+        f"""<p class="meta">开球约 105 分钟后抓取赛果 · <a href="/review"><strong>推荐复盘表</strong></a> 对照全部完场</p>
 <table>
-<tr><th>比赛</th><th>赛果</th><th>终盘</th><th>预测</th><th>命中</th><th>详情</th></tr>
+<tr><th>比赛</th><th>赛果</th><th>对照</th><th>终盘</th><th>预测</th><th>命中</th><th>详情</th></tr>
 {finished_rows}
 </table>""",
         open=len(finished) <= 4 and len(finished) > 0,
@@ -779,6 +827,8 @@ def html_dashboard(
         ".leg-reason-text { font-size:13px; color:#64748b; margin:4px 0 0; line-height:1.5; }"
         ".parlay-actions { margin-top:12px; }"
         ".parlay-option { border:1px solid #e2e8f0; border-radius:10px; padding:12px; margin:12px 0; background:#fff; }"
+        ".cmp-ok { color: #047857; font-weight: 700; }"
+        ".cmp-bad { color: #b91c1c; font-weight: 700; }"
     )
 
     return f"""<!DOCTYPE html>
@@ -799,11 +849,13 @@ def html_dashboard(
   · <a href="/handicap">📊 亚盘赢盘</a>
   · <a href="/divergence">⚡ 欧亚分歧</a>
   · <a href="/quant">📈 量化回测</a>
+  · <a href="/review"><strong>📋 推荐复盘</strong></a>
   · <a href="/settings/ai">🤖 AI 设置</a>
   · <a href="/kelly">🧮 Kelly</a>
   · 状态 <strong>{run_status}</strong>
 </nav>
 <button class="btn" style="margin-bottom:14px" onclick="fetch('/api/run',{{method:'POST'}}).then(r=>r.json()).then(d=>showToast(d.message||d.error||'已触发', !d.ok))">立即执行一次</button>
+<a class="btn" href="/review" style="margin-bottom:14px;background:#ca8a04">📋 推荐复盘</a>
 {div_teaser}
 {wc_teaser}
 {_ai_chat_card(scope="dashboard")}
@@ -824,7 +876,7 @@ def html_dashboard(
   </div>
   <div class="card parlay-result" id="parlay-result"></div>
   <table class="dashboard-table">
-    <tr><th title="勾选 2 场">串</th><th>比赛</th><th>竞彩推荐</th><th>比分</th><th>亚盘</th><th>置信</th><th>详情</th><th>AI</th></tr>
+    <tr><th title="勾选 2 场">串</th><th>比赛</th><th>档位</th><th>竞彩推荐</th><th>比分</th><th>亚盘</th><th>置信</th><th>详情</th><th>AI</th></tr>
     {active_rows}
   </table>
 </div>
@@ -1277,6 +1329,14 @@ def _pred_card(pred: dict, *, title: str = "最新推荐") -> str:
     market_block = _fold("欧亚转换 / 盘赔对照", market_lines, muted=True) if market_lines else ""
     alert_tags = pred.get("alert_tags") or []
     alert_html = "".join(f' <span class="tag tag-qual-div">{_e(t)}</span>' for t in alert_tags)
+    tier_tag = _tier_badge_html(pred, row)
+    tier_reason = pred.get("buy_tier_reason") or row.get("档位说明") or ""
+    tier_line = ""
+    if tier_tag:
+        tier_line = f"<p class='meta'><strong>购买档位：</strong>{tier_tag}"
+        if tier_reason:
+            tier_line += f" <span class='meta'>{_e(tier_reason)}</span>"
+        tier_line += "</p>"
     odds_w = pred.get("odds_blend_summary") or pred.get("pattern_reference_cn") or ""
     odds_line = f"<p class='meta'><strong>权重：</strong>{_e(odds_w)}</p>" if odds_w else ""
     return f"""
@@ -1285,6 +1345,7 @@ def _pred_card(pred: dict, *, title: str = "最新推荐") -> str:
   <p><strong class="pick">{_e(pick)}</strong>{sp_txt}
      {f"<span class='tag'>{_e(jc_play)}</span>" if jc_play and jc_play != "—" else ""}</p>
   {ref_line}
+  {tier_line}
   {buy_line}
   {div_line}
   <p>比分 {_e(scores)}
@@ -1546,22 +1607,42 @@ def _worldcup_teaser(output_root: Path) -> str:
     except json.JSONDecodeError:
         return ""
     pat = ledger.get("opening_patterns") or {}
+    acc = ledger.get("accuracy") or {}
     conc = pat.get("conclusions") or {}
     headline = conc.get("headline") or pat.get("summary") or ""
     n = pat.get("sample_size") or 0
-    if not headline or not n:
+    purchase = acc.get("purchase_jingcai") or {}
+    if not headline and not n and not purchase.get("judged"):
         return ""
     action = (conc.get("actionable") or [None])[0] or ""
     extra = f"<p class='meta' style='margin:8px 0 0'>{_e(action)}</p>" if action else ""
+    tier_line = ""
+    if purchase.get("judged"):
+        bits = []
+        for key, label in (("tier_a", "可串"), ("tier_b", "可单关"), ("tier_c", "仅参考")):
+            t = purchase.get(key) or {}
+            if t.get("total"):
+                bits.append(f"{label} {t.get('hit', 0)}/{t.get('total')} ({_pct(t.get('rate_pct'))})")
+        tier_bits = " · ".join(bits)
+        tier_line = (
+            f"<p class='meta' style='margin:8px 0 0'>"
+            f"竞彩购买 {_e(str(purchase.get('hit', 0)))}/{_e(str(purchase.get('judged', 0)))} "
+            f"({_pct(purchase.get('rate_pct'))})"
+            f"{(' · ' + _e(tier_bits)) if tier_bits else ''}"
+            f" · <a href='/review'>复盘详情</a></p>"
+        )
+    headline_line = f"<p style='margin:6px 0 0;font-size:15px'>{_e(headline)}</p>" if headline else ""
     return f"""
 <div class="card" style="border-left:4px solid #2563eb">
   <p style="margin:0"><a href="/worldcup"><strong>🏆 开盘套路</strong></a>
   · <a href="/worldcup/groups"><strong>⚔️ 小组战意</strong></a>
+  · <a href="/review"><strong>📋 推荐复盘</strong></a>
   · <a href="/handicap"><strong>📊 亚盘赢盘</strong></a>
   · <a href="/quant"><strong>📈 量化回测</strong></a>
   · <a href="/kelly"><strong>🧮 Kelly</strong></a>
      <span class="meta"> · {n} 场完赛</span></p>
-  <p style="margin:6px 0 0;font-size:15px">{_e(headline)}</p>
+  {headline_line}
+  {tier_line}
   {extra}
 </div>"""
 
@@ -1603,7 +1684,9 @@ def _ledger_record_row_compact(r: dict) -> str:
     pick_bit = ""
     if pick and pick not in ("—", "观望", ""):
         hit = _hit_badge(r.get("hit_1x2"))
-        pick_bit = f'<span class="meta">预测 {_e(pick)} {hit}</span>'
+        tier_cn = r.get("buy_tier_cn") or ""
+        tier_bit = f' <span class="tag tag-buy-{"tier-a" if tier_cn == "可串" else "tier-b" if tier_cn == "可单关" else "tier-c"}">{_e(tier_cn)}</span>' if tier_cn and tier_cn != "未分级" else ""
+        pick_bit = f'<span class="meta">预测 {_e(pick)} {hit}{tier_bit}</span>'
     link = f'<a href="/match/{_e(fid)}">详情</a>' if fid else ""
     op = r.get("opening_odds") or {}
     cl = r.get("closing_odds") or {}
@@ -1832,16 +1915,18 @@ def _ledger_details_block(records: list[dict], acc: dict, patterns: dict) -> str
 
     pred_section = ""
     with_rec = acc.get("with_recommendation") or 0
+    purchase = acc.get("purchase_jingcai") or {}
     if with_rec:
         stats = _stat_grid([
             ("有推荐", str(with_rec)),
-            ("1X2 命中", _pct(acc.get("rate_1x2_pct"))),
+            ("竞彩购买胜率", _pct(purchase.get("rate_pct") or acc.get("rate_1x2_pct"))),
             ("比分命中", _pct(acc.get("rate_score_pct"))),
         ])
         by_src = _source_table(acc.get("by_source") or {})
+        by_tier = _buy_tier_table(acc.get("by_buy_tier") or {})
         pred_section = _fold(
             f"预测复盘（{with_rec} 场）",
-            f"{stats}<h4>按来源</h4>{by_src}",
+            f"{stats}<h4>购买档位胜率</h4>{by_tier}<h4>按来源</h4>{by_src}",
             muted=True,
         )
 
@@ -1880,8 +1965,27 @@ def _source_table(by_source: dict) -> str:
 {rows}</table>"""
 
 
+def _buy_tier_table(by_tier: dict) -> str:
+    if not by_tier:
+        return "<p class='meta'>暂无分档位统计（需 poll 后带「购买档位」再 settle）</p>"
+    rows = ""
+    css = {"A": "tier-a", "B": "tier-b", "C": "tier-c", "unknown": "tier-c"}
+    for tier, v in by_tier.items():
+        label = v.get("label_cn") or tier
+        cls = css.get(tier, "tier-c")
+        rows += (
+            f"<tr><td><span class='tag tag-buy-{cls}'>{_e(label)}</span></td>"
+            f"<td>{v.get('total', 0)}</td><td>{v.get('hit', 0)}</td>"
+            f"<td><strong>{_pct(v.get('rate_pct'))}</strong></td></tr>\n"
+        )
+    return f"""<table class="mini buy-tier-stats">
+<tr><th>购买档位</th><th>场次</th><th>命中</th><th>胜率</th></tr>
+{rows}</table>"""
+
+
 def html_worldcup_ledger(ledger: dict) -> str:
     acc = ledger.get("accuracy") or {}
+    purchase = acc.get("purchase_jingcai") or {}
     patterns = ledger.get("opening_patterns") or {}
     upcoming_watch = ledger.get("upcoming_opening_watch") or {}
     upcoming_ai = ledger.get("upcoming_ai_watch") or {}
@@ -2072,6 +2176,13 @@ function analyzeWorldcupMatch(fid, btn) {{
 {upcoming_ai_html}
 
 {pattern_html}
+
+<div class="card">
+  <h3>竞彩购买胜率 · 三档</h3>
+  <p class="meta">按结算时「购买档位」统计竞彩可购方向的 1X2 命中（非模型内参胜平负）</p>
+  {_buy_tier_table(acc.get("by_buy_tier") or {})}
+  <p class="meta">整体 {_e(str(purchase.get('hit', acc.get('hit_1x2') or 0)))}/{_e(str(purchase.get('judged', acc.get('judged_1x2') or 0)))} · {_pct(purchase.get('rate_pct') or acc.get('rate_1x2_pct'))}</p>
+</div>
 
 {details_html}
 
@@ -2850,18 +2961,162 @@ def _quant_panel(prediction: dict | None) -> str:
 </div>"""
 
 
+def _review_row(r: dict) -> str:
+    fid = r.get("fixture_id") or ""
+    name = r.get("match_name") or fid
+    link = f'<a href="/match/{_e(fid)}">{_e(name)}</a>' if fid else _e(name)
+    tier_cn = r.get("buy_tier_cn") or "—"
+    tier_css = {"可串": "tier-a", "可单关": "tier-b", "仅参考": "tier-c"}.get(tier_cn, "tier-c")
+    tier_tag = f'<span class="tag tag-buy-{tier_css}">{_e(tier_cn)}</span>' if tier_cn != "—" else "—"
+    hit_1x2 = _hit_badge(r.get("hit_1x2"))
+    hit_sc = _hit_badge(r.get("hit_score"))
+    hit_ah = _hit_badge(r.get("hit_ah"))
+    cmp_txt = r.get("compare_summary") or "—"
+    cmp_cls = "cmp-ok" if r.get("hit_1x2") is True else ("cmp-bad" if r.get("hit_1x2") is False else "")
+    ref = r.get("reference_result_1x2_cn") or "—"
+    open_cn = r.get("open_result_1x2_cn") or "—"
+    ko = (r.get("kickoff_at") or "")[:10] or "—"
+    return (
+        f"<tr data-tier='{_e(r.get('buy_tier') or '')}' data-hit='{_e(str(r.get('hit_1x2')))}'>"
+        f"<td>{_e(ko)}</td><td>{link}</td>"
+        f"<td><strong>{_e(r.get('pick_jingcai_cn') or '—')}</strong></td>"
+        f"<td><strong>{_e(r.get('score_text') or '—')}</strong> {_e(r.get('result_1x2_cn') or '—')}</td>"
+        f"<td class='{cmp_cls}'>{_e(cmp_txt)}</td>"
+        f"<td>{tier_tag}</td>"
+        f"<td>{_e(r.get('confidence_cn') or '—')}</td>"
+        f"<td class='meta'>{_e(ref)}</td>"
+        f"<td class='meta'>{_e(open_cn)}</td>"
+        f"<td class='meta'>{_e((r.get('recommended_scores') or '—')[:36])}</td>"
+        f"<td>{hit_1x2}</td><td>{hit_sc}</td><td>{hit_ah}</td>"
+        f"<td class='meta'>{_e(r.get('recommendation_source') or '—')}</td>"
+        f"</tr>\n"
+    )
+
+
+def html_recommendation_review(report: dict) -> str:
+    report = report or {}
+    updated = report.get("updated_at") or now_beijing_str()
+    acc = report.get("accuracy") or {}
+    purchase = acc.get("purchase_jingcai") or {}
+    records = report.get("records") or []
+    misses = report.get("miss_patterns") or []
+
+    stats = _stat_grid([
+        ("已结算", str(report.get("total_settled") or 0)),
+        ("有竞彩推荐", str(report.get("with_recommendation") or 0)),
+        ("购买胜率", _pct(purchase.get("rate_pct") or acc.get("rate_1x2_pct"))),
+        ("A 可串", _pct((purchase.get("tier_a") or {}).get("rate_pct"))),
+        ("B 可单关", _pct((purchase.get("tier_b") or {}).get("rate_pct"))),
+        ("C 仅参考", _pct((purchase.get("tier_c") or {}).get("rate_pct"))),
+    ])
+    tier_table = _buy_tier_table(acc.get("by_buy_tier") or {})
+    rows = "".join(_review_row(r) for r in records) or "<tr><td colspan='14'>暂无已结算场次</td></tr>"
+
+    miss_li = "".join(
+        f"<li><strong>{_e(m.get('pattern'))}</strong> × {m.get('count', 0)}</li>"
+        for m in misses
+    ) or "<li class='meta'>暂无足够样本</li>"
+
+    review_css = _shared_css("""
+.hero-card { background: linear-gradient(135deg, #fefce8 0%, #fff 55%); border: 1px solid #fde047; }
+.cmp-ok { color: #047857; font-weight: 700; }
+.cmp-bad { color: #b91c1c; font-weight: 700; }
+.review-toolbar { display:flex; gap:8px; flex-wrap:wrap; margin:12px 0; }
+.review-toolbar button { padding:6px 12px; border-radius:8px; border:1px solid #e2e8f0; background:#fff; cursor:pointer; }
+.review-toolbar button.active { background:#2563eb; color:#fff; border-color:#2563eb; }
+.review-table-wrap { overflow-x:auto; }
+table.review-table { font-size: 13px; min-width: 960px; }
+table.review-table th { white-space: nowrap; }
+""")
+
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>推荐复盘</title>
+<style>
+{review_css}
+</style>
+<script>
+function filterReview(kind) {{
+  document.querySelectorAll('.review-toolbar button').forEach(b => {{
+    b.classList.toggle('active', b.dataset.filter === kind);
+  }});
+  document.querySelectorAll('.review-table tbody tr').forEach(tr => {{
+    const tier = tr.dataset.tier || '';
+    const hit = tr.dataset.hit || '';
+    let show = true;
+    if (kind === 'A') show = tier === 'A';
+    else if (kind === 'B') show = tier === 'B';
+    else if (kind === 'C') show = tier === 'C';
+    else if (kind === 'hit') show = hit === 'True';
+    else if (kind === 'miss') show = hit === 'False';
+    tr.style.display = show ? '' : 'none';
+  }});
+}}
+</script>
+</head><body>
+<p class="back page-nav"><a href="/">← 返回首页</a> · <a href="/review">推荐复盘</a> · <a href="/worldcup">开盘套路</a> · <a href="/quant">量化回测</a></p>
+
+<div class="card hero-card">
+  <h1>📋 推荐复盘</h1>
+  <p class="meta">对照「开球前最后一次竞彩推荐」与「实际赛果」· 更新 {_e(updated)}</p>
+  {stats}
+</div>
+
+<div class="card">
+  <h2>购买档位胜率</h2>
+  {tier_table}
+</div>
+
+<div class="card">
+  <h2>常见失误模式</h2>
+  <ul>{miss_li}</ul>
+  <p class="meta">格式：竞彩推荐→实际赛果；样本越多越有参考价值。</p>
+</div>
+
+<div class="card">
+  <h2>逐场对照（{len(records)} 场）</h2>
+  <div class="review-toolbar">
+    <button type="button" class="active" data-filter="all" onclick="filterReview('all')">全部</button>
+    <button type="button" data-filter="A" onclick="filterReview('A')">A 可串</button>
+    <button type="button" data-filter="B" onclick="filterReview('B')">B 可单关</button>
+    <button type="button" data-filter="C" onclick="filterReview('C')">C 仅参考</button>
+    <button type="button" data-filter="hit" onclick="filterReview('hit')">只看命中</button>
+    <button type="button" data-filter="miss" onclick="filterReview('miss')">只看失误</button>
+  </div>
+  <div class="review-table-wrap">
+  <table class="review-table">
+    <thead>
+      <tr>
+        <th>日期</th><th>比赛</th><th>竞彩推荐</th><th>实际</th><th>对照</th>
+        <th>档位</th><th>置信</th><th>参考研判</th><th>初盘</th><th>比分</th>
+        <th>1X2</th><th>比分</th><th>亚盘</th><th>来源</th>
+      </tr>
+    </thead>
+    <tbody>
+    {rows}
+    </tbody>
+  </table>
+  </div>
+  <p class="meta">推荐取自 settle 时归档的开球前预测（runs/latest + payload）；点击比赛名可看盘口演变与 AI 记录。</p>
+</div>
+</body></html>"""
+
+
 def html_quant_analytics(report: dict) -> str:
     acc = report or {}
     updated = acc.get("updated_at") or now_beijing_str()
     elo_sample = acc.get("elo_ratings_sample") or {}
 
+    purchase = acc.get("purchase_jingcai") or {}
     stats = _stat_grid([
         ("完场样本", str(acc.get("total_settled") or 0)),
-        ("1X2 命中率", _pct(acc.get("rate_1x2_pct"))),
-        ("历史比分 Top3", _pct((acc.get("hist_score") or {}).get("rate_pct"))),
-        ("模型比分 Top3", _pct((acc.get("model_score") or {}).get("rate_pct"))),
+        ("竞彩购买胜率", _pct(purchase.get("rate_pct") or acc.get("rate_1x2_pct"))),
+        ("A 可串", _pct((purchase.get("tier_a") or {}).get("rate_pct"))),
+        ("B 可单关", _pct((purchase.get("tier_b") or {}).get("rate_pct"))),
+        ("C 仅参考", _pct((purchase.get("tier_c") or {}).get("rate_pct"))),
         ("亚盘推荐赢盘", _pct((acc.get("ah_settled") or {}).get("rate_pct"))),
-        ("正EV 1X2 命中", _pct((acc.get("ev_positive") or {}).get("rate_pct"))),
     ])
 
     hist = acc.get("hist_score") or {}
@@ -2870,7 +3125,10 @@ def html_quant_analytics(report: dict) -> str:
     evp = acc.get("ev_positive") or {}
 
     detail_rows = [
-        ("竞彩 1X2", acc.get("judged_1x2"), acc.get("hit_1x2"), acc.get("rate_1x2_pct")),
+        ("竞彩购买 整体", purchase.get("judged") or acc.get("judged_1x2"), purchase.get("hit") or acc.get("hit_1x2"), purchase.get("rate_pct") or acc.get("rate_1x2_pct")),
+        ("A 可串", (purchase.get("tier_a") or {}).get("total"), (purchase.get("tier_a") or {}).get("hit"), (purchase.get("tier_a") or {}).get("rate_pct")),
+        ("B 可单关", (purchase.get("tier_b") or {}).get("total"), (purchase.get("tier_b") or {}).get("hit"), (purchase.get("tier_b") or {}).get("rate_pct")),
+        ("C 仅参考", (purchase.get("tier_c") or {}).get("total"), (purchase.get("tier_c") or {}).get("hit"), (purchase.get("tier_c") or {}).get("rate_pct")),
         ("历史比分 Top3", hist.get("judged"), hist.get("hit_top3"), hist.get("rate_pct")),
         ("Dixon-Coles Top3", model.get("judged"), model.get("hit_top3"), model.get("rate_pct")),
         ("亚盘推荐", ah.get("judged"), ah.get("hit"), ah.get("rate_pct")),
@@ -2884,6 +3142,7 @@ def html_quant_analytics(report: dict) -> str:
 
     source_table = _source_table(acc.get("by_source") or {})
     conf_table = _source_table(acc.get("by_confidence") or {})
+    tier_table = _buy_tier_table(acc.get("by_buy_tier") or {})
 
     elo_rows = ""
     for team, rating in sorted(elo_sample.items(), key=lambda x: -x[1])[:12]:
@@ -2927,6 +3186,12 @@ def html_quant_analytics(report: dict) -> str:
     {detail_table}
   </table>
   <p class="meta">历史比分取推荐时 likely_scores 前三；模型比分取 Dixon-Coles Top3；正 EV 阈值为 EV&gt;3%。</p>
+</div>
+
+<div class="card">
+  <h2>1X2 按购买档位</h2>
+  {tier_table}
+  <p class="meta">A=可串 · B=可单关 · C=仅参考；统计对象为竞彩可购方向。</p>
 </div>
 
 <div class="card">
@@ -3384,6 +3649,23 @@ def _qualification_divergence_banner(prediction: dict | None) -> str:
 </div>"""
 
 
+def _buy_tier_banner(prediction: dict | None) -> str:
+    if not prediction:
+        return ""
+    row = prediction.get("predict_row") or {}
+    cn = prediction.get("buy_tier_cn") or row.get("购买档位") or ""
+    if not cn:
+        return ""
+    reason = prediction.get("buy_tier_reason") or row.get("档位说明") or ""
+    css = {"可串": "tier-a", "可单关": "tier-b", "仅参考": "tier-c"}.get(cn, "tier-c")
+    parlay_hint = " · 可加入 2串1" if prediction.get("parlay_eligible") else " · 串关请优先选「可串」"
+    return f"""
+<div class="card buy-tier-banner buy-tier-{css}">
+  <h3>购买档位 · {_e(cn)}{_e(parlay_hint)}</h3>
+  <p>{_e(reason) if reason else '—'}</p>
+</div>"""
+
+
 def html_match_detail(
     index: dict,
     *,
@@ -3391,6 +3673,7 @@ def html_match_detail(
     ai_records: list[dict] | None = None,
     deep_records: list[dict] | None = None,
     settled: dict | None = None,
+    output_root: Path | None = None,
 ) -> str:
     fid = index.get("fixture_id", "")
     name = index.get("match_name") or fid
@@ -3406,17 +3689,29 @@ def html_match_detail(
     deep_card = _deep_analysis_card(latest_deep)
 
     from ai_deep_analysis import has_prior_ai_analysis
-    can_deep = has_prior_ai_analysis(prediction, ai_records)
-    if can_deep:
-        deep_btn = (
-            f'<button type="button" class="btn btn-deep" data-label="🔍 AI 深度分析" '
-            f'onclick="aiDeepAnalyze(\'{_e(fid)}\', this)">🔍 AI 深度分析</button>'
+
+    fid_for_prior = index.get("fixture_id", "")
+    has_prior = has_prior_ai_analysis(
+        prediction, ai_records,
+        output_root=output_root,
+        fixture_id=str(fid_for_prior or fid),
+        index=index,
+    )
+    deep_btn = (
+        f'<button type="button" class="btn btn-deep" data-label="🔍 AI 深度分析" '
+        f'onclick="aiDeepAnalyze(\'{_e(fid)}\', this)">🔍 AI 深度分析</button>'
+    )
+    if has_prior:
+        deep_hint = (
+            '<span class="meta deep-gate-hint" style="margin-left:8px">'
+            '基于已有首轮 AI 做二次综合</span>'
         )
     else:
-        deep_btn = (
-            '<button type="button" class="btn btn-deep" disabled '
-            'title="请先完成首轮 AI 推荐">🔍 AI 深度分析</button>'
+        deep_hint = (
+            '<span class="meta deep-gate-hint" style="margin-left:8px">'
+            '一键分析：自动跑首轮 AI + 深度综合（约 1–3 分钟）</span>'
         )
+    deep_btn += deep_hint
 
     src = index.get("source") or "file"
     db_n = index.get("db_points")
@@ -3431,6 +3726,7 @@ def html_match_detail(
     last_ts = format_ts(index.get("updated_at") or (timeline[-1].get("ts") if timeline else None))
     freshness = f"<p class='meta freshness'>{' · '.join(src_bits)} · 最新 {_e(last_ts)} · 北京时间</p>"
     qual_banner = _qualification_divergence_banner(prediction)
+    tier_banner = _buy_tier_banner(prediction)
 
     jingcai_card = _jingcai_card(_latest_jingcai(timeline), prediction)
     bf = _latest_betfair(timeline)
@@ -3649,6 +3945,7 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
     {freshness}
   </div>
 {qual_banner}
+{tier_banner}
 {settled_card}
 {_ai_chat_card(scope="match", fid=fid)}
 {strategy_panel}

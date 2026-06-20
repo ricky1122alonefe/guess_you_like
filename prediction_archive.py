@@ -118,4 +118,8 @@ def prediction_snapshot(pred: dict | None) -> dict[str, Any]:
         "ai_consensus": pred.get("ai_consensus"),
         "ai_disagreement": pred.get("ai_disagreement"),
         "jingcai_market": row.get("竞彩玩法"),
+        "buy_tier": pred.get("buy_tier"),
+        "buy_tier_cn": pred.get("buy_tier_cn") or row.get("购买档位"),
+        "buy_tier_reason": pred.get("buy_tier_reason") or row.get("档位说明"),
+        "parlay_eligible": pred.get("parlay_eligible"),
     }

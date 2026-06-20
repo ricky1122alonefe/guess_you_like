@@ -23,6 +23,10 @@ def _pick_actionable(pick_cn: str) -> bool:
 
 def _leg_from_match(m: dict) -> dict[str, Any]:
     m = ensure_match_jingcai(m)
+    if not m.get("buy_tier"):
+        from analysis.rules.output import attach_post_recommendation
+
+        attach_post_recommendation(m)
     row = m.get("predict_row") or {}
     pick_cn = final_recommendation_cn(m)
     jc_info = m.get("jingcai_pick_info") or {}
@@ -65,6 +69,10 @@ def _leg_from_match(m: dict) -> dict[str, Any]:
         "insufficient_data": bool(m.get("insufficient_data")),
         "source": m.get("recommendation_source") or "rule_engine",
         "market_pattern_summary": m.get("market_pattern_summary") or "",
+        "buy_tier": m.get("buy_tier"),
+        "buy_tier_cn": m.get("buy_tier_cn"),
+        "buy_tier_reason": m.get("buy_tier_reason"),
+        "parlay_eligible": m.get("parlay_eligible") is True,
     }
 
 
@@ -79,9 +87,16 @@ def analyze_custom_parlay(matches: list[dict]) -> dict[str, Any]:
     warnings: list[str] = []
     blockers: list[str] = []
 
-    for leg in legs:
+    for leg, m in zip(legs, matches):
         if not leg["actionable"]:
             blockers.append(f"{leg['match']}：推荐为「{leg['pick_cn']}」，不可串关")
+        tier = m.get("buy_tier") or leg.get("buy_tier")
+        tier_cn = m.get("buy_tier_cn") or leg.get("buy_tier_cn") or tier
+        if tier == "C":
+            reason = m.get("buy_tier_reason") or leg.get("buy_tier_reason") or ""
+            blockers.append(f"{leg['match']}：档位「仅参考」{('——' + reason) if reason else ''}")
+        elif not leg.get("parlay_eligible"):
+            warnings.append(f"{leg['match']}：档位「{tier_cn or '可单关'}」，串关建议优先选「可串」")
         if not leg.get("jingcai_sp"):
             warnings.append(f"{leg['match']}：暂无竞彩 SP，组合回报无法按国内赔率计算")
         if leg.get("insufficient_data"):
@@ -106,9 +121,10 @@ def analyze_custom_parlay(matches: list[dict]) -> dict[str, Any]:
             pass
 
     confs = [leg.get("confidence_cn") for leg in legs]
-    if all(c == "高" for c in confs) and not blockers:
+    all_parlay_ok = all(leg.get("parlay_eligible") for leg in legs)
+    if all_parlay_ok and all(c in ("高", "中") for c in confs) and not blockers:
         verdict = "可串"
-        verdict_detail = "两场均可购且置信偏高，组合赔率见下"
+        verdict_detail = "两场均为「可串」档位，组合赔率见下"
     elif blockers:
         verdict = "不建议"
         verdict_detail = "存在不可购或观望场次"

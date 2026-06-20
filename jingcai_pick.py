@@ -352,6 +352,9 @@ def ensure_match_jingcai(m: dict) -> dict:
             return m
         out = dict(m)
         attach_jingcai_recommendation(out, poll_jc)
+        from analysis.rules.output import attach_post_recommendation
+
+        attach_post_recommendation(out)
         return out
     except Exception:
         return m

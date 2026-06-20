@@ -3,6 +3,7 @@
 from analysis.rules.engine import build_recommendation
 from analysis.rules.output import (
     apply_baseline_to_prediction,
+    attach_post_recommendation,
     merge_expert_prediction,
     print_ai_recommendation,
     print_batch_summary,
@@ -28,6 +29,7 @@ __all__ = [
     "OU_CN",
     "build_recommendation",
     "recommendation_to_baseline",
+    "attach_post_recommendation",
     "recommendation_from_dict",
     "merge_expert_prediction",
     "apply_baseline_to_prediction",

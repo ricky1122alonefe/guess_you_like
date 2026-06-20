@@ -50,6 +50,14 @@ def recommendation_to_baseline(rec: Recommendation) -> dict:
     }
 
 
+def attach_post_recommendation(pred: dict) -> dict:
+    """Attach buy tier after jingcai + predict_row are finalized."""
+    from jingcai_tier import attach_buy_tier
+
+    attach_buy_tier(pred)
+    return pred
+
+
 def merge_expert_prediction(
     ai: dict,
     baseline: dict,

@@ -250,11 +250,15 @@ def _predict_one(
     base["match"] = rec.match
     if jc:
         from jingcai_pick import attach_jingcai_recommendation
+
         attach_jingcai_recommendation(base, jc)
     row = rec_to_row(rec, cur=cur, predict_date=predict_date)
     if base.get("predict_row"):
         row.update({k: v for k, v in base["predict_row"].items() if v not in (None, "")})
     base["predict_row"] = row
+    from analysis.rules.output import attach_post_recommendation
+
+    attach_post_recommendation(base)
     base["analysis_basis"] = base.get("analysis_basis") or []
     base["recommendation_source"] = "rule_engine"
     _enrich_prediction(

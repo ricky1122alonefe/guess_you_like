@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,17 @@ from time_utils import now_beijing_str
 
 log = logging.getLogger(__name__)
 
+_deep_locks: dict[str, threading.Lock] = {}
+_deep_locks_guard = threading.Lock()
+
+
+def _lock_for_deep(fixture_id: str) -> threading.Lock:
+    with _deep_locks_guard:
+        if fixture_id not in _deep_locks:
+            _deep_locks[fixture_id] = threading.Lock()
+        return _deep_locks[fixture_id]
+
+
 def _pred_has_ai(pred: dict | None) -> bool:
     if not pred:
         return False
@@ -30,15 +42,47 @@ def _pred_has_ai(pred: dict | None) -> bool:
     return "ai" in src
 
 
+def load_richest_prediction(output_root: str | Path, fixture_id: str) -> dict | None:
+    """Prefer latest.json entry with AI; else newest AI run from runs/."""
+    return _richest_prediction(Path(output_root), str(fixture_id))
+
+
+def _timeline_has_ai(index: dict | None) -> bool:
+    if not index:
+        return False
+    for pt in index.get("timeline") or []:
+        pick = pt.get("pick") or {}
+        if pick.get("ai_analyses"):
+            return True
+        src = pick.get("recommendation_source") or ""
+        if "ai" in src:
+            return True
+    return False
+
+
 def has_prior_ai_analysis(
     prediction: dict | None,
     ai_records: list[dict] | None = None,
+    *,
+    output_root: str | Path | None = None,
+    fixture_id: str | None = None,
+    index: dict | None = None,
 ) -> bool:
     if _pred_has_ai(prediction):
         return True
     for rec in ai_records or []:
         if rec.get("analyses"):
             return True
+    if _timeline_has_ai(index):
+        return True
+    if output_root and fixture_id:
+        fid = str(fixture_id)
+        if _load_pred_from_runs(Path(output_root), fid):
+            return True
+        if index is None:
+            idx = load_match_index(output_root, fid)
+            if _timeline_has_ai(idx):
+                return True
     return False
 
 
@@ -224,10 +268,8 @@ def run_deep_match_analysis(
     ai_records: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Run second-pass deep analysis using prior AI output."""
-    from hourly_pipeline import _lock_for_fixture
-
     fid = str(fixture_id)
-    lock = _lock_for_fixture(fid)
+    lock = _lock_for_deep(fid)
     if not lock.acquire(blocking=False):
         raise RuntimeError(f"比赛 {fid} 的 AI 分析正在进行中，请稍候")
 

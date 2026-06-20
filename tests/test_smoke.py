@@ -667,6 +667,15 @@ def test_analysis_p1_modules():
 
     assert callable(run_one_match)
     assert has_prior_ai_analysis({"recommendation_source": "ai_expert"}) is True
+    assert has_prior_ai_analysis(
+        {"recommendation_source": "rule_engine"},
+        [{"analyses": {"deepseek": {"label": "DS", "result_1x2_cn": "主胜"}}}],
+    ) is True
+    assert has_prior_ai_analysis(
+        {"recommendation_source": "rule_engine"},
+        index={"timeline": [{"pick": {"recommendation_source": "ai_dual"}}]},
+    ) is True
+    assert has_prior_ai_analysis({"recommendation_source": "rule_engine"}) is False
     assert "must_win" in MATCH_TYPES
     assert callable(rank_best_third_places)
     div = analyze_eu_ah_divergence(
@@ -704,4 +713,102 @@ def test_api_app():
     r2 = client.get("/v1/analysis/config")
     assert r2.status_code == 200
     assert "enrichment_default" in r2.json()
+
+
+def test_buy_tier_classification():
+    from jingcai_tier import TIER_A, TIER_B, TIER_C, attach_buy_tier, compute_buy_tier
+
+    def _pred(**kw):
+        base = {
+            "confidence_cn": "中",
+            "reference_result_1x2_cn": "主胜",
+            "open_result_1x2_cn": "主胜",
+            "alert_tags": [],
+            "jingcai_divergence": {},
+            "predict_row": {"置信度": "中", "初盘倾向": "主胜", "赛果预测": "主胜"},
+            "jingcai_pick_info": {
+                "jingcai_market": "sp",
+                "jingcai_market_label": "胜平负",
+                "jingcai_pick": "home",
+                "jingcai_pick_display": "主胜",
+                "jingcai_sp": 1.85,
+            },
+            "jingcai_snapshot": {"has_sp": True, "sp_home": 1.85, "sp_draw": 3.2, "sp_away": 4.0},
+        }
+        base.update(kw)
+        return attach_buy_tier(base)
+
+    a = _pred()
+    assert a["buy_tier"] == TIER_A
+    assert a["parlay_eligible"] is True
+    assert a["predict_row"]["购买档位"] == "可串"
+
+    b = _pred(
+        confidence_cn="低",
+        predict_row={"置信度": "低", "初盘倾向": "主胜", "赛果预测": "主胜"},
+    )
+    assert b["buy_tier"] == TIER_B
+    assert b["parlay_eligible"] is False
+
+    c = _pred(
+        alert_tags=["竞彩·参考分歧"],
+        jingcai_divergence=None,
+        jingcai_pick_info={
+            "jingcai_market": "sp",
+            "jingcai_market_label": "胜平负",
+            "jingcai_pick": "draw",
+            "jingcai_pick_display": "平局",
+            "jingcai_sp": 3.1,
+        },
+        open_result_1x2_cn="主胜",
+        reference_result_1x2_cn="主胜",
+        predict_row={
+            "置信度": "低", "初盘倾向": "主胜", "赛果预测": "主胜", "竞彩推荐": "平局",
+        },
+    )
+    assert c["buy_tier"] == TIER_C
+    assert c["parlay_eligible"] is False
+
+    no_jc = compute_buy_tier({"predict_row": {}, "jingcai_pick_info": {"jingcai_market": "none"}})
+    assert no_jc["buy_tier"] == TIER_C
+
+
+def test_buy_tier_purchase_win_rate():
+    from worldcup_analytics import compute_accuracy_report
+
+    records = [
+        {"pick_jingcai_cn": "主胜", "hit_1x2": True, "buy_tier": "A", "buy_tier_cn": "可串"},
+        {"pick_jingcai_cn": "主胜", "hit_1x2": False, "buy_tier": "A", "buy_tier_cn": "可串"},
+        {"pick_jingcai_cn": "平局", "hit_1x2": True, "buy_tier": "B", "buy_tier_cn": "可单关"},
+        {"pick_jingcai_cn": "客胜", "hit_1x2": False, "buy_tier": "C", "buy_tier_cn": "仅参考"},
+    ]
+    acc = compute_accuracy_report(records)
+    by = acc["by_buy_tier"]
+    assert by["A"]["total"] == 2
+    assert by["A"]["hit"] == 1
+    assert by["A"]["rate_pct"] == 50.0
+    assert by["B"]["rate_pct"] == 100.0
+    assert by["C"]["rate_pct"] == 0.0
+    purchase = acc["purchase_jingcai"]
+    assert purchase["judged"] == 4
+    assert purchase["hit"] == 2
+    assert purchase["rate_pct"] == 50.0
+    assert purchase["tier_a"]["total"] == 2
+
+
+def test_recommendation_review_builder():
+    from recommendation_review import _compare_summary, build_recommendation_review
+
+    assert "✓" in _compare_summary(pick_cn="主胜", result_cn="主胜", hit=True)
+    assert "✗" in _compare_summary(pick_cn="平局", result_cn="主胜", hit=False)
+
+    root = ROOT / "output" / "service"
+    if not root.is_dir():
+        pytest.skip("no service output")
+    report = build_recommendation_review(root)
+    assert report.get("total_settled", 0) >= 0
+    if report.get("records"):
+        row = report["records"][0]
+        assert "pick_jingcai_cn" in row
+        assert "compare_summary" in row
 

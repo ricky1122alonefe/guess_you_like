@@ -33,7 +33,7 @@ from timeline_merge import load_latest_poll_meta, merge_match_indexes
 from time_utils import now_beijing
 from daily_picks import load_daily_picks_from_output, save_daily_picks
 from share_card import build_parlay_share_context, build_share_context, html_share_match, html_share_parlay
-from web_ui import html_ah_analytics, html_ai_settings, html_daily_picks, html_dashboard, html_eu_ah_divergence, html_group_stage, html_kelly_calculator, html_match_detail, html_quant_analytics, html_worldcup_ledger
+from web_ui import html_ah_analytics, html_ai_settings, html_daily_picks, html_dashboard, html_eu_ah_divergence, html_group_stage, html_kelly_calculator, html_match_detail, html_quant_analytics, html_recommendation_review, html_worldcup_ledger
 
 
 def _error_html(body: str) -> str:
@@ -79,13 +79,9 @@ def _load_match_index(output_root: Path, fid: str) -> dict | None:
 
 
 def _load_latest_pred(output_root: Path, fid: str) -> dict | None:
-    data = _read_json(output_root / "latest.json")
-    if not data:
-        return None
-    for m in data.get("matches") or []:
-        if str(m.get("fixture_id")) == str(fid):
-            return m
-    return None
+    from analysis.ai.deep import load_richest_prediction
+
+    return load_richest_prediction(output_root, fid)
 
 
 def _existing_path(path_text: str | None, output_root: Path | None = None) -> Path | None:
@@ -461,6 +457,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_html(html_match_detail(
                 idx, prediction=pred, ai_records=ai_records,
                 deep_records=deep_records, settled=settled,
+                output_root=root,
             ))
             return
 
@@ -591,6 +588,11 @@ class Handler(BaseHTTPRequestHandler):
             report["updated_at"] = now_beijing_str()
             self._send_html(html_quant_analytics(report))
             return
+        if path == "/review":
+            from recommendation_review import build_recommendation_review
+
+            self._send_html(html_recommendation_review(build_recommendation_review(root)))
+            return
         if path == "/divergence":
             from eu_ah_divergence import build_divergence_report
 
@@ -644,6 +646,11 @@ class Handler(BaseHTTPRequestHandler):
             report = build_quant_backtest_report(root)
             report["updated_at"] = now_beijing_str()
             self._send_json(report)
+            return
+        if path == "/api/review":
+            from recommendation_review import build_recommendation_review
+
+            self._send_json(build_recommendation_review(root))
             return
         if path == "/api/divergence/report":
             from eu_ah_divergence import build_divergence_report
@@ -1011,20 +1018,33 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 from ai_deep_analysis import has_prior_ai_analysis, run_deep_match_analysis
                 pred = _load_latest_pred(self.output_root, fid)
+                idx = _load_match_index(self.output_root, fid)
                 ai_records = load_ai_records(self.output_root, fid)
-                if not has_prior_ai_analysis(pred, ai_records):
-                    self._send_json({
-                        "ok": False,
-                        "error": "请先完成首轮「AI 推荐本场」，再使用深度分析",
-                    }, 400)
-                    return
+                had_prior = has_prior_ai_analysis(
+                    pred, ai_records,
+                    output_root=self.output_root, fixture_id=fid,
+                    index=idx,
+                )
+                if not had_prior:
+                    log.info("深度分析前自动跑首轮 AI fid=%s", fid)
+                    pred = run_single_match_ai(
+                        self.output_root,
+                        fid,
+                        ai_model=self.ai_model,
+                        ai_mode=self.ai_mode,
+                        ai_base_url=self.ai_base_url,
+                        dual_ai=self.dual_ai,
+                        ai_model_b=self.ai_model_b,
+                        ai_base_url_b=self.ai_base_url_b,
+                    )
+                    ai_records = load_ai_records(self.output_root, fid)
                 record = run_deep_match_analysis(
                     self.output_root,
                     fid,
                     ai_model=self.ai_model,
                     ai_base_url=self.ai_base_url,
                     prediction=pred,
-                    index=_load_match_index(self.output_root, fid),
+                    index=idx,
                     ai_records=ai_records,
                 )
                 self._send_json({
@@ -1032,6 +1052,7 @@ class Handler(BaseHTTPRequestHandler):
                     "headline": (record.get("analysis") or {}).get("headline"),
                     "final_pick": (record.get("analysis") or {}).get("final_pick"),
                     "ts": record.get("ts"),
+                    "auto_first_pass": not had_prior,
                 })
             except RuntimeError as exc:
                 self._send_json({"ok": False, "error": str(exc)}, 409)

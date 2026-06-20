@@ -281,22 +281,28 @@ def run_settlement(
 
 def load_settled_map(output_root: str | Path) -> dict[str, dict]:
     out: dict[str, dict] = {}
-    if ping():
-        try:
-            out.update(list_match_results_map(source=SOURCE))
-        except Exception as exc:
-            log.debug("读取 DB 赛果失败: %s", exc)
 
     settled_dir = Path(output_root) / "settled"
     if settled_dir.is_dir():
         for p in settled_dir.glob("*.json"):
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
-                fid = str(data.get("fixture_id") or p.stem)
-                if fid not in out:
-                    out[fid] = data
+                fid = str(data.get("fixture_id") or data.get("external_id") or p.stem)
+                data["fixture_id"] = fid
+                out[fid] = data
             except json.JSONDecodeError:
                 continue
+
+    if ping():
+        try:
+            for fid, row in list_match_results_map(source=SOURCE).items():
+                row = dict(row)
+                row["fixture_id"] = str(fid)
+                if fid not in out:
+                    out[fid] = row
+        except Exception as exc:
+            log.debug("读取 DB 赛果失败: %s", exc)
+
     return out
 
 

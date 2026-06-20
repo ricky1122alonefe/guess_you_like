@@ -324,7 +324,7 @@ def list_match_results_map(*, source: str = "500", limit: int = 200) -> dict[str
             (source, limit),
         )
         rows = cur.fetchall()
-    return {str(r["external_id"]): dict(r) for r in rows}
+    return {str(r["external_id"]): {**dict(r), "fixture_id": str(r["external_id"])} for r in rows}
 
 
 def get_opening_tick(fixture_db_id: int) -> dict | None:

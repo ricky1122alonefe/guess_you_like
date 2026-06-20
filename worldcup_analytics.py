@@ -852,6 +852,7 @@ def _record_from_row(row: dict) -> dict[str, Any]:
             payload = {}
 
     pred = payload.get("prediction") or {}
+    pred_row = pred.get("predict_row") or {}
     opening = payload.get("opening_odds") or {}
     closing = payload.get("closing_odds") or {}
     open_tags = payload.get("opening_pattern_tags") or []
@@ -870,6 +871,10 @@ def _record_from_row(row: dict) -> dict[str, Any]:
         "hit_score": row.get("hit_score"),
         "recommendation_source": pred.get("recommendation_source") or payload.get("recommendation_source"),
         "confidence_cn": pred.get("confidence_cn"),
+        "buy_tier": pred.get("buy_tier"),
+        "buy_tier_cn": pred.get("buy_tier_cn") or pred_row.get("购买档位"),
+        "buy_tier_reason": pred.get("buy_tier_reason") or pred_row.get("档位说明"),
+        "parlay_eligible": pred.get("parlay_eligible"),
         "asian_handicap_cn": pred.get("asian_handicap_cn"),
         "asian_handicap_pick": pred.get("asian_handicap_pick"),
         "asian_handicap_reason": pred.get("asian_handicap_reason"),
@@ -959,6 +964,10 @@ def _attach_prediction(rec: dict, output_root: str | Path) -> None:
         rec["recommended_scores"] = pred.get("likely_scores") or pred.get("recommended_scores")
         rec["recommendation_source"] = pred.get("recommendation_source") or pred.get("source")
         rec["confidence_cn"] = pred.get("confidence_cn")
+        rec["buy_tier"] = pred.get("buy_tier")
+        rec["buy_tier_cn"] = pred.get("buy_tier_cn") or (pred.get("predict_row") or {}).get("购买档位")
+        rec["buy_tier_reason"] = pred.get("buy_tier_reason")
+        rec["parlay_eligible"] = pred.get("parlay_eligible")
         actual = rec.get("result_1x2")
         pick_key = pred.get("result_1x2") or pred.get("pick_1x2")
         if actual and pick_key:
@@ -1086,6 +1095,9 @@ def compute_accuracy_report(records: list[dict]) -> dict[str, Any]:
 
     by_source: dict[str, dict] = defaultdict(lambda: {"total": 0, "hit": 0})
     by_conf: dict[str, dict] = defaultdict(lambda: {"total": 0, "hit": 0})
+    by_buy_tier: dict[str, dict] = defaultdict(lambda: {"total": 0, "hit": 0})
+
+    from jingcai_tier import TIER_CN, TIER_ORDER
 
     for r in judged_1x2:
         src = r.get("recommendation_source") or "unknown"
@@ -1096,12 +1108,37 @@ def compute_accuracy_report(records: list[dict]) -> dict[str, Any]:
         by_conf[conf]["total"] += 1
         if r.get("hit_1x2"):
             by_conf[conf]["hit"] += 1
+        tier = r.get("buy_tier") or "unknown"
+        if tier not in TIER_ORDER:
+            tier = "unknown"
+        by_buy_tier[tier]["total"] += 1
+        if r.get("hit_1x2"):
+            by_buy_tier[tier]["hit"] += 1
 
     def _summarize(groups: dict) -> dict:
         out = {}
         for k, v in sorted(groups.items(), key=lambda x: -x[1]["total"]):
             out[k] = {**v, "rate_pct": _rate(v["hit"], v["total"])}
         return out
+
+    def _summarize_tiers(groups: dict) -> dict:
+        out = {}
+        for tier in TIER_ORDER:
+            v = groups.get(tier)
+            if not v or not v["total"]:
+                continue
+            label = TIER_CN.get(tier, "未分级")
+            out[tier] = {
+                **v,
+                "label_cn": label,
+                "rate_pct": _rate(v["hit"], v["total"]),
+            }
+        return out
+
+    tier_stats = _summarize_tiers(by_buy_tier)
+    purchase_a = tier_stats.get("A") or {}
+    purchase_b = tier_stats.get("B") or {}
+    purchase_c = tier_stats.get("C") or {}
 
     return {
         "total_settled": total,
@@ -1114,6 +1151,15 @@ def compute_accuracy_report(records: list[dict]) -> dict[str, Any]:
         "rate_score_pct": _rate(hit_sc, len(judged_sc)),
         "by_source": _summarize(by_source),
         "by_confidence": _summarize(by_conf),
+        "by_buy_tier": tier_stats,
+        "purchase_jingcai": {
+            "judged": len(judged_1x2),
+            "hit": hit_1x2,
+            "rate_pct": _rate(hit_1x2, len(judged_1x2)),
+            "tier_a": purchase_a,
+            "tier_b": purchase_b,
+            "tier_c": purchase_c,
+        },
     }
 
 
@@ -1428,6 +1474,9 @@ def build_tournament_ledger(
 ) -> dict[str, Any]:
     root = Path(output_root)
     records = load_tournament_records(root)
+    from jingcai_tier import enrich_records_buy_tier
+
+    enrich_records_buy_tier(records, output_root=root)
     opening_patterns = compute_opening_characteristics(records)
     upcoming_watch = build_upcoming_opening_watch(root, hours=24, records=records)
     ai_watch = None

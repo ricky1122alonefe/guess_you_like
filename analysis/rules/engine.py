@@ -18,6 +18,53 @@ from analysis.signals.odds import MarketSignals
 from analysis.signals.traps import TrapAnalysis, analyze_traps, apply_penalties
 
 
+def _open_hist_favors(hist_rates: dict[str, float], hist_best: str) -> bool:
+    """初盘单项最高且领先次选足够明显 → 不允许战意/平赔改推平局。"""
+    if not hist_rates or hist_best not in hist_rates:
+        return False
+    rate = float(hist_rates[hist_best])
+    second = max((float(v) for k, v in hist_rates.items() if k != hist_best), default=0.0)
+    return rate >= cfg.OPEN_HIST_LOCK_MIN_RATE and (rate - second) >= cfg.OPEN_HIST_LOCK_MIN_MARGIN
+
+
+def _resolve_group_stage_pick(
+    rule_key: str,
+    combined: dict[str, float],
+    hist_rates: dict[str, float],
+    hist_best: str,
+    gs_analysis: dict,
+) -> tuple[str, list[str]]:
+    """Apply group motivation without forcing draw when open history is clear."""
+    extra_notes: list[str] = []
+    ordered = sorted(combined.items(), key=lambda x: -x[1])
+    new_key = ordered[0][0]
+    mt = gs_analysis.get("match_type")
+    hist_locked = _open_hist_favors(hist_rates, hist_best)
+
+    if mt == "must_win":
+        hs = gs_analysis.get("home_situation") or {}
+        aws = gs_analysis.get("away_situation") or {}
+        if hs.get("pressure") == "high" and aws.get("pressure") != "high":
+            if combined.get("home", 0) >= combined.get("away", 0) - 0.03:
+                new_key = "home"
+        elif aws.get("pressure") == "high" and hs.get("pressure") != "high":
+            if combined.get("away", 0) >= combined.get("home", 0) - 0.03:
+                new_key = "away"
+
+    if new_key == "draw" and hist_locked and hist_best in ("home", "away"):
+        new_key = rule_key if rule_key != "draw" else hist_best
+        extra_notes.append("【小组战意】初盘单项倾向明确，仅提示防平，不改推胜平负")
+    elif (
+        new_key == "draw"
+        and mt in ("collusion_watch", "draw_friendly", "open_race", "conservative_favorite")
+    ):
+        runner_up = max(combined.get("home", 0), combined.get("away", 0))
+        if combined.get("draw", 0) - runner_up < cfg.GROUP_STAGE_DRAW_FLIP_MIN_LEAD:
+            new_key = rule_key
+
+    return new_key, extra_notes
+
+
 def _get_hist_rates(stats: dict, eu_stats: dict) -> tuple[dict[str, float], str] | None:
     ah_count = stats.get("count") or 0
     eu_count = eu_stats.get("count") or 0
@@ -93,12 +140,21 @@ def _pick_1x2_combined(
     open_eu: dict,
     control,
     trap: TrapAnalysis,
+    *,
+    odds_base: dict[str, float] | None = None,
 ) -> tuple[str, str, dict[str, float], dict[str, float], str] | None:
-    """初盘历史 × 规律权重 × 诱盘惩罚 + 临盘信号；高控盘可改推次选。"""
+    """初盘历史 × 规律权重 × 诱盘惩罚 + 临盘信号；或赔率优先融合模式。"""
     open_pick = _pick_1x2(open_stats, open_eu, None)
     if open_pick is None:
         return None
     _, _, hist_rates, _, hist_best = open_pick
+
+    if cfg.ODDS_FIRST_ENABLED and odds_base:
+        from analysis.signals.odds_probs import apply_light_trap_penalties
+
+        combined = apply_light_trap_penalties(odds_base, trap)
+        best_key = max(combined, key=combined.get)
+        return best_key, RESULT_CN[best_key], hist_rates, combined, hist_best
 
     combined = {k: v * control.pattern_weight for k, v in hist_rates.items()}
     combined = apply_penalties(combined, trap)
@@ -129,7 +185,11 @@ def _pick_1x2_combined(
             if trap.flagged_direction == top_k:
                 best_key = second_k
             elif trap.draw_steam and second_k == "draw":
-                best_key = "draw"
+                if not (
+                    cfg.DRAW_STEAM_RESPECT_OPEN_HIST
+                    and _open_hist_favors(hist_rates, hist_best)
+                ):
+                    best_key = "draw"
 
     return best_key, RESULT_CN[best_key], hist_rates, combined, hist_best
 
@@ -423,12 +483,26 @@ def build_recommendation(payload: dict) -> Recommendation:
     trap = analyze_traps(cur, intensity=control.intensity, level=control.level)
 
     open_cn, open_prob_txt = _open_prob_summary(open_stats, open_eu)
-    pick = _pick_1x2_combined(open_stats, open_eu, control, trap)
+    jingcai = payload.get("jingcai")
+    odds_blend_summary = ""
+    odds_base = None
+    if cfg.ODDS_FIRST_ENABLED:
+        from analysis.signals.odds_probs import blend_odds_1x2
+
+        hist_for_blend = None
+        got = _get_hist_rates(open_stats, open_eu)
+        if got:
+            hist_for_blend, _ = got
+        odds_base, odds_blend_summary, _ = blend_odds_1x2(cur, hist_for_blend, jingcai)
+
+    pick = _pick_1x2_combined(open_stats, open_eu, control, trap, odds_base=odds_base)
     if pick is None:
-        pick = _pick_1x2_combined(stats, eu, control, trap)
+        pick = _pick_1x2_combined(stats, eu, control, trap, odds_base=odds_base)
 
     gs_notes: list[str] = []
     gs_analysis = None
+    qual_alert: dict | None = None
+    alert_tags: list[str] = []
     if pick is not None and match_name:
         try:
             from analysis.tournament.group_stage import analyze_match_from_name, adjust_rates_for_group_stage
@@ -436,23 +510,12 @@ def build_recommendation(payload: dict) -> Recommendation:
             gs_analysis = analyze_match_from_name(match_name)
             if gs_analysis and not gs_analysis.get("is_finished"):
                 result, result_cn, hist_rates, combined, hist_best = pick
+                rule_key = result
                 combined, gs_notes = adjust_rates_for_group_stage(combined, gs_analysis)
-                ordered = sorted(combined.items(), key=lambda x: -x[1])
-                new_key = ordered[0][0]
-                mt = gs_analysis.get("match_type")
-                if mt in ("collusion_watch", "draw_friendly", "open_race"):
-                    draw_v = combined.get("draw", 0)
-                    if draw_v >= ordered[0][1] - 0.025:
-                        new_key = "draw"
-                elif mt == "must_win":
-                    hs = gs_analysis.get("home_situation") or {}
-                    aws = gs_analysis.get("away_situation") or {}
-                    if hs.get("pressure") == "high" and aws.get("pressure") != "high":
-                        if combined.get("home", 0) >= combined.get("away", 0) - 0.03:
-                            new_key = "home"
-                    elif aws.get("pressure") == "high" and hs.get("pressure") != "high":
-                        if combined.get("away", 0) >= combined.get("home", 0) - 0.03:
-                            new_key = "away"
+                new_key, gs_extra = _resolve_group_stage_pick(
+                    rule_key, combined, hist_rates, hist_best, gs_analysis,
+                )
+                gs_notes.extend(gs_extra)
                 result, result_cn = new_key, RESULT_CN[new_key]
                 pick = (result, result_cn, hist_rates, combined, hist_best)
 
@@ -463,12 +526,15 @@ def build_recommendation(payload: dict) -> Recommendation:
                 hint = kctx.get("prediction_hint") or {}
                 if kctx.get("picking_level") in ("watch", "medium", "high"):
                     result, result_cn, hist_rates, combined, hist_best = pick
-                    bias = float(hint.get("draw_bias") or 0.06)
+                    bias = float(hint.get("draw_bias") or 0.06) * cfg.KNOCKOUT_DRAW_BIAS_SCALE
                     combined = dict(combined)
                     combined["draw"] = combined.get("draw", 0) + bias
                     total = sum(combined.values()) or 1.0
                     combined = {k: v / total for k, v in combined.items()}
-                    if hint.get("model_1x2_hint") == "draw":
+                    if (
+                        hint.get("model_1x2_hint") == "draw"
+                        and not _open_hist_favors(hist_rates, hist_best)
+                    ):
                         draw_v = combined.get("draw", 0)
                         top = max(combined.values())
                         if draw_v >= top - 0.03:
@@ -478,6 +544,18 @@ def build_recommendation(payload: dict) -> Recommendation:
                     gs_notes.extend((hint.get("notes") or [])[:2])
                 elif hint.get("picking_note"):
                     gs_notes.append(hint["picking_note"])
+
+            from analysis.signals.qualification_alert import build_qualification_divergence_alert
+
+            qual_alert = build_qualification_divergence_alert(
+                cur,
+                gs_analysis,
+                match_name=match_name,
+                fixture_id=str(payload.get("fixture_id") or ""),
+            )
+            if qual_alert:
+                alert_tags.extend(qual_alert.get("alert_tags") or [])
+                gs_notes.insert(0, qual_alert["advice"])
         except Exception:
             pass
 
@@ -547,7 +625,11 @@ def build_recommendation(payload: dict) -> Recommendation:
     else:
         ah_cn = AH_CN["skip"]
 
-    pattern_ref = f"{int(control.pattern_weight * 100)}%（{LEVEL_CN[control.level]}控盘）"
+    pattern_ref = (
+        odds_blend_summary
+        if cfg.ODDS_FIRST_ENABLED and odds_blend_summary
+        else f"{int(control.pattern_weight * 100)}%（{LEVEL_CN[control.level]}控盘）"
+    )
     mp = trap.market_patterns
     mp_summary = getattr(mp, "conversion_summary", "") if mp else ""
     mp_names = [p.get("name") for p in (getattr(mp, "patterns", None) or []) if p.get("name")]
@@ -560,7 +642,7 @@ def build_recommendation(payload: dict) -> Recommendation:
         f"【赛事概率】{open_prob_txt}。"
         f"【资金解读】{funds_txt}。"
         f"【综合推荐】{result_cn}，比分 {'、'.join(scores_detail[:3]) if scores_detail else '—'}。"
-        f"规律权重 {pattern_ref}。"
+        f"{'【权重】' if cfg.ODDS_FIRST_ENABLED and odds_blend_summary else '规律权重 '}{pattern_ref}。"
     )
     if hist_best != result:
         summary += f"（初盘单项最高 {RESULT_CN[hist_best]}，临盘风控调整后为 {result_cn}）"
@@ -600,40 +682,9 @@ def build_recommendation(payload: dict) -> Recommendation:
         open_eu_sample_count=open_eu_count,
         market_pattern_summary=mp_summary,
         market_pattern_names=mp_names or None,
+        odds_blend_summary=odds_blend_summary,
+        alert_tags=alert_tags or None,
+        qualification_divergence=qual_alert,
+        eu_ah_divergence_score=(qual_alert or {}).get("divergence_score"),
     )
-
-
-def recommendation_to_baseline(rec: Recommendation) -> dict:
-    """Rule-based picks used as the single source of truth for final output."""
-    return {
-        "result_1x2": rec.result_1x2,
-        "result_1x2_cn": rec.result_1x2_cn,
-        "likely_scores": rec.likely_scores,
-        "likely_scores_detail": rec.likely_scores_detail,
-        "asian_handicap_pick": rec.asian_handicap_pick,
-        "asian_handicap_cn": rec.asian_handicap_cn,
-        "asian_handicap_reason": rec.asian_handicap_reason,
-        "over_under_hint": rec.over_under_hint,
-        "over_under_cn": rec.over_under_cn,
-        "confidence": rec.confidence,
-        "confidence_cn": rec.confidence_cn,
-        "summary": rec.summary,
-        "sample_count": rec.sample_count,
-        "eu_sample_count": rec.eu_sample_count,
-        "insufficient_data": rec.insufficient_data,
-        "market_notes": rec.market_notes or [],
-        "open_result_1x2_cn": rec.open_result_1x2_cn,
-        "open_probability_summary": rec.open_probability_summary,
-        "pattern_reference_cn": rec.pattern_reference_cn,
-        "control_level_cn": rec.control_level_cn,
-        "control_trajectory": rec.control_trajectory,
-        "risk_level_cn": rec.risk_level_cn,
-        "open_sample_count": rec.open_sample_count,
-        "open_eu_sample_count": rec.open_eu_sample_count,
-        "trap_notes": rec.trap_notes or [],
-        "confidence_reason": rec.confidence_reason,
-        "funds_interpretation": rec.funds_interpretation,
-        "market_pattern_summary": rec.market_pattern_summary,
-        "market_pattern_names": rec.market_pattern_names or [],
-    }
 

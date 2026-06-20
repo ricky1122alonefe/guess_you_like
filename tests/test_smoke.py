@@ -134,6 +134,84 @@ def test_group_stage_motivation():
     assert b_open["match_type"] in ("open_race", "draw_friendly")
 
 
+def test_group_stage_does_not_flip_clear_open_home():
+    from analysis.rules.engine import _open_hist_favors, _resolve_group_stage_pick
+    from analysis.tournament.group_stage import adjust_rates_for_group_stage
+
+    hist_rates = {"home": 0.505, "draw": 0.291, "away": 0.204}
+    assert _open_hist_favors(hist_rates, "home") is True
+
+    combined = {"home": 0.159, "draw": 0.092, "away": 0.064}
+    gs = {
+        "match_type": "collusion_watch",
+        "match_type_cn": "默契球观察",
+        "draw_bias": 0.14,
+        "home_bias": -0.04,
+        "away_bias": -0.04,
+        "likely_direction_cn": "平局或小比分",
+    }
+    adjusted, _ = adjust_rates_for_group_stage(combined, gs)
+    new_key, notes = _resolve_group_stage_pick("home", adjusted, hist_rates, "home", gs)
+    assert new_key == "home"
+
+
+def test_odds_first_blend():
+    from analysis.signals.odds_probs import blend_odds_1x2
+
+    cur = {
+        "eu_home": 1.85,
+        "eu_draw": 3.4,
+        "eu_away": 4.2,
+        "eu_open_home": 2.0,
+        "eu_open_draw": 3.3,
+        "eu_open_away": 3.8,
+        "ah_open_line": -0.5,
+        "ah_line": -0.75,
+        "ah_open_home_water": 0.95,
+        "ah_home_water": 0.88,
+        "ah_open_away_water": 0.93,
+        "ah_away_water": 0.98,
+    }
+    hist = {"home": 0.55, "draw": 0.25, "away": 0.20}
+    jc = {"has_sp": True, "sp_home": 1.95, "sp_draw": 3.10, "sp_away": 3.60}
+    blended, summary, shares = blend_odds_1x2(cur, hist, jc)
+    assert blended["home"] > blended["away"]
+    assert "临盘欧" in summary
+    assert "竞彩" in summary
+    assert shares.get("live_eu", 0) > 0
+
+
+def test_qualification_divergence_alert():
+    from analysis.signals.qualification_alert import build_qualification_divergence_alert
+
+    cur = {
+        "eu_open_home": 1.55,
+        "eu_open_draw": 4.0,
+        "eu_open_away": 5.5,
+        "eu_home": 1.45,
+        "eu_draw": 4.2,
+        "eu_away": 6.0,
+        "ah_open_line": -1.0,
+        "ah_line": -0.5,
+        "ah_open_home_water": 0.92,
+        "ah_home_water": 0.95,
+        "ah_open_away_water": 0.94,
+        "ah_away_water": 0.91,
+    }
+    gs = {
+        "match_type": "collusion_watch",
+        "match_type_cn": "默契球观察",
+        "round": 2,
+        "likely_direction_cn": "平局或小比分",
+        "is_finished": False,
+    }
+    alert = build_qualification_divergence_alert(cur, gs, match_name="墨西哥VS韩国")
+    assert alert is not None
+    assert alert["tag"] == "出线·欧亚分歧"
+    assert alert["divergence_score"] >= 30
+    assert "出线·欧亚分歧" in alert["advice"]
+
+
 def test_long_image_export_helper():
     from share_card import long_image_export_script
 

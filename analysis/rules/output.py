@@ -39,6 +39,10 @@ def recommendation_to_baseline(rec: Recommendation) -> dict:
         "funds_interpretation": rec.funds_interpretation,
         "market_pattern_summary": rec.market_pattern_summary,
         "market_pattern_names": rec.market_pattern_names or [],
+        "odds_blend_summary": rec.odds_blend_summary,
+        "alert_tags": rec.alert_tags or [],
+        "qualification_divergence": rec.qualification_divergence,
+        "eu_ah_divergence_score": rec.eu_ah_divergence_score,
     }
 
 
@@ -158,6 +162,10 @@ def recommendation_from_dict(data: dict) -> Recommendation:
         funds_interpretation=data.get("funds_interpretation", ""),
         market_pattern_summary=data.get("market_pattern_summary", ""),
         market_pattern_names=data.get("market_pattern_names"),
+        odds_blend_summary=data.get("odds_blend_summary", ""),
+        alert_tags=data.get("alert_tags"),
+        qualification_divergence=data.get("qualification_divergence"),
+        eu_ah_divergence_score=data.get("eu_ah_divergence_score"),
     )
 
 

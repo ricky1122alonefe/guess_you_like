@@ -48,6 +48,15 @@ def rec_to_row(rec, *, cur=None, predict_date: str = "") -> dict:
         "比分命中": "",
         "备注": "",
     }
+    if rec.odds_blend_summary:
+        row["赔率权重"] = rec.odds_blend_summary
+    if rec.alert_tags:
+        row["特殊标注"] = "、".join(rec.alert_tags)
+    if rec.eu_ah_divergence_score is not None:
+        row["欧亚分歧"] = rec.eu_ah_divergence_score
+    if rec.qualification_divergence:
+        qd = rec.qualification_divergence
+        row["出线欧亚提示"] = qd.get("advice") or ""
     if cur is not None:
         row["临盘盘口"] = cur.ah_line
         row["临盘欧赔"] = f"{cur.eu_home}/{cur.eu_draw}/{cur.eu_away}"
@@ -61,6 +70,7 @@ _CSV_COLUMN_ORDER = [
     "诱盘解读", "初盘倾向", "初盘概率", "规律参考", "控盘", "风险",
     "初盘样本", "临盘样本", "实际赛果", "实际比分", "1X2命中", "比分命中", "备注",
     "临盘盘口", "临盘欧赔", "初盘盘口",
+    "赔率权重", "特殊标注", "欧亚分歧", "出线欧亚提示",
     "赛果预测", "竞彩玩法", "竞彩推荐", "竞彩SP",
 ]
 

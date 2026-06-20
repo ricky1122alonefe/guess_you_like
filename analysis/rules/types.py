@@ -45,3 +45,7 @@ class Recommendation:
     funds_interpretation: str = ""
     market_pattern_summary: str = ""
     market_pattern_names: list[str] | None = None
+    odds_blend_summary: str = ""
+    alert_tags: list[str] | None = None
+    qualification_divergence: dict | None = None
+    eu_ah_divergence_score: int | None = None

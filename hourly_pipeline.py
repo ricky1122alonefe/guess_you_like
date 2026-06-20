@@ -240,6 +240,11 @@ def _predict_one(
         return result
 
     payload = build_payload(str(ah_path), str(eu_path), history=history, sample_limit=10)
+    if fixture_id:
+        payload["fixture_id"] = str(fixture_id)
+    jc = (poll_meta or {}).get("jingcai")
+    if jc:
+        payload["jingcai"] = jc
     rec = build_recommendation(payload)
     row = rec_to_row(rec, cur=cur, predict_date=predict_date)
     base = recommendation_to_baseline(rec)

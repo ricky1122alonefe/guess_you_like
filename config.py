@@ -79,6 +79,28 @@ EU_ODDS_MOVE_EPS = 0.02
 EU_IMPLIED_MOVE_EPS = 0.008
 EU_DIVERGE_INTENSITY = 0.40                   # 欧赔异动而亚盘几乎不动的门槛
 DRAW_STEAM_DROP = 0.03                        # 平赔显著下调视为平局资金
+DRAW_STEAM_RESPECT_OPEN_HIST = True           # 初盘单项明确时，不因平赔下调改推平局
+
+# ── 世界杯小组战意（R2/R3 以风险提示为主，避免过度改判平局）──
+GROUP_STAGE_BIAS_SCALE = 0.35                 # 战意 bias 计入综合概率时的缩放
+GROUP_STAGE_MAX_DRAW_NUDGE = 0.04             # 战意最多抬平这么多（绝对值）
+GROUP_STAGE_MAX_SIDE_NUDGE = 0.03             # 主/客战意 bias 上限
+GROUP_STAGE_DRAW_FLIP_MIN_LEAD = 0.06         # 非初盘锁定时，平局需领先次选至少此值才改判
+OPEN_HIST_LOCK_MIN_RATE = 0.50                # 初盘单项最高至少此概率
+OPEN_HIST_LOCK_MIN_MARGIN = 0.08                # 且领先次选至少此差距 → 禁止战意/临盘改推平局
+KNOCKOUT_DRAW_BIAS_SCALE = 0.40               # 淘汰赛挑对手时的平局抬升缩放
+
+# ── 赔率优先 1X2（欧赔/亚盘/竞彩/历史 加权）────────────────
+ODDS_FIRST_ENABLED = True
+ODDS_W_LIVE_EU = 0.40
+ODDS_W_OPEN_EU = 0.15
+ODDS_W_AH = 0.15
+ODDS_W_HIST = 0.15
+ODDS_W_JINGCAI = 0.15
+ODDS_FIRST_TRAP_SCALE = 0.45                  # 诱盘惩罚在赔率融合模式下减半影响
+
+# ── 出线场次 · 欧亚分歧标注 ───────────────────────────────
+QUALIFICATION_DIVERGENCE_MIN_SCORE = 30       # 小组出线/战意场，≥此分特殊标注
 
 # ── 高控盘决策 ────────────────────────────────────────
 HIGH_CONTROL_TRAP_INTENSITY = 0.55

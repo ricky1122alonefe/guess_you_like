@@ -428,6 +428,10 @@ a {{ color: #2563eb; text-decoration: none; word-break: break-word; }}
 .tag {{ display: inline-block; background: #eff6ff; color: #1d4ed8; padding: 2px 8px;
         border-radius: 4px; font-size: 12px; margin: 2px 4px 2px 0; max-width: 100%; }}
 .tag-live {{ background: #fef3c7; color: #b45309; }}
+.tag-qual-div {{ background: #fff7ed; color: #c2410c; border: 1px solid #fdba74; font-weight: 700; }}
+.qual-div-banner {{ background: linear-gradient(135deg,#fff7ed,#ffedd5); border: 1px solid #fdba74;
+  border-radius: 12px; padding: 14px 16px; margin: 12px 0 16px; }}
+.qual-div-banner p {{ margin: 8px 0 0; font-size: 14px; line-height: 1.55; }}
 .tag-ok {{ background: #ecfdf5; color: #047857; }}
 .tag-miss {{ background: #fef2f2; color: #b91c1c; }}
 .tag-active {{ background: #1d4ed8; color: #fff; }}
@@ -601,6 +605,17 @@ def _closing_odds_txt(settled: dict) -> str:
     return " · ".join(parts) if parts else "—"
 
 
+def _alert_tags_html(m: dict, row: dict | None = None) -> str:
+    tags = list(m.get("alert_tags") or [])
+    row = row or {}
+    extra = row.get("特殊标注") or ""
+    if extra:
+        tags.extend(t for t in str(extra).split("、") if t and t not in tags)
+    if not tags:
+        return ""
+    return "".join(f' <span class="tag tag-qual-div">{_e(t)}</span>' for t in tags)
+
+
 def _dashboard_active_row(m: dict, indexes: dict) -> str:
     row = m.get("predict_row") or m
     fid = str(m.get("fixture_id") or "")
@@ -620,6 +635,7 @@ def _dashboard_active_row(m: dict, indexes: dict) -> str:
     phase_tag = ""
     if phase == "live":
         phase_tag = ' <span class="tag tag-live">进行中</span>'
+    alert_tag = _alert_tags_html(m, row)
     detail = f'<a href="/match/{_e(fid)}">趋势 ({n_pts})</a>' if fid else "—"
     ai_btn = (
         f'<button type="button" class="btn btn-sm btn-ai" '
@@ -633,7 +649,7 @@ def _dashboard_active_row(m: dict, indexes: dict) -> str:
     )
     return (
         f"<tr><td class='parlay-pick'>{cb}</td>"
-        f"<td><a href=\"/match/{_e(fid)}\">{_e(name)}</a>{phase_tag}</td>"
+        f"<td><a href=\"/match/{_e(fid)}\">{_e(name)}</a>{phase_tag}{alert_tag}</td>"
         f"<td>{pick_cell}</td><td>{_e(scores)}</td>"
         f"<td>{_e(ah)}</td><td>{_e(conf)}</td><td>{detail}</td>"
         f"<td>{ai_btn}</td></tr>\n"
@@ -1252,15 +1268,20 @@ def _pred_card(pred: dict, *, title: str = "最新推荐") -> str:
     if market_names:
         market_lines += f"<p class='meta'><strong>识别套路：</strong>{_e('、'.join(str(x) for x in market_names))}</p>"
     market_block = _fold("欧亚转换 / 盘赔对照", market_lines, muted=True) if market_lines else ""
+    alert_tags = pred.get("alert_tags") or []
+    alert_html = "".join(f' <span class="tag tag-qual-div">{_e(t)}</span>' for t in alert_tags)
+    odds_w = pred.get("odds_blend_summary") or pred.get("pattern_reference_cn") or ""
+    odds_line = f"<p class='meta'><strong>权重：</strong>{_e(odds_w)}</p>" if odds_w else ""
     return f"""
 <div class="card pred-card">
-  <h3>{_e(title)} <span class="tag">{_e(src_label)}</span></h3>
+  <h3>{_e(title)} <span class="tag">{_e(src_label)}</span>{alert_html}</h3>
   <p><strong class="pick">{_e(pick)}</strong>{sp_txt}
      {f"<span class='tag'>{_e(jc_play)}</span>" if jc_play and jc_play != "—" else ""}</p>
   <p>比分 {_e(scores)}
      · 亚盘 {_e(row.get('亚盘') or pred.get('asian_handicap_cn'))}
      · 置信 {_e(row.get('置信度') or pred.get('confidence_cn'))}</p>
   {match_line}
+  {odds_line}
   {market_block}
   {meta_block}
 </div>"""
@@ -3337,6 +3358,23 @@ def _build_match_strategy_panel(match_name: str, prediction: dict | None = None)
 </div>"""
 
 
+def _qualification_divergence_banner(prediction: dict | None) -> str:
+    if not prediction:
+        return ""
+    qd = prediction.get("qualification_divergence") or {}
+    if not qd.get("tag"):
+        return ""
+    signals = qd.get("signals") or []
+    sig_txt = "；".join(signals[:3])
+    return f"""
+<div class="qual-div-banner">
+  <strong>{_e(qd.get('tag'))}</strong>
+  <span class="meta">{_e(qd.get('group_context_cn'))} · {_e(qd.get('consistency_cn'))} · {_e(qd.get('divergence_score'))} 分</span>
+  <p>{_e(qd.get('advice'))}</p>
+  {f"<p class='meta'>{_e(sig_txt)}</p>" if sig_txt else ""}
+</div>"""
+
+
 def html_match_detail(
     index: dict,
     *,
@@ -3383,6 +3421,7 @@ def html_match_detail(
         src_bits.append("推荐来自文件")
     last_ts = format_ts(index.get("updated_at") or (timeline[-1].get("ts") if timeline else None))
     freshness = f"<p class='meta freshness'>{' · '.join(src_bits)} · 最新 {_e(last_ts)} · 北京时间</p>"
+    qual_banner = _qualification_divergence_banner(prediction)
 
     jingcai_card = _jingcai_card(_latest_jingcai(timeline), prediction)
     bf = _latest_betfair(timeline)
@@ -3600,6 +3639,7 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
     <h1>{_e(name)}</h1>
     {freshness}
   </div>
+{qual_banner}
 {settled_card}
 {_ai_chat_card(scope="match", fid=fid)}
 {strategy_panel}

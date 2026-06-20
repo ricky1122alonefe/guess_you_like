@@ -386,18 +386,31 @@ def adjust_rates_for_group_stage(
     rates: dict[str, float],
     analysis: dict[str, Any] | None,
 ) -> tuple[dict[str, float], list[str]]:
-    """Apply small draw/home/away nudges from group motivation model."""
+    """Apply capped draw/home/away nudges from group motivation (risk context, not hard flip)."""
     if not analysis:
         return rates, []
+    import config as cfg
+
     out = dict(rates)
     notes: list[str] = []
-    out["draw"] = out.get("draw", 0) + analysis.get("draw_bias", 0)
-    out["home"] = out.get("home", 0) + analysis.get("home_bias", 0)
-    out["away"] = out.get("away", 0) + analysis.get("away_bias", 0)
+    scale = cfg.GROUP_STAGE_BIAS_SCALE
+    draw_nudge = min(float(analysis.get("draw_bias") or 0) * scale, cfg.GROUP_STAGE_MAX_DRAW_NUDGE)
+    home_nudge = min(max(float(analysis.get("home_bias") or 0) * scale, 0), cfg.GROUP_STAGE_MAX_SIDE_NUDGE)
+    away_nudge = min(max(float(analysis.get("away_bias") or 0) * scale, 0), cfg.GROUP_STAGE_MAX_SIDE_NUDGE)
+    if float(analysis.get("home_bias") or 0) < 0:
+        home_nudge = max(float(analysis.get("home_bias") or 0) * scale, -cfg.GROUP_STAGE_MAX_SIDE_NUDGE)
+    if float(analysis.get("away_bias") or 0) < 0:
+        away_nudge = max(float(analysis.get("away_bias") or 0) * scale, -cfg.GROUP_STAGE_MAX_SIDE_NUDGE)
+    out["draw"] = out.get("draw", 0) + draw_nudge
+    out["home"] = out.get("home", 0) + home_nudge
+    out["away"] = out.get("away", 0) + away_nudge
     total = sum(out.values()) or 1.0
     out = {k: v / total for k, v in out.items()}
     mt = analysis.get("match_type_cn") or analysis.get("match_type")
-    notes.append(f"【小组战意·{mt}】{analysis.get('likely_direction_cn', '')}")
+    notes.append(
+        f"【小组战意·{mt}】{analysis.get('likely_direction_cn', '')}"
+        f"（仅风险提示，初盘明确时不改推方向）"
+    )
     for line in (analysis.get("reasoning") or [])[:2]:
         notes.append(line)
     return out, notes

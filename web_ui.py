@@ -89,6 +89,99 @@ function aiDeepAnalyze(fid, btn) {
       if (b) { b.disabled = false; b.textContent = b.dataset.label || '🔍 AI 深度分析'; }
     });
 }
+
+function escHtmlSim(s) {
+  const d = document.createElement('div');
+  d.textContent = s == null ? '' : String(s);
+  return d.innerHTML;
+}
+
+function renderSimilarityAi(d) {
+  const ev = (d.key_evidence || []).map(x => '<li>' + escHtmlSim(x) + '</li>').join('');
+  return '<div class="similar-ai-box">'
+    + '<div class="similar-ai-top"><strong>' + escHtmlSim(d.headline || '相似盘口解读') + '</strong>'
+    + '<span class="tag">' + escHtmlSim(d.confidence_cn || '—') + '</span></div>'
+    + '<p class="similar-ai-pick"><strong>胜平负</strong> ' + escHtmlSim(d.result_pick_cn || '—')
+    + ' · <strong>亚盘</strong> ' + escHtmlSim(d.handicap_pick_cn || '—')
+    + ' · <strong>比分</strong> ' + escHtmlSim(d.likely_scores || '—') + '</p>'
+    + '<p>' + escHtmlSim(d.summary || '') + '</p>'
+    + (d.sample_reliability ? '<p class="meta">' + escHtmlSim(d.sample_reliability) + '</p>' : '')
+    + (ev ? '<ul class="similar-ai-ev">' + ev + '</ul>' : '')
+    + '<p class="meta"><strong>风险</strong> ' + escHtmlSim(d.risk || '—') + '</p>'
+    + (d.vs_baseline ? '<p class="meta"><strong>对比规则推荐</strong> ' + escHtmlSim(d.vs_baseline) + '</p>' : '')
+    + (d.action ? '<p class="similar-ai-action">' + escHtmlSim(d.action) + '</p>' : '')
+    + '</div>';
+}
+
+function aiSimilarityAnalyze(fid, source, btn) {
+  const out = document.getElementById('sim-ai-' + fid + '-' + source);
+  if (btn) { btn.disabled = true; btn.textContent = '分析中…'; }
+  if (out) out.innerHTML = '<p class="meta">正在解读相似盘口样本…</p>';
+  fetch('/api/match/' + fid + '/similarity-ai', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({source: source, force: true})
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (btn) { btn.disabled = false; btn.textContent = btn.dataset.label || '✨ AI盘口解读'; }
+      if (!out) return;
+      if (!d.ok) {
+        out.innerHTML = '<p class="meta similar-ai-err">' + escHtmlSim(d.error || '分析失败') + '</p>';
+        return;
+      }
+      out.innerHTML = renderSimilarityAi(d);
+    })
+    .catch(e => {
+      if (btn) { btn.disabled = false; btn.textContent = btn.dataset.label || '✨ AI盘口解读'; }
+      if (out) out.innerHTML = '<p class="meta similar-ai-err">请求失败: ' + escHtmlSim(e) + '</p>';
+    });
+}
+
+function runSettle(opts) {
+  opts = opts || {};
+  const body = {};
+  if (opts.resettle) body.resettle = true;
+  if (opts.fixture_id) body.fixture_id = String(opts.fixture_id);
+  if (opts.fixture_ids) body.fixture_ids = opts.fixture_ids;
+  return fetch('/api/settle', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  }).then(r => r.json());
+}
+
+function manualSettle(btn, opts) {
+  opts = opts || {};
+  const tip = opts.resettle
+    ? '重新抓取终场比分并覆盖已有赛果？'
+    : '从 live.500 / 世界杯 API 抓取已完场比分并写入结算？';
+  if (!confirm(tip)) return;
+  if (btn) { btn.disabled = true; btn.textContent = '抓取中…'; }
+  runSettle(opts).then(d => {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = btn.dataset.label || '抓取完赛赛果';
+    }
+    if (!d.ok) {
+      showToast(d.error || d.message || '结算失败', true);
+      return;
+    }
+    const names = (d.settled_matches || []).slice(0, 3).map(x => x.score_text ? x.match_name + ' ' + x.score_text : x.match_name).filter(Boolean);
+    let msg = `结算 ${d.settled || 0} 场`;
+    if (d.skipped_live) msg += ` · 跳过进行中 ${d.skipped_live}`;
+    if (d.skipped_no_score) msg += ` · 暂无比分 ${d.skipped_no_score}`;
+    if (names.length) msg += '\\n' + names.join('\\n');
+    showToast(msg, false);
+    if ((d.settled || 0) > 0) setTimeout(() => location.reload(), 900);
+  }).catch(e => {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = btn.dataset.label || '抓取完赛赛果';
+    }
+    showToast('请求失败: ' + e, true);
+  });
+}
 """
 
 _AI_CHAT_JS = """
@@ -222,7 +315,7 @@ function toggleParlayPick(el) {
       showToast('该场档位为「' + label + '」，串关建议优先选「可串」', true);
     }
     if (!sweet && grade !== '稳胆甜区' && grade !== '稳胆') {
-      showToast('非 SP 1.4–1.6 甜区，重正确率可单关，串关请优先「稳胆甜区」', true);
+      showToast('非 SP 1.3–1.6 甜区，重正确率可单关，串关请优先「稳胆甜区」', true);
     }
     if (parlaySelected.size >= 2) {
       el.checked = false;
@@ -734,7 +827,7 @@ def _sweet_spot_teaser(
     *,
     match_date: str = "",
 ) -> str:
-    """Homepage block: SP 1.4–1.6 for the current 比赛日 / 收益周期 only."""
+    """Homepage block: SP 1.3–1.6 for the current 比赛日 / 收益周期 only."""
     from accuracy_pick import build_sweet_spot_analysis
     from daily_picks import _kickoff_label
 
@@ -756,7 +849,7 @@ def _sweet_spot_teaser(
     if not rows:
         import config as app_cfg
 
-        lo = getattr(app_cfg, "ACCURACY_SP_MIN", 1.40)
+        lo = getattr(app_cfg, "ACCURACY_SP_MIN", 1.30)
         hi = getattr(app_cfg, "ACCURACY_SP_MAX", 1.60)
         return f"""
 <div class="card sweet-teaser muted">
@@ -765,7 +858,7 @@ def _sweet_spot_teaser(
 </div>"""
 
     rows.sort(key=lambda x: (x[0], -(x[2].get("accuracy_score") or 0)))
-    lo = rows[0][2].get("sp_target_min", 1.40)
+    lo = rows[0][2].get("sp_target_min", 1.30)
     hi = rows[0][2].get("sp_target_max", 1.60)
     items = ""
     for _, m, sa in rows[:8]:
@@ -821,12 +914,17 @@ def _sweet_spot_panel(prediction: dict | None) -> str:
         return ""
     from accuracy_pick import build_sweet_spot_analysis
 
+    import config as app_cfg
+
     sa = prediction.get("sweet_spot_analysis") or build_sweet_spot_analysis(prediction)
+    lo = sa.get("sp_target_min") or getattr(app_cfg, "ACCURACY_SP_MIN", 1.30)
+    hi = sa.get("sp_target_max") or getattr(app_cfg, "ACCURACY_SP_MAX", 1.60)
+    band_txt = f"{lo:g}–{hi:g}"
     if not sa.get("ok"):
         reason = sa.get("reason") or "暂无数据"
         return f"""
 <div class="card sweet-spot-card muted">
-  <h3>🎯 SP 甜区分析 <span class="tag">1.4–1.6</span></h3>
+  <h3>🎯 SP 甜区分析 <span class="tag">{_e(band_txt)}</span></h3>
   <p class="meta">{_e(reason)}</p>
 </div>"""
 
@@ -926,7 +1024,17 @@ def _dashboard_active_row(
     phase = m.get("match_phase") or "upcoming"
     phase_tag = ""
     if phase == "live":
-        phase_tag = ' <span class="tag tag-live">进行中</span>'
+        score = (m.get("live_score") or "").strip()
+        minute = (m.get("live_status_label") or "").strip()
+        if score and minute and minute != "进行中":
+            live_txt = f"进行中 {score} · {minute}"
+        elif score:
+            live_txt = f"进行中 {score}"
+        elif minute and minute != "进行中":
+            live_txt = f"进行中 · {minute}"
+        else:
+            live_txt = "进行中"
+        phase_tag = f' <span class="tag tag-live">{_e(live_txt)}</span>'
     alert_tag = _alert_tags_html(m, row)
     tier_tag = _tier_badge_html(m, row)
     acc_tag = _accuracy_badge_html(m, row)
@@ -1021,6 +1129,7 @@ def html_dashboard(
         list_available_match_days,
         load_dashboard_matches,
         load_kickoff_map,
+        load_live_status_map,
         resolve_match_day,
     )
     from match_settlement import classify_matches, load_settled_map
@@ -1031,8 +1140,10 @@ def html_dashboard(
     indexes = {x.get("fixture_id"): x for x in list_match_indexes(output_root)}
     settled_map = load_settled_map(output_root)
     kickoff_map = load_kickoff_map(within_days=window)
+    live_status_map = load_live_status_map(within_days=window)
     upcoming, live, finished = classify_matches(
         matches, kickoff_map=kickoff_map, settled_map=settled_map,
+        live_status_map=live_status_map,
     )
     all_active = upcoming + live
     available_days = list_available_match_days(all_active, kickoff_map)
@@ -1041,6 +1152,12 @@ def html_dashboard(
 
     all_active_enriched = [_enrich_dashboard_match(m) for m in all_active]
     sweet_day_enriched = [_enrich_dashboard_match(m) for m in sweet_day_matches]
+    n_live = sum(1 for m in all_active_enriched if m.get("match_phase") == "live")
+    n_upcoming = len(all_active_enriched) - n_live
+    if n_live:
+        active_title = f"未开赛 {n_upcoming} · 进行中 {n_live} · 共 {len(all_active)} 场"
+    else:
+        active_title = f"未开赛 / 进行中 · {len(all_active)} 场"
 
     active_rows = "".join(
         _dashboard_active_row(m, indexes, kickoff_map) for m in all_active_enriched
@@ -1062,6 +1179,10 @@ def html_dashboard(
     import config as app_cfg
     from ai_schedule import format_ai_interval
 
+    sweet_lo = getattr(app_cfg, "ACCURACY_SP_MIN", 1.30)
+    sweet_hi = getattr(app_cfg, "ACCURACY_SP_MAX", 1.60)
+    sweet_band_txt = f"{sweet_lo:g}–{sweet_hi:g}"
+
     lr = state.get("last_run") or {}
     run_status = "运行中" if state.get("running") else "空闲"
     if app_cfg.AI_AUTO_ENABLED:
@@ -1078,6 +1199,12 @@ def html_dashboard(
      {'· 结算 ' + str(lr.get('settled_count', 0)) + ' 场' if lr.get('settled_count') else ''}</p>
   <p class="meta">{ai_schedule_txt} · 仅 <strong>24h 内</strong>开赛 · poll 窗口 {window:g} 天</p>
   <p class="meta" id="db-line">数据库：加载中…</p>
+  <p class="meta">
+    <button type="button" class="btn btn-sm" style="background:#059669" data-label="抓取完赛赛果"
+      onclick="manualSettle(this)">抓取完赛赛果</button>
+    <button type="button" class="btn btn-sm" onclick="manualSettle(this, {{resettle:true}})">重算赛果</button>
+    <span id="settle-line">赛果：加载中…</span>
+  </p>
   <script>
   fetch('/api/db/status').then(r=>r.json()).then(d=>{{
     const el = document.getElementById('db-line');
@@ -1085,6 +1212,12 @@ def html_dashboard(
     const s = d.stats || {{}};
     el.textContent = `数据库：${{s.fixtures||0}} 场 · ${{s.ticks||0}} tick · ${{s.last_tick_at||'—'}}`;
   }}).catch(()=>{{ document.getElementById('db-line').textContent='数据库：未连接'; }});
+  fetch('/api/settle').then(r=>r.json()).then(d=>{{
+    const el = document.getElementById('settle-line');
+    if (!el) return;
+    if (!d.ok) {{ el.textContent = d.error || '赛果：不可用'; return; }}
+    el.textContent = `待结算 ${{d.pending_count||0}} 场 · 已结算 ${{d.settled_count||0}} 场`;
+  }}).catch(()=>{{ const el=document.getElementById('settle-line'); if(el) el.textContent='赛果：加载失败'; }});
   </script>"""
 
     finished_fold = _fold(
@@ -1150,7 +1283,7 @@ def html_dashboard(
 {wc_teaser}
 {_ai_chat_card(scope="dashboard")}
 <div class="card">
-  <h2>未开赛 / 进行中 · {len(all_active)} 场</h2>
+  <h2>{_e(active_title)}</h2>
   <div class="parlay-toolbar">
     <span class="meta">自选串关 <strong id="parlay-count">0/2</strong></span>
     <button type="button" class="btn btn-sm" id="parlay-analyze-btn" disabled
@@ -1166,7 +1299,7 @@ def html_dashboard(
   </div>
   <div class="card parlay-result" id="parlay-result"></div>
   <p class="meta" style="margin-bottom:8px">
-    <label><input type="checkbox" id="dash-filter-sweet" onchange="onDashFilter(this)"> 仅 SP 1.4–1.6 甜区</label>
+    <label><input type="checkbox" id="dash-filter-sweet" onchange="onDashFilter(this)"> 仅 SP {_e(sweet_band_txt)} 甜区</label>
     &nbsp;·&nbsp;
     <label><input type="checkbox" id="dash-filter-solid" onchange="onDashSolidFilter(this)"> 仅稳胆 / 稳胆甜区</label>
   </p>
@@ -1701,12 +1834,71 @@ def _rate_pct(v) -> str:
     return f"{x:.1f}%"
 
 
-def _similar_block(block: dict) -> str:
+def _similar_ai_card_html(data: dict | None) -> str:
+    if not data or not data.get("ok"):
+        return ""
+    ev_items = data.get("key_evidence") or []
+    ev_html = ""
+    if ev_items:
+        ev_html = "<ul class='similar-ai-ev'>" + "".join(
+            f"<li>{_e(x)}</li>" for x in ev_items[:6]
+        ) + "</ul>"
+    rel = data.get("sample_reliability")
+    rel_html = f"<p class='meta'>{_e(rel)}</p>" if rel else ""
+    vs = data.get("vs_baseline")
+    vs_html = (
+        f"<p class='meta'><strong>对比规则推荐</strong> {_e(vs)}</p>" if vs else ""
+    )
+    action = data.get("action")
+    action_html = f"<p class='similar-ai-action'>{_e(action)}</p>" if action else ""
+    return f"""
+<div class="similar-ai-box">
+  <div class="similar-ai-top">
+    <strong>{_e(data.get('headline') or '相似盘口解读')}</strong>
+    <span class="tag">{_e(data.get('confidence_cn') or '—')}</span>
+  </div>
+  <p class="similar-ai-pick">
+    <strong>胜平负</strong> {_e(data.get('result_pick_cn') or '—')}
+    · <strong>亚盘</strong> {_e(data.get('handicap_pick_cn') or '—')}
+    · <strong>比分</strong> {_e(data.get('likely_scores') or '—')}
+  </p>
+  <p>{_e(data.get('summary') or '')}</p>
+  {rel_html}
+  {ev_html}
+  <p class="meta"><strong>风险</strong> {_e(data.get('risk') or '—')}</p>
+  {vs_html}
+  {action_html}
+</div>"""
+
+
+def _similar_block(
+    block: dict,
+    *,
+    fixture_id: str = "",
+    ai_cache: dict | None = None,
+) -> str:
     samples = block.get("samples") or []
+    source = str(block.get("source") or "")
+    ai_btn = ""
+    ai_panel = ""
+    if fixture_id and source and block.get("count"):
+        cached = (ai_cache or {}).get(source)
+        panel_body = _similar_ai_card_html(cached) if cached else ""
+        ai_btn = (
+            f'<button type="button" class="btn btn-sm btn-ai similar-ai-btn" '
+            f'data-label="✨ AI盘口解读" '
+            f'onclick="aiSimilarityAnalyze(\'{_e(fixture_id)}\', \'{_e(source)}\', this)">'
+            f'✨ AI盘口解读</button>'
+        )
+        ai_panel = (
+            f'<div id="sim-ai-{_e(fixture_id)}-{_e(source)}" class="similar-ai-out">'
+            f'{panel_body}</div>'
+        )
     if not block or not block.get("count"):
         return (
-            f"<div class='card inner similar-block'><h4>{_e(block.get('title') or '相似样本')}</h4>"
-            "<p class='meta'>暂无足够相似样本</p></div>"
+            f"<div class='card inner similar-block'><div class='similar-head'>"
+            f"<h4>{_e(block.get('title') or '相似样本')}</h4>{ai_btn}</div>"
+            f"<p class='meta'>暂无足够相似样本</p>{ai_panel}</div>"
         )
     rows = "".join(
         "<tr>"
@@ -1745,10 +1937,14 @@ def _similar_block(block: dict) -> str:
             ah_line += f"<p class='meta'>分布：{' · '.join(breakdown)}</p>"
     return f"""
 <div class="card inner similar-block">
-  <h4>{_e(block.get('title'))} <span class="tag">{_e(block.get('count'))} 场</span></h4>
+  <div class="similar-head">
+    <h4>{_e(block.get('title'))} <span class="tag">{_e(block.get('count'))} 场</span></h4>
+    {ai_btn}
+  </div>
   <p><strong>{_e(block.get('rate_text'))}</strong>{avg_txt}</p>
   {ah_line}
   <p class="meta">Top比分：{_score_pills(block.get('top_scores'))}</p>
+  {ai_panel}
   <table>
     <tr><th>#</th><th>日期</th><th>比赛</th><th>比分</th><th>结果</th><th>亚盘</th><th>水位</th><th>欧赔</th><th>差值</th><th>来源</th></tr>
     {rows}
@@ -1756,12 +1952,26 @@ def _similar_block(block: dict) -> str:
 </div>"""
 
 
-def _build_similarity_html(prediction: dict | None) -> str:
+def _build_similarity_html(
+    prediction: dict | None,
+    *,
+    fixture_id: str = "",
+    output_root: Path | None = None,
+) -> str:
     sim = (prediction or {}).get("similarity_analysis") or {}
     if not sim:
         return ""
-    open_blocks = "".join(_similar_block(b) for b in (sim.get("open") or []))
-    live_blocks = "".join(_similar_block(b) for b in (sim.get("live") or []))
+    ai_cache: dict = {}
+    if fixture_id and output_root:
+        try:
+            from similarity_ai import load_cached_analyses
+
+            ai_cache = load_cached_analyses(output_root, fixture_id)
+        except Exception:
+            ai_cache = {}
+    kw = {"fixture_id": fixture_id, "ai_cache": ai_cache}
+    open_blocks = "".join(_similar_block(b, **kw) for b in (sim.get("open") or []))
+    live_blocks = "".join(_similar_block(b, **kw) for b in (sim.get("live") or []))
     note = "严格匹配无样本后已自动放宽条件" if sim.get("auto_relaxed") else "按当前容差选取距离最近样本"
     total = sim.get("history_total")
     total_txt = f" · 历史库 {total} 场" if total else ""
@@ -2399,6 +2609,7 @@ table.mini { font-size: 13px; }
 {wc_css}
 </style>
 {export_script}
+<script>{_AI_BTN_JS}</script>
 <script>
 function refreshLedger() {{
   fetch('/api/worldcup/refresh', {{method:'POST'}})
@@ -2454,7 +2665,8 @@ function analyzeWorldcupMatch(fid, btn) {{
 
 <div class="card toolbar">
   <button class="btn" onclick="refreshLedger()">刷新</button>
-  <button class="btn" style="background:#059669" onclick="fetch('/api/settle',{{method:'POST'}}).then(r=>r.json()).then(d=>{{alert('结算 '+ (d.settled||0) +' 场'); location.reload();}})">抓取赛果</button>
+  <button class="btn" style="background:#059669" data-label="抓取赛果"
+    onclick="manualSettle(this)">抓取赛果</button>
   <button class="btn" style="background:#7c3aed" onclick="savePageLongImage(this)">📷 保存长图</button>
 </div>
 <p class="meta">长图会展开折叠内容并打包当前页面主要模块；单场/2串1 仍可用详情页「保存成图」。</p>
@@ -4212,7 +4424,7 @@ def html_match_detail(
         deep_hist,
         muted=True,
     ) if deep_hist else ""
-    similar_body = _build_similarity_html(prediction)
+    similar_body = _build_similarity_html(prediction, fixture_id=fid, output_root=output_root)
     similar_fold = _fold(
         "历史相似盘口 Top10（初盘 / 实时盘）",
         similar_body,
@@ -4288,6 +4500,17 @@ tr.chg td { background: #fffbeb; }
 .similar-block { overflow-x: auto; }
 .similar-block table { min-width: min(960px, 100%); }
 .similar-block .tag { margin-bottom: 4px; }
+.similar-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.similar-head h4 { margin: 0; flex: 1; min-width: min(100%, 200px); }
+.similar-ai-btn { font-size: 12px; padding: 5px 10px; white-space: nowrap; }
+.similar-ai-out { margin: 10px 0; }
+.similar-ai-box { background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 10px; padding: 10px 12px; }
+.similar-ai-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.similar-ai-top strong { color: #5b21b6; font-size: 14px; line-height: 1.35; }
+.similar-ai-pick { margin: 0 0 8px; font-size: 13px; }
+.similar-ai-ev { margin: 6px 0; padding-left: 18px; font-size: 12px; color: #475569; line-height: 1.45; }
+.similar-ai-action { margin: 8px 0 0; font-size: 13px; font-weight: 600; color: #6d28d9; }
+.similar-ai-err { color: #b91c1c; }
 h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
 .export-hero h1 { margin: 0 0 6px; font-size: clamp(1.15rem, 4vw, 1.45rem); }
 .export-footer { margin-top: 16px; padding-top: 10px; border-top: 1px dashed #cbd5e1; text-align: center; font-size: 11px; color: #64748b; }

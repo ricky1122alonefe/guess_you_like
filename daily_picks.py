@@ -111,6 +111,25 @@ def load_kickoff_map(*, within_days: float = 7) -> dict[str, datetime]:
     return out
 
 
+def load_live_status_map(*, within_days: float = 7) -> dict[str, dict]:
+    """Live / 未 / 完 status from live.500.com (same source as poll)."""
+    out: dict[str, dict] = {}
+    try:
+        from download_500 import fetch_live_fixtures
+
+        for fx in fetch_live_fixtures(within_days=within_days):
+            if not fx.status_phase:
+                continue
+            out[str(fx.fixture_id)] = {
+                "phase": fx.status_phase,
+                "score": fx.live_score or "",
+                "label": fx.status_label or "",
+            }
+    except Exception as exc:
+        log.debug("live status 不可用: %s", exc)
+    return out
+
+
 def _load_prediction_cache(output_root: str | Path) -> dict[str, dict]:
     """Latest predictions; fall back to most recent run if latest.json is empty."""
     from odds_cache import load_latest_predictions
@@ -489,21 +508,23 @@ def _score_match(m: dict, pick: dict[str, Any], kickoff_map: dict[str, datetime]
     from accuracy_pick import sp_in_sweet_spot
 
     sp = pick.get("jingcai_sp") or resolve_jingcai_sp(m, pick_key=pick["pick_key"], market=pick.get("jingcai_market"))
+    sp_balanced_bonus = 0.0
     if sp is not None:
         if sp_in_sweet_spot(sp):
             safe += 7
-            balanced += 2
-        elif sp < getattr(app_cfg, "ACCURACY_SP_MIN", 1.40):
+            sp_balanced_bonus += 2
+        elif sp < getattr(app_cfg, "ACCURACY_SP_MIN", 1.30):
             safe += 4
         elif sp <= getattr(app_cfg, "ACCURACY_SP_SOFT_MAX", 1.85):
             safe += 1
         else:
             safe -= 3
-            balanced += 2
+            sp_balanced_bonus += 2
     if conf == "高" and pick.get("consensus"):
         safe += 2
 
     balanced = 0.0
+    balanced += sp_balanced_bonus
     balanced += conf * 3
     balanced += 2 if pick["pick_cn"] not in SKIP_PICKS else -10
     if value_bet:
@@ -820,7 +841,7 @@ def _score_parlay_pair(a: dict, b: dict, score_key: str, tier_id: str) -> float:
             if leg.get("confidence_cn") == "高":
                 base += 1.5
             sp = leg.get("jingcai_sp") or leg.get("odds_used")
-            if sp and getattr(app_cfg, "ACCURACY_SP_MIN", 1.40) <= float(sp) <= getattr(app_cfg, "ACCURACY_SP_MAX", 1.60):
+            if sp and getattr(app_cfg, "ACCURACY_SP_MIN", 1.30) <= float(sp) <= getattr(app_cfg, "ACCURACY_SP_MAX", 1.60):
                 base += 3
     elif tier_id == "balanced":
         if combined and 2.5 <= combined <= 8.0:

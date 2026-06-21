@@ -15,6 +15,8 @@ from typing import Collection, Iterable
 import requests
 from bs4 import BeautifulSoup
 
+from time_utils import BEIJING, now_beijing, to_beijing
+
 BASE = "https://odds.500.com"
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -35,6 +37,9 @@ class MatchFixture:
     order_id: str = ""
     match_num: str = ""
     league: str = ""
+    status_phase: str = ""  # upcoming | live | finished
+    live_score: str = ""
+    status_label: str = ""
 
     @property
     def kickoff_label(self) -> str:
@@ -92,17 +97,63 @@ def extract_fixture_id(url_or_id: str) -> str:
 
 
 def _parse_kickoff(text: str, ref: datetime | None = None) -> datetime | None:
-    """Parse '06-14 03:00' from live.500.com row text."""
-    ref = ref or datetime.now()
+    """Parse '06-14 03:00' from live.500.com row text (Asia/Shanghai)."""
+    ref = to_beijing(ref or now_beijing())
     m = re.search(r"(\d{2})-(\d{2})\s+(\d{2}):(\d{2})", text)
     if not m:
         return None
     month, day = int(m.group(1)), int(m.group(2))
     hour, minute = int(m.group(3)), int(m.group(4))
-    dt = datetime(ref.year, month, day, hour, minute)
+    dt = datetime(ref.year, month, day, hour, minute, tzinfo=BEIJING)
     if dt < ref - timedelta(days=180):
         dt = dt.replace(year=ref.year + 1)
     return dt
+
+
+def _parse_match_score(text: str) -> str:
+    """Extract live score; skip kickoff dates like 06-21."""
+    for m in re.finditer(r"(\d+)\s*-\s*(\d+)", text):
+        h, a = int(m.group(1)), int(m.group(2))
+        if 1 <= h <= 12 and 13 <= a <= 31:
+            continue
+        if h > 20 or a > 20:
+            continue
+        return f"{h}-{a}"
+    return ""
+
+
+def _parse_row_status(tr) -> dict[str, str]:
+    """Parse live.500 tr: 未 / 完 / score / minute → phase for dashboard."""
+    if tr is None:
+        return {}
+    parts = [p.strip() for p in tr.get_text("|", strip=True).split("|") if p.strip()]
+    text = "|".join(parts)
+
+    if any(p == "完" for p in parts):
+        score = _parse_match_score(text)
+        return {"phase": "finished", "label": "完场", "score": score}
+
+    if any(p == "未" for p in parts):
+        return {"phase": "upcoming", "label": "未开赛"}
+
+    min_m = re.search(r"(\d+(?:\+\d+)?)'", text)
+    score = _parse_match_score(text)
+    if min_m:
+        return {
+            "phase": "live",
+            "label": f"{min_m.group(1)}'",
+            "score": score,
+            "minute": min_m.group(1),
+        }
+
+    if score and not any(p in ("胜", "负", "平") for p in parts):
+        return {
+            "phase": "live",
+            "label": "进行中",
+            "score": score,
+        }
+
+    return {}
 
 
 def _parse_teams_from_row(text: str) -> tuple[str, str]:
@@ -149,9 +200,10 @@ def _parse_league_from_tr(tr) -> str:
 def _within_days(kickoff: datetime | None, *, days: float, now: datetime | None = None) -> bool:
     if kickoff is None:
         return False
-    now = now or datetime.now()
+    now = to_beijing(now or now_beijing())
+    ko = to_beijing(kickoff)
     # Include about-to-start / in-play (30 min grace); exclude far-future fixtures.
-    return (kickoff >= now - timedelta(minutes=30)) and (kickoff <= now + timedelta(days=days))
+    return (ko >= now - timedelta(minutes=30)) and (ko <= now + timedelta(days=days))
 
 
 def _parse_teams_from_title(title: str) -> tuple[str, str]:
@@ -305,7 +357,7 @@ def fetch_live_fixtures(
 ) -> list[MatchFixture]:
     """Scrape fixtures from live.500.com; default = kickoff within 2 days, 世界杯 only."""
     sess = session or _session()
-    now = now or datetime.now()
+    now = to_beijing(now or now_beijing())
     league_filter = set(leagues) if leagues is not None else None
     resp = sess.get("https://live.500.com/", timeout=DEFAULT_TIMEOUT)
     resp.raise_for_status()
@@ -343,6 +395,7 @@ def fetch_live_fixtures(
         if within_days is not None and not _within_days(kickoff, days=within_days, now=now):
             continue
 
+        status = _parse_row_status(tr)
         fixtures.append(MatchFixture(
             fixture_id=fid,
             home=home,
@@ -351,6 +404,9 @@ def fetch_live_fixtures(
             order_id=order_id,
             match_num=match_num,
             league=league,
+            status_phase=status.get("phase") or "",
+            live_score=status.get("score") or "",
+            status_label=status.get("label") or "",
         ))
 
     fixtures.sort(key=lambda f: f.kickoff or datetime.max)

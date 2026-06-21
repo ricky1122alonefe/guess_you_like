@@ -18,8 +18,9 @@ WC_STAGE_ID = 26226
 WC_STANDINGS_URL = f"https://liansai.500.com/zuqiu-19476/jifen-{WC_STAGE_ID}/"
 WC_MATCH_API = "https://liansai.500.com/index.php"
 GROUPS = tuple("ABCDEFGHIJKL")
-# 500 API: 5=完场, 1=未赛, 3=进行中(推测)
-STATUS_FINISHED = {5, 4}
+# 500 API: 5=完场, 1=未赛, 3/4=进行中或中场（带比分但未终场，不可结算）
+STATUS_FINISHED = {5}
+STATUS_LIVE = {3, 4}
 
 
 @dataclass
@@ -60,6 +61,10 @@ class GroupFixture:
     @property
     def is_finished(self) -> bool:
         return self.status in STATUS_FINISHED and self.home_score is not None
+
+    @property
+    def is_live(self) -> bool:
+        return self.status in STATUS_LIVE and self.home_score is not None
 
     @property
     def score_text(self) -> str | None:

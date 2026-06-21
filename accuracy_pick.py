@@ -1,4 +1,4 @@
-"""Accuracy-first pick profile — prioritize hit rate; SP sweet spot 1.40–1.60."""
+"""Accuracy-first pick profile — prioritize hit rate; SP sweet spot 1.30–1.60."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ DIVERGENCE_TAGS = frozenset({"出线·欧亚分歧", "竞彩·参考分歧"})
 def sp_in_sweet_spot(sp: float | None) -> bool:
     if sp is None:
         return False
-    lo = getattr(app_cfg, "ACCURACY_SP_MIN", 1.40)
+    lo = getattr(app_cfg, "ACCURACY_SP_MIN", 1.30)
     hi = getattr(app_cfg, "ACCURACY_SP_MAX", 1.60)
     return lo <= sp <= hi
 
@@ -23,7 +23,7 @@ def evaluate_accuracy_pick(pred: dict) -> dict[str, Any]:
     """
     Grade picks for accuracy-first betting.
 
-    稳胆甜区: 高置信 + 参考/初盘一致 + 无重大分歧 + SP∈[1.4,1.6]
+    稳胆甜区: 高置信 + 参考/初盘一致 + 无重大分歧 + SP∈[1.3,1.6]
     稳胆:     同上但 SP 不在甜区（仍重正确率，赔率略偏离）
     可跟:     中置信或轻微风险，可小注单关
     慎跟:     低置信 / 分歧 / SP 过高
@@ -43,6 +43,8 @@ def evaluate_accuracy_pick(pred: dict) -> dict[str, Any]:
     buy_tier = pred.get("buy_tier") or ""
     sp = resolve_jingcai_sp(pred)
     sweet = sp_in_sweet_spot(sp)
+    lo = getattr(app_cfg, "ACCURACY_SP_MIN", 1.30)
+    hi = getattr(app_cfg, "ACCURACY_SP_MAX", 1.60)
 
     reasons: list[str] = []
     score = 0.0
@@ -101,12 +103,12 @@ def evaluate_accuracy_pick(pred: dict) -> dict[str, Any]:
     if sp is not None:
         if sweet:
             score += 3
-        elif sp < getattr(app_cfg, "ACCURACY_SP_MIN", 1.40):
+        elif sp < lo:
             score += 1.5
             reasons.append(f"SP {sp} 低于甜区（更稳但回报低）")
         elif sp <= getattr(app_cfg, "ACCURACY_SP_SOFT_MAX", 1.85):
             score += 0.5
-            reasons.append(f"SP {sp} 略高于甜区 1.4–1.6")
+            reasons.append(f"SP {sp} 略高于甜区 {lo:g}–{hi:g}")
         else:
             score -= 2
             reasons.append(f"SP {sp} 偏高，正确率与回报难兼顾")
@@ -142,7 +144,7 @@ def evaluate_accuracy_pick(pred: dict) -> dict[str, Any]:
 
     parlay_ok = grade in ("稳胆甜区", "稳胆") and buy_tier == "A"
     if grade == "稳胆甜区":
-        reasons.insert(0, f"SP {sp} 在目标区间 1.4–1.6")
+        reasons.insert(0, f"SP {sp} 在目标区间 {lo:g}–{hi:g}")
     elif grade == "稳胆" and sp:
         reasons.insert(0, f"重正确率；SP {sp}")
 
@@ -158,7 +160,7 @@ def _out(
     *,
     parlay_ok: bool,
 ) -> dict[str, Any]:
-    lo = getattr(app_cfg, "ACCURACY_SP_MIN", 1.40)
+    lo = getattr(app_cfg, "ACCURACY_SP_MIN", 1.30)
     hi = getattr(app_cfg, "ACCURACY_SP_MAX", 1.60)
     return {
         "accuracy_grade": grade,
@@ -190,7 +192,7 @@ def build_sweet_spot_analysis(pred: dict) -> dict[str, Any]:
     """
     Rich breakdown for accuracy-first betting.
 
-    When SP ∈ [1.4, 1.6], expands alignment checklist, implied vs model prob,
+    When SP ∈ [1.3, 1.6], expands alignment checklist, implied vs model prob,
     score headline, and stake guidance — the primary focus band for hit rate.
     """
     info = pred.get("accuracy_pick") or evaluate_accuracy_pick(pred)
@@ -199,7 +201,7 @@ def build_sweet_spot_analysis(pred: dict) -> dict[str, Any]:
     row = pred.get("predict_row") or {}
     sp = info.get("jingcai_sp") or resolve_jingcai_sp(pred)
     sweet = sp_in_sweet_spot(sp)
-    lo = getattr(app_cfg, "ACCURACY_SP_MIN", 1.40)
+    lo = getattr(app_cfg, "ACCURACY_SP_MIN", 1.30)
     hi = getattr(app_cfg, "ACCURACY_SP_MAX", 1.60)
 
     if pick_cn in SKIP_PICKS or not jc:

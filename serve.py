@@ -61,6 +61,7 @@ _API_DEEP_RE = re.compile(r"^/api/match/(\d+)/deep-analyze$")
 _API_SCORE_RE = re.compile(r"^/api/match/(\d+)/score-recommend$")
 _API_SWEET_RE = re.compile(r"^/api/match/(\d+)/sweet-spot$")
 _API_CHAT_RE = re.compile(r"^/api/match/(\d+)/chat-stream$")
+_API_SIMILARITY_AI_RE = re.compile(r"^/api/match/(\d+)/similarity-ai$")
 _daily_ai_lock = threading.Lock()
 _daily_ai_running = False
 
@@ -282,6 +283,50 @@ def _send_chat_sse(
         log.exception("AI chat SSE failed")
         _sse_write(handler, "chunk", f"错误：{exc}")
         _sse_write(handler, "done", "error")
+
+
+def _parse_settle_params(qs: dict, body: dict | None = None) -> tuple[bool, list[str]]:
+    body = body or {}
+    resettle = body.get("resettle") is True or qs.get("resettle", ["0"])[0] in ("1", "true", "yes")
+    fixture_ids: list[str] = []
+    for key in ("fixture_id", "fixture_ids", "fid"):
+        val = body.get(key)
+        if val is None and key in qs:
+            raw = qs.get(key)
+            val = raw[0] if isinstance(raw, list) and len(raw) == 1 else raw
+        if val is None:
+            continue
+        if isinstance(val, list):
+            fixture_ids.extend(str(x).strip() for x in val if str(x).strip())
+        else:
+            fixture_ids.extend(p for p in str(val).replace(",", " ").split() if p)
+    seen: set[str] = set()
+    unique: list[str] = []
+    for x in fixture_ids:
+        if x not in seen:
+            seen.add(x)
+            unique.append(x)
+    return resettle, unique
+
+
+def _handle_settle_api(handler, *, method: str, qs: dict, body: dict | None = None) -> None:
+    from db.connection import ensure_schema, ping
+    from match_settlement import build_settlement_status, run_settlement
+
+    resettle, fixture_ids = _parse_settle_params(qs, body)
+    root = handler.output_root
+    if method == "GET":
+        handler._send_json(build_settlement_status(root, resettle=resettle))
+        return
+    if ping():
+        ensure_schema()
+    summary = run_settlement(
+        root,
+        resettle=resettle,
+        fixture_ids=fixture_ids or None,
+    )
+    status = 503 if summary.get("error") else 200
+    handler._send_json(summary, status)
 
 
 def _pred_summary(pred: dict) -> dict:
@@ -725,6 +770,10 @@ class Handler(BaseHTTPRequestHandler):
                 ai_base_url=self.ai_base_url,
             ))
             return
+        if path == "/api/settle":
+            qs = parse_qs(urlparse(self.path).query)
+            _handle_settle_api(self, method="GET", qs=qs)
+            return
         if path == "/api/status" or path == "/health":
             from ai_schedule import ai_schedule_info
             from ai_config import public_config_summary
@@ -816,8 +865,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "records": n})
             return
         if path == "/api/settle":
-            from match_settlement import run_settlement
-            self._send_json(run_settlement(self.output_root))
+            qs = parse_qs(urlparse(self.path).query)
+            body: dict | None = None
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                if length:
+                    body = json.loads(self.rfile.read(length).decode("utf-8"))
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "请求体须为 JSON"}, 400)
+                return
+            _handle_settle_api(self, method="POST", qs=qs, body=body)
             return
         if path == "/api/ai/config":
             try:
@@ -1043,6 +1100,45 @@ class Handler(BaseHTTPRequestHandler):
                 "message": f"已启动 {match_date} AI 分析（逐场 + 三档 2串1），约 2–5 分钟",
                 "date": match_date,
             })
+            return
+        simm = _API_SIMILARITY_AI_RE.match(path)
+        if simm:
+            fid = simm.group(1)
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b"{}"
+                payload = json.loads(raw.decode("utf-8"))
+                source = str(payload.get("source") or qs.get("source", [""])[0]).strip()
+                force = payload.get("force") is True or qs.get("force", ["0"])[0] in ("1", "true", "yes")
+                if not source:
+                    self._send_json({"ok": False, "error": "source required (open_ah|open_eu|live_ah|live_eu)"}, 400)
+                    return
+                pred = _load_latest_pred(self.output_root, fid)
+                if pred is None:
+                    self._send_json({"ok": False, "error": "not found"}, 404)
+                    return
+                _ensure_similarity_analysis(pred, self.output_root)
+                idx = _load_match_index(self.output_root, fid) or {}
+                from similarity_ai import analyze_similarity
+
+                result = analyze_similarity(
+                    self.output_root,
+                    fid,
+                    source,
+                    pred,
+                    match_name=idx.get("match_name") or pred.get("match"),
+                    ai_model=self.ai_model,
+                    ai_base_url=self.ai_base_url,
+                    force=force,
+                )
+                self._send_json(result, 200 if result.get("ok") else 500)
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "请求体须为 JSON"}, 400)
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                log.exception("相似盘口 AI 分析失败 fid=%s", fid)
+                self._send_json({"ok": False, "error": str(exc)}, 500)
             return
         rm = _API_RECOMMEND_RE.match(path)
         if rm:

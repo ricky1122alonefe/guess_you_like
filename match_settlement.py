@@ -10,6 +10,7 @@ from typing import Any
 from db.connection import ping
 from db.repository import (
     get_closing_tick,
+    get_fixture_by_external,
     get_opening_tick,
     list_fixtures_for_resettlement,
     list_fixtures_pending_settlement,
@@ -196,33 +197,141 @@ def settle_fixture(
     return True
 
 
+def _fixture_status_row(
+    fx: dict,
+    *,
+    kind: str,
+    live_status_map: dict[str, dict],
+    settled_map: dict[str, dict],
+) -> dict[str, Any]:
+    ext = str(fx.get("external_id") or "")
+    live = live_status_map.get(ext) or {}
+    settled = settled_map.get(ext) or {}
+    return {
+        "fixture_id": ext,
+        "match_name": fx.get("match_name"),
+        "kickoff_at": format_beijing(fx.get("kickoff_at")) if fx.get("kickoff_at") else None,
+        "kind": kind,
+        "live_phase": live.get("phase"),
+        "live_label": live.get("label"),
+        "live_score": live.get("score"),
+        "settled_score": settled.get("score_text"),
+        "has_settled": bool(settled),
+    }
+
+
+def _collect_pending_fixtures(
+    *,
+    resettle: bool = False,
+    fixture_ids: list[str] | None = None,
+) -> list[dict]:
+    pending = list_fixtures_pending_settlement(source=SOURCE)
+    seen = {int(fx["id"]) for fx in pending}
+    if resettle:
+        for fx in list_fixtures_for_resettlement(source=SOURCE):
+            if int(fx["id"]) not in seen:
+                pending.append(fx)
+                seen.add(int(fx["id"]))
+    if not fixture_ids:
+        return pending
+
+    wanted = {str(x).strip() for x in fixture_ids if str(x).strip()}
+    if not wanted:
+        return pending
+
+    filtered = [fx for fx in pending if str(fx.get("external_id")) in wanted]
+    found = {str(fx.get("external_id")) for fx in filtered}
+    for ext in wanted - found:
+        fx = get_fixture_by_external(SOURCE, ext)
+        if fx and int(fx["id"]) not in seen:
+            filtered.append(fx)
+            seen.add(int(fx["id"]))
+    return filtered
+
+
+def build_settlement_status(
+    output_root: str | Path,
+    *,
+    resettle: bool = False,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Preview fixtures waiting for manual settlement."""
+    root = Path(output_root)
+    out: dict[str, Any] = {
+        "ok": False,
+        "db_connected": ping(),
+        "pending_count": 0,
+        "resettlement_count": 0,
+        "settled_count": 0,
+        "pending": [],
+        "resettlement": [],
+        "resettle": resettle,
+        "usage": {
+            "preview": "GET /api/settle",
+            "run_all": "POST /api/settle",
+            "run_resettle": "POST /api/settle?resettle=1 或 {\"resettle\": true}",
+            "run_one": "POST /api/settle {\"fixture_id\": \"1359237\"}",
+            "run_many": "POST /api/settle {\"fixture_ids\": [\"1359237\", \"1359238\"]}",
+        },
+    }
+    if not ping():
+        out["error"] = "数据库未连接，无法结算赛果"
+        return out
+
+    settled_map = load_settled_map(root)
+    out["settled_count"] = len(settled_map)
+
+    from daily_picks import load_live_status_map
+
+    live_status = load_live_status_map(within_days=14)
+    pending = list_fixtures_pending_settlement(source=SOURCE)
+    out["pending_count"] = len(pending)
+    out["pending"] = [
+        _fixture_status_row(fx, kind="pending", live_status_map=live_status, settled_map=settled_map)
+        for fx in pending[:limit]
+    ]
+
+    resettle_rows = list_fixtures_for_resettlement(source=SOURCE)
+    out["resettlement_count"] = len(resettle_rows)
+    if resettle:
+        out["resettlement"] = [
+            _fixture_status_row(fx, kind="resettle", live_status_map=live_status, settled_map=settled_map)
+            for fx in resettle_rows[:limit]
+        ]
+
+    out["ok"] = True
+    return out
+
+
 def run_settlement(
     output_root: str | Path,
     *,
     leagues=DEFAULT_LEAGUES,
     resettle: bool = False,
+    fixture_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     root = Path(output_root)
     summary: dict[str, Any] = {
         "ok": False,
         "settled": 0,
         "skipped_no_score": 0,
+        "skipped_live": 0,
+        "pending_before": 0,
         "resettle": resettle,
+        "fixture_ids": fixture_ids or [],
         "errors": [],
+        "settled_matches": [],
     }
     if not ping():
+        summary["error"] = "数据库未连接，无法写入 match_results"
         log.debug("数据库未连接，跳过赛果结算")
         return summary
 
-    pending = list_fixtures_pending_settlement(source=SOURCE)
-    if resettle:
-        seen = {int(fx["id"]) for fx in pending}
-        for fx in list_fixtures_for_resettlement(source=SOURCE):
-            if int(fx["id"]) not in seen:
-                pending.append(fx)
-                seen.add(int(fx["id"]))
+    pending = _collect_pending_fixtures(resettle=resettle, fixture_ids=fixture_ids)
+    summary["pending_before"] = len(pending)
     if not pending:
         summary["ok"] = True
+        summary["message"] = "没有待结算场次"
         try:
             refresh_tournament_ledger(root)
         except Exception as exc:
@@ -236,8 +345,16 @@ def run_settlement(
         summary["errors"].append(str(exc))
         return summary
 
+    from daily_picks import load_live_status_map
+
+    live_status = load_live_status_map(within_days=14)
+
     for fx in pending:
         ext = str(fx["external_id"])
+        if live_status.get(ext, {}).get("phase") == "live":
+            summary["skipped_live"] += 1
+            log.info("跳过进行中场次 %s（live.500 未终场）", ext)
+            continue
         score = board.get(ext)
         if not score:
             summary["skipped_no_score"] += 1
@@ -247,6 +364,11 @@ def run_settlement(
         try:
             settle_fixture(fx, score, output_root=root)
             summary["settled"] += 1
+            summary["settled_matches"].append({
+                "fixture_id": ext,
+                "match_name": fx.get("match_name"),
+                "score_text": score.score_text,
+            })
         except Exception as exc:
             msg = f"{ext}: {exc}"
             summary["errors"].append(msg)
@@ -273,8 +395,8 @@ def run_settlement(
             log.debug("Elo 更新: %s", exc)
 
     log.info(
-        "赛果结算完成：写入 %d 场，待结算无比分 %d 场",
-        summary["settled"], summary["skipped_no_score"],
+        "赛果结算完成：写入 %d 场，待结算无比分 %d 场，跳过进行中 %d 场",
+        summary["settled"], summary["skipped_no_score"], summary["skipped_live"],
     )
     return summary
 
@@ -311,30 +433,52 @@ def classify_matches(
     *,
     kickoff_map: dict,
     settled_map: dict[str, dict],
+    live_status_map: dict[str, dict] | None = None,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     upcoming: list[dict] = []
     live: list[dict] = []
     finished: list[dict] = []
 
     seen_finished: set[str] = set()
+    live_status_map = live_status_map or {}
     for m in matches:
         fid = str(m.get("fixture_id") or "")
         settled = settled_map.get(fid)
         ko = kickoff_map.get(fid)
+        ext = live_status_map.get(fid) or {}
         phase = match_phase(ko, has_result=bool(settled))
         enriched = dict(m)
+        if ext.get("score"):
+            enriched["live_score"] = ext["score"]
+        if ext.get("label"):
+            enriched["live_status_label"] = ext["label"]
+
+        ext_phase = ext.get("phase")
+        # live.500 进行中优先：避免 API status=4 误结算后仍显示在已完场
+        if ext_phase == "live":
+            enriched["match_phase"] = "live"
+            if not enriched.get("live_status_label"):
+                enriched["live_status_label"] = "进行中"
+            live.append(enriched)
+            continue
+
         if settled:
             enriched["settled"] = settled
             enriched["match_phase"] = "finished"
             finished.append(enriched)
             seen_finished.add(fid)
-        elif phase == "finished":
+        elif ext.get("phase") == "finished" or phase == "finished":
             enriched["match_phase"] = "finished_pending"
             finished.append(enriched)
             seen_finished.add(fid)
-        elif phase == "live":
+        elif ext.get("phase") == "live" or phase == "live":
             enriched["match_phase"] = "live"
+            if not enriched.get("live_status_label"):
+                enriched["live_status_label"] = "进行中"
             live.append(enriched)
+        elif ext.get("phase") == "upcoming":
+            enriched["match_phase"] = "upcoming"
+            upcoming.append(enriched)
         elif phase == "upcoming":
             enriched["match_phase"] = "upcoming"
             upcoming.append(enriched)

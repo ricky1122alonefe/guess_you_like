@@ -855,7 +855,8 @@ def test_sweet_spot_analysis():
     )
 
     assert sp_in_sweet_spot(1.50) is True
-    assert sp_in_sweet_spot(1.35) is False
+    assert sp_in_sweet_spot(1.35) is True
+    assert sp_in_sweet_spot(1.29) is False
     assert sp_in_sweet_spot(1.70) is False
 
     pred = {
@@ -903,9 +904,130 @@ def test_sweet_spot_analysis():
     high_sp = dict(pred)
     high_sp["jingcai_pick_info"] = dict(pred["jingcai_pick_info"], jingcai_sp=1.85)
     high_sp["predict_row"] = dict(pred["predict_row"], 竞彩SP=1.85)
+    high_sp["jingcai_snapshot"] = dict(pred["jingcai_snapshot"], sp_home=1.85)
     high_sp.pop("accuracy_pick", None)
     high_sp.pop("sweet_spot_analysis", None)
     sa_high = build_sweet_spot_analysis(high_sp)
     assert sa_high["band"] == "above_sweet"
     assert sa_high["sweet_spot"] is False
+
+
+def test_parse_row_status_live():
+    from download_500 import _parse_row_status
+    from bs4 import BeautifulSoup
+
+    html_up = "<tr><td>周六036</td><td>世界杯</td><td>第2轮</td><td>06-21 12:00</td><td>未</td></tr>"
+    html_live = (
+        "<tr><td>周六035</td><td>世界杯</td><td>第2轮</td><td>06-21 08:00</td>"
+        "<td>厄瓜多尔</td><td>0 - 0</td></tr>"
+    )
+    html_done = (
+        "<tr><td>周六033</td><td>世界杯</td><td>第2轮</td><td>06-21 01:00</td>"
+        "<td>完</td><td>荷兰</td><td>2 - 0</td><td>胜</td></tr>"
+    )
+    up = _parse_row_status(BeautifulSoup(html_up, "html.parser").find("tr"))
+    live = _parse_row_status(BeautifulSoup(html_live, "html.parser").find("tr"))
+    done = _parse_row_status(BeautifulSoup(html_done, "html.parser").find("tr"))
+    assert up.get("phase") == "upcoming"
+    assert live.get("phase") == "live"
+    assert live.get("score") == "0-0"
+    assert done.get("phase") == "finished"
+    assert done.get("score") == "2-0"
+
+
+def test_wc_status4_not_finished():
+    from wc_standings_fetch import GroupFixture, STATUS_FINISHED
+
+    fx = GroupFixture(
+        fixture_id="1359237",
+        group="A",
+        round=2,
+        kickoff="2026-06-21 08:00",
+        home="厄瓜多尔",
+        away="库拉索",
+        home_score=0,
+        away_score=0,
+        status=4,
+    )
+    assert 4 not in STATUS_FINISHED
+    assert fx.is_finished is False
+    assert fx.is_live is True
+
+
+def test_similarity_ai_payload():
+    from similarity_ai import build_similarity_ai_payload, get_similarity_block
+
+    pred = {
+        "fixture_id": "123",
+        "match": "A vs B",
+        "odds_snapshot": {
+            "ah_open_line": 0.75,
+            "ah_open_home_water": 0.91,
+            "ah_open_away_water": 0.89,
+            "eu_open_home": 4.2,
+            "eu_open_draw": 3.3,
+            "eu_open_away": 1.95,
+            "ah_line": 0.5,
+            "ah_home_water": 0.88,
+            "ah_away_water": 0.92,
+            "eu_home": 3.8,
+            "eu_draw": 3.4,
+            "eu_away": 2.0,
+        },
+        "similarity_analysis": {
+            "open": [{
+                "source": "open_ah",
+                "title": "初盘亚盘相似",
+                "count": 25,
+                "rate_text": "主胜 12.0% / 平 16.0% / 客胜 72.0%",
+                "samples": [{"date": "2020-01-01", "match": "X vs Y", "score": "0-1"}],
+            }],
+            "live": [{
+                "source": "live_eu",
+                "title": "实时欧赔 vs 历史终盘相似",
+                "count": 1012,
+                "rate_text": "主胜 21.6% / 平 26.4% / 客胜 52.0%",
+                "samples": [],
+            }],
+        },
+        "result_1x2_cn": "客胜",
+        "predict_row": {"赛果预测": "客胜", "亚盘": "下盘", "推荐比分": "0-1、1-2"},
+    }
+    block = get_similarity_block(pred, "live_eu")
+    assert block and block["count"] == 1012
+    payload = build_similarity_ai_payload(pred, "live_eu")
+    assert payload["section"] == "实时欧赔 vs 历史终盘相似"
+    assert payload["sample_stats"]["count"] == 1012
+    assert payload["current_odds"]["european"]["away"] == 2.0
+    assert payload["baseline_recommendation"]["final_pick_cn"]
+
+
+def test_settlement_status_preview():
+    from match_settlement import build_settlement_status
+    from serve import _parse_settle_params
+
+    status = build_settlement_status("output/service")
+    assert "pending_count" in status
+    assert "usage" in status
+    resettle, fids = _parse_settle_params(
+        {"resettle": ["1"], "fixture_id": ["1359237", "1359238"]},
+        {"fixture_ids": ["1359239"]},
+    )
+    assert resettle is True
+    assert fids == ["1359237", "1359238", "1359239"]
+
+
+def test_similarity_ai_button_in_html():
+    from web_ui import _build_similarity_html
+
+    pred = {
+        "similarity_analysis": {
+            "open": [{"source": "open_ah", "title": "初盘亚盘相似", "count": 10, "rate_text": "x", "samples": []}],
+            "live": [{"source": "live_ah", "title": "实时亚盘 vs 历史终盘相似", "count": 20, "rate_text": "y", "samples": []}],
+        }
+    }
+    html = _build_similarity_html(pred, fixture_id="999", output_root=Path("/tmp/nope"))
+    assert "aiSimilarityAnalyze('999', 'open_ah'" in html
+    assert "aiSimilarityAnalyze('999', 'live_ah'" in html
+    assert "AI盘口解读" in html
 

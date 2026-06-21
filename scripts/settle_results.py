@@ -28,6 +28,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="重新结算已有赛果（用官方终场比分覆盖错误记录）",
     )
+    parser.add_argument(
+        "--fixture-id",
+        action="append",
+        dest="fixture_ids",
+        metavar="FID",
+        help="只结算指定 FID（可重复传入）",
+    )
     args = parser.parse_args(argv)
     root = Path(args.output_root)
 
@@ -36,7 +43,11 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print("警告：数据库未连接，无法写入 match_results", file=sys.stderr)
 
-    summary = run_settlement(root, resettle=args.resettle)
+    summary = run_settlement(
+        root,
+        resettle=args.resettle,
+        fixture_ids=args.fixture_ids or None,
+    )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if summary.get("ok") else 1
 

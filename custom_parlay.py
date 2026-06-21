@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any
 
-from daily_picks import _best_actionable_pick, _combined_odds, _eu_odds, _kickoff_label, load_kickoff_map
+from daily_picks import _best_actionable_pick, _combined_odds, _eu_odds, _kickoff_date, _kickoff_label, load_kickoff_map
 from jingcai_pick import NO_JINGCAI, actionable_jingcai_pick, ensure_match_jingcai, final_recommendation_cn, resolve_jingcai_sp
 from time_utils import now_beijing_str
 
@@ -81,6 +81,15 @@ def analyze_custom_parlay(matches: list[dict]) -> dict[str, Any]:
     if len(matches) != 2:
         raise ValueError("请勾选恰好 2 场比赛")
 
+    kickoff_map = load_kickoff_map()
+    match_days = sorted({
+        d for m in matches if (d := _kickoff_date(m, kickoff_map))
+    })
+    if len(match_days) > 1:
+        raise ValueError(
+            f"2串1 须同一比赛日，当前为 {' / '.join(match_days)}，不可跨天"
+        )
+
     legs = [_leg_from_match(m) for m in matches]
     combined = _combined_odds(legs)
 
@@ -147,6 +156,7 @@ def analyze_custom_parlay(matches: list[dict]) -> dict[str, Any]:
     return {
         "ok": True,
         "generated_at": now_beijing_str(),
+        "match_date": match_days[0] if match_days else None,
         "parlay_type": "2串1",
         "legs": legs,
         "combined_odds": combined,

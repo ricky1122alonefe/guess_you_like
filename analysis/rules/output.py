@@ -61,6 +61,12 @@ def attach_post_recommendation(pred: dict) -> dict:
     except Exception:
         pass
     attach_buy_tier(pred)
+    try:
+        from accuracy_pick import attach_accuracy_pick
+
+        attach_accuracy_pick(pred)
+    except Exception:
+        pass
     return pred
 
 

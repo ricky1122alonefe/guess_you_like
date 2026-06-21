@@ -167,16 +167,62 @@ if (document.readyState === 'loading') {
 }
 """
 
+_DASH_FILTER_JS = """
+function filterDashRows(mode) {
+  document.querySelectorAll('.dash-row').forEach(tr => {
+    if (mode === 'sweet') {
+      tr.style.display = tr.dataset.sweet === '1' ? '' : 'none';
+    } else if (mode === 'solid') {
+      const g = tr.dataset.accGrade || '';
+      tr.style.display = (g === '稳胆甜区' || g === '稳胆') ? '' : 'none';
+    } else {
+      tr.style.display = '';
+    }
+  });
+}
+function onDashFilter(el) {
+  if (el && el.checked) {
+    const solid = document.getElementById('dash-filter-solid');
+    if (solid) solid.checked = false;
+  }
+  filterDashRows(el && el.checked ? 'sweet' : 'all');
+}
+function onDashSolidFilter(el) {
+  if (el && el.checked) {
+    const sweet = document.getElementById('dash-filter-sweet');
+    if (sweet) sweet.checked = false;
+    filterDashRows('solid');
+  } else {
+    filterDashRows('all');
+  }
+}
+"""
+
 _PARLAY_JS = """
 const parlaySelected = new Map();
 
 function toggleParlayPick(el) {
   const fid = el.dataset.fid;
-  if (el.checked) {
+    if (el.checked) {
+    const day = el.dataset.matchDate || '';
+    if (parlaySelected.size >= 1) {
+      const firstCb = document.querySelector('.parlay-cb:checked');
+      const firstDay = firstCb && firstCb !== el ? (firstCb.dataset.matchDate || '') : '';
+      if (firstDay && day && firstDay !== day) {
+        el.checked = false;
+        showToast('2串1 须同一比赛日（' + firstDay + '），不可跨天', true);
+        return;
+      }
+    }
     const tier = el.dataset.tier || '';
+    const sweet = el.dataset.sweet === '1';
+    const grade = el.dataset.accGrade || '';
     if (tier && tier !== 'A') {
       const label = tier === 'B' ? '可单关' : '仅参考';
       showToast('该场档位为「' + label + '」，串关建议优先选「可串」', true);
+    }
+    if (!sweet && grade !== '稳胆甜区' && grade !== '稳胆') {
+      showToast('非 SP 1.4–1.6 甜区，重正确率可单关，串关请优先「稳胆甜区」', true);
     }
     if (parlaySelected.size >= 2) {
       el.checked = false;
@@ -444,6 +490,14 @@ a {{ color: #2563eb; text-decoration: none; word-break: break-word; }}
 .tag-buy-tier-a {{ background: #ecfdf5; color: #047857; border: 1px solid #6ee7b7; font-weight: 700; }}
 .tag-buy-tier-b {{ background: #eff6ff; color: #1d4ed8; border: 1px solid #93c5fd; font-weight: 700; }}
 .tag-buy-tier-c {{ background: #f3f4f6; color: #6b7280; border: 1px solid #d1d5db; font-weight: 600; }}
+.tag-acc-sweet {{ background: #fff7ed; color: #c2410c; border: 1px solid #fdba74; font-weight: 700; }}
+.tag-acc-solid {{ background: #ecfdf5; color: #047857; border: 1px solid #6ee7b7; font-weight: 700; }}
+.tag-acc-ok {{ background: #eff6ff; color: #1d4ed8; border: 1px solid #93c5fd; }}
+.tag-acc-warn {{ background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }}
+.sweet-teaser {{ background: linear-gradient(135deg,#fff7ed,#ffedd5); border: 1px solid #fdba74;
+  border-radius: 12px; padding: 12px 16px; margin: 0 0 14px; }}
+.sweet-teaser h3 {{ margin: 0 0 8px; font-size: 15px; color: #c2410c; }}
+.sweet-teaser ul {{ margin: 0; padding-left: 18px; line-height: 1.55; }}
 .meta.warn {{ color: #b45309; font-weight: 600; }}
 .qual-div-banner {{ background: linear-gradient(135deg,#fff7ed,#ffedd5); border: 1px solid #fdba74;
   border-radius: 12px; padding: 14px 16px; margin: 12px 0 16px; }}
@@ -641,6 +695,200 @@ def _tier_badge_html(m: dict, row: dict | None = None) -> str:
     return f' <span class="tag tag-buy-{css}"{title}>{_e(cn)}</span>'
 
 
+def _accuracy_badge_html(m: dict, row: dict | None = None) -> str:
+    row = row or {}
+    grade = m.get("accuracy_grade_cn") or row.get("稳胆评级") or ""
+    if not grade or grade in ("跳过", "—"):
+        return ""
+    css = {
+        "稳胆甜区": "acc-sweet",
+        "稳胆": "acc-solid",
+        "可跟": "acc-ok",
+        "慎跟": "acc-warn",
+    }.get(grade, "acc-warn")
+    sp = m.get("accuracy_jingcai_sp") or row.get("稳胆SP") or row.get("竞彩SP")
+    tip = m.get("accuracy_reason") or ""
+    if sp:
+        tip = f"SP {sp}" + (f"；{tip}" if tip and tip != "—" else "")
+    title = f' title="{_e(tip)}"' if tip else ""
+    return f' <span class="tag tag-acc-{css}"{title}>{_e(grade)}</span>'
+
+
+def _enrich_dashboard_match(m: dict) -> dict:
+    """Attach buy tier + accuracy / sweet-spot analysis for dashboard rows."""
+    from jingcai_pick import ensure_match_jingcai
+
+    out = ensure_match_jingcai(dict(m))
+    try:
+        from analysis.rules.output import attach_post_recommendation
+
+        attach_post_recommendation(out)
+    except Exception:
+        pass
+    return out
+
+
+def _sweet_spot_teaser(
+    matches: list[dict],
+    kickoff_map: dict | None = None,
+    *,
+    match_date: str = "",
+) -> str:
+    """Homepage block: SP 1.4–1.6 for the current 比赛日 / 收益周期 only."""
+    from accuracy_pick import build_sweet_spot_analysis
+    from daily_picks import _kickoff_label
+
+    kickoff_map = kickoff_map or {}
+    rows: list[tuple[int, dict, dict]] = []
+    for m in matches:
+        sa = m.get("sweet_spot_analysis")
+        if not sa:
+            try:
+                sa = build_sweet_spot_analysis(m)
+            except Exception:
+                continue
+        if not sa.get("ok") or not sa.get("sweet_spot"):
+            continue
+        grade = sa.get("accuracy_grade") or ""
+        rank = {"稳胆甜区": 0, "稳胆": 1, "可跟": 2}.get(grade, 9)
+        rows.append((rank, m, sa))
+
+    if not rows:
+        import config as app_cfg
+
+        lo = getattr(app_cfg, "ACCURACY_SP_MIN", 1.40)
+        hi = getattr(app_cfg, "ACCURACY_SP_MAX", 1.60)
+        return f"""
+<div class="card sweet-teaser muted">
+  <h3>🎯 SP 甜区 {lo:g}–{hi:g} · 比赛日 {_e(match_date or '—')}（0 场）</h3>
+  <p class="meta" style="margin:0">本比赛日暂无 SP 落在甜区的可跟场次。</p>
+</div>"""
+
+    rows.sort(key=lambda x: (x[0], -(x[2].get("accuracy_score") or 0)))
+    lo = rows[0][2].get("sp_target_min", 1.40)
+    hi = rows[0][2].get("sp_target_max", 1.60)
+    items = ""
+    for _, m, sa in rows[:8]:
+        fid = str(m.get("fixture_id") or "")
+        row = m.get("predict_row") or m
+        name = row.get("比赛") or m.get("match") or fid
+        ko = _kickoff_label(m, kickoff_map)
+        pick = sa.get("pick_cn") or "—"
+        sp = sa.get("sp") or "—"
+        grade = sa.get("accuracy_grade") or "—"
+        passed = sa.get("checklist_passed")
+        total = sa.get("checklist_total")
+        chk = f"{passed}/{total}" if passed is not None and total else "—"
+        items += (
+            f"<li><span class='meta'>{_e(ko)}</span> "
+            f"<a href=\"/match/{_e(fid)}\"><strong>{_e(name)}</strong></a>"
+            f" · {_e(pick)} · SP {_e(str(sp))} · {_e(grade)}"
+            f" · 清单 {_e(str(chk))}"
+            f"<br><span class='meta'>{_e(sa.get('edge_note') or sa.get('band_note') or '')}</span></li>"
+        )
+
+    return f"""
+<div class="card sweet-teaser">
+  <h3>🎯 SP 甜区 {lo:g}–{hi:g} · 比赛日 {_e(match_date)}（{len(rows)} 场）</h3>
+  <p class="meta" style="margin:0 0 8px">本页仅展示<strong>同一比赛日</strong>场次，与当日 2串1 / 收益复盘周期一致。</p>
+  <ul>{items}</ul>
+</div>"""
+
+
+def _match_day_switcher(available: list[str], cycle_day: str) -> str:
+    """Switcher for SP sweet-spot card only — main match table stays full window."""
+    if not available:
+        return ""
+    if len(available) == 1:
+        return (
+            f'<p class="meta cycle-day-bar">甜区收益周期 · 比赛日 <strong>{_e(cycle_day)}</strong>'
+            f"（下方列表仍显示 {len(available)} 天内全部场次）</p>"
+        )
+    parts = []
+    for d in available:
+        if d == cycle_day:
+            parts.append(f"<strong>{_e(d)}</strong>")
+        else:
+            parts.append(f'<a href="/?date={_e(d)}">{_e(d)}</a>')
+    return (
+        f'<p class="meta cycle-day-bar">甜区收益周期 · 比赛日 {" · ".join(parts)}'
+        f" · 仅影响上方甜区卡片，下方列表不变</p>"
+    )
+
+
+def _sweet_spot_panel(prediction: dict | None) -> str:
+    if not prediction:
+        return ""
+    from accuracy_pick import build_sweet_spot_analysis
+
+    sa = prediction.get("sweet_spot_analysis") or build_sweet_spot_analysis(prediction)
+    if not sa.get("ok"):
+        reason = sa.get("reason") or "暂无数据"
+        return f"""
+<div class="card sweet-spot-card muted">
+  <h3>🎯 SP 甜区分析 <span class="tag">1.4–1.6</span></h3>
+  <p class="meta">{_e(reason)}</p>
+</div>"""
+
+    sweet = sa.get("sweet_spot")
+    band_cls = "sweet-in" if sweet else ("sweet-below" if sa.get("band") == "below_sweet" else "sweet-above")
+    grade = sa.get("accuracy_grade") or "—"
+    grade_css = {
+        "稳胆甜区": "acc-sweet",
+        "稳胆": "acc-solid",
+        "可跟": "acc-ok",
+        "慎跟": "acc-warn",
+    }.get(grade, "acc-warn")
+
+    checklist_rows = ""
+    for c in sa.get("checklist") or []:
+        mark = "✓" if c.get("ok") else "✗"
+        cls = "chk-ok" if c.get("ok") else "chk-bad"
+        checklist_rows += (
+            f"<tr class='{cls}'><td>{mark}</td><td>{_e(c.get('label'))}</td>"
+            f"<td class='meta'>{_e(c.get('detail'))}</td></tr>"
+        )
+
+    prob_line = ""
+    if sa.get("sp_implied_pct") is not None:
+        prob_line = f"SP 隐含 {sa['sp_implied_pct']}%"
+        if sa.get("model_prob_pct") is not None:
+            prob_line += f" · 欧赔去水 {sa['model_prob_pct']}%"
+            if sa.get("prob_gap_pct") is not None:
+                prob_line += f"（差 {sa['prob_gap_pct']:+.1f}pp）"
+
+    fid = prediction.get("fixture_id") or ""
+    api_link = ""
+    if fid:
+        api_link = (
+            f'<p class="meta"><a href="/api/match/{_e(str(fid))}/sweet-spot" '
+            f'target="_blank" rel="noopener">JSON API</a></p>'
+        )
+
+    sweet_tag = ' <span class="tag tag-acc-sweet">甜区</span>' if sweet else ""
+    return f"""
+<div class="card sweet-spot-card {band_cls}">
+  <h3>🎯 SP 甜区分析 <span class="tag">重正确率</span>{sweet_tag}
+     <span class="tag tag-acc-{grade_css}">{_e(grade)}</span></h3>
+  <p class="sweet-headline"><strong>{_e(sa.get('band_headline') or '—')}</strong>
+     · 推荐 <strong>{_e(sa.get('pick_cn') or '—')}</strong></p>
+  <p class="meta">{_e(sa.get('band_note') or '')}</p>
+  {f'<p class="meta">{_e(prob_line)} · {_e(sa.get("edge_note") or "")}</p>' if prob_line or sa.get("edge_note") else ''}
+  <table class="mini sweet-check-table">
+    <tr><th></th><th>对齐项</th><th>说明</th></tr>
+    {checklist_rows}
+  </table>
+  <p class="meta">清单 {sa.get('checklist_passed', '—')}/{sa.get('checklist_total', '—')}
+     · 参考 {_e(sa.get('reference_cn') or '—')} · 初盘 {_e(sa.get('open_cn') or '—')}
+     · 置信 {_e(sa.get('confidence_cn') or '—')}</p>
+  <p class="meta">比分主推 <strong>{_e(sa.get('score_headline') or '—')}</strong>
+     · 赛果轨 {_e(sa.get('score_pick_1x2_cn') or '—')}</p>
+  <p class="sweet-verdict"><strong>{_e(sa.get('verdict') or '—')}</strong> — {_e(sa.get('stake_hint') or '')}</p>
+  <p class="meta">{_e(sa.get('reasons') or '')}</p>
+  {api_link}
+</div>"""
+
+
 def _alert_tags_html(m: dict, row: dict | None = None) -> str:
     tags = list(m.get("alert_tags") or [])
     row = row or {}
@@ -652,7 +900,14 @@ def _alert_tags_html(m: dict, row: dict | None = None) -> str:
     return "".join(f' <span class="tag tag-qual-div">{_e(t)}</span>' for t in tags)
 
 
-def _dashboard_active_row(m: dict, indexes: dict) -> str:
+def _dashboard_active_row(
+    m: dict,
+    indexes: dict,
+    kickoff_map: dict | None = None,
+) -> str:
+    from daily_picks import _kickoff_date
+
+    kickoff_map = kickoff_map or {}
     row = m.get("predict_row") or m
     fid = str(m.get("fixture_id") or "")
     name = row.get("比赛") or m.get("match") or "—"
@@ -674,6 +929,14 @@ def _dashboard_active_row(m: dict, indexes: dict) -> str:
         phase_tag = ' <span class="tag tag-live">进行中</span>'
     alert_tag = _alert_tags_html(m, row)
     tier_tag = _tier_badge_html(m, row)
+    acc_tag = _accuracy_badge_html(m, row)
+    sp_val = row.get("竞彩SP") or m.get("accuracy_jingcai_sp") or ""
+    sweet = m.get("sweet_spot") or (
+        m.get("accuracy_pick") or {}
+    ).get("sweet_spot")
+    grade = m.get("accuracy_grade") or (m.get("accuracy_pick") or {}).get("accuracy_grade") or ""
+    sweet_flag = "1" if sweet else "0"
+    match_day = _kickoff_date(m, kickoff_map) or ""
     detail = f'<a href="/match/{_e(fid)}">趋势 ({n_pts})</a>' if fid else "—"
     ai_btn = (
         f'<button type="button" class="btn btn-sm btn-ai" '
@@ -683,14 +946,20 @@ def _dashboard_active_row(m: dict, indexes: dict) -> str:
     cb = (
         f'<input type="checkbox" class="parlay-cb" data-fid="{_e(fid)}" '
         f'data-tier="{_e(m.get("buy_tier") or "")}" '
+        f'data-sweet="{sweet_flag}" '
+        f'data-match-date="{_e(match_day)}" '
+        f'data-acc-grade="{_e(grade)}" '
         f'data-name="{_e(name)}" onchange="toggleParlayPick(this)" title="加入 2串1">'
         if fid else "—"
     )
+    sp_cell = _e(sp_val) if sp_val else "—"
     return (
-        f"<tr><td class='parlay-pick'>{cb}</td>"
-        f"<td><a href=\"/match/{_e(fid)}\">{_e(name)}</a>{phase_tag}{tier_tag}{alert_tag}</td>"
+        f"<tr class='dash-row' data-sweet='{sweet_flag}' "
+        f"data-acc-grade='{_e(grade)}' data-tier='{_e(m.get('buy_tier') or '')}'>"
+        f"<td class='parlay-pick'>{cb}</td>"
+        f"<td><a href=\"/match/{_e(fid)}\">{_e(name)}</a>{phase_tag}{tier_tag}{acc_tag}{alert_tag}</td>"
         f"<td>{_e(tier_cn)}</td>"
-        f"<td>{pick_cell}</td><td>{_e(scores)}</td>"
+        f"<td>{pick_cell}<br><span class='meta'>SP {sp_cell}</span></td><td>{_e(scores)}</td>"
         f"<td>{_e(ah)}</td><td>{_e(conf)}</td><td>{detail}</td>"
         f"<td>{ai_btn}</td></tr>\n"
     )
@@ -743,10 +1012,17 @@ def html_dashboard(
     *,
     output_root: Path,
     within_days: float | None = None,
+    match_date: str | None = None,
 ) -> str:
     import config as app_cfg
     from ai_schedule import format_ai_interval
-    from daily_picks import load_dashboard_matches, load_kickoff_map
+    from daily_picks import (
+        filter_matches_by_day,
+        list_available_match_days,
+        load_dashboard_matches,
+        load_kickoff_map,
+        resolve_match_day,
+    )
     from match_settlement import classify_matches, load_settled_map
     from match_timeline import list_match_indexes
 
@@ -754,13 +1030,21 @@ def html_dashboard(
     matches = load_dashboard_matches(output_root, within_days=window)
     indexes = {x.get("fixture_id"): x for x in list_match_indexes(output_root)}
     settled_map = load_settled_map(output_root)
-    kickoff_map = load_kickoff_map()
+    kickoff_map = load_kickoff_map(within_days=window)
     upcoming, live, finished = classify_matches(
         matches, kickoff_map=kickoff_map, settled_map=settled_map,
     )
-    active = upcoming + live
+    all_active = upcoming + live
+    available_days = list_available_match_days(all_active, kickoff_map)
+    cycle_day = resolve_match_day(all_active, kickoff_map, match_date=match_date)
+    sweet_day_matches = filter_matches_by_day(all_active, kickoff_map, cycle_day)
 
-    active_rows = "".join(_dashboard_active_row(m, indexes) for m in active)
+    all_active_enriched = [_enrich_dashboard_match(m) for m in all_active]
+    sweet_day_enriched = [_enrich_dashboard_match(m) for m in sweet_day_matches]
+
+    active_rows = "".join(
+        _dashboard_active_row(m, indexes, kickoff_map) for m in all_active_enriched
+    )
     if not active_rows:
         active_rows = "<tr><td colspan='8'>暂无未开赛/进行中比赛</td></tr>"
 
@@ -770,6 +1054,10 @@ def html_dashboard(
 
     wc_teaser = _worldcup_teaser(output_root)
     div_teaser = _divergence_teaser(output_root)
+    sweet_teaser = _sweet_spot_teaser(
+        sweet_day_enriched, kickoff_map, match_date=cycle_day,
+    )
+    day_switcher = _match_day_switcher(available_days, cycle_day)
 
     import config as app_cfg
     from ai_schedule import format_ai_interval
@@ -840,7 +1128,7 @@ def html_dashboard(
 <style>
 {dash_css}
 </style>
-<script>{_AI_BTN_JS}{_AI_CHAT_JS}{_PARLAY_JS}</script>
+<script>{_AI_BTN_JS}{_AI_CHAT_JS}{_DASH_FILTER_JS}{_PARLAY_JS}</script>
 </head><body>
 <h1>⚽ 盘口分析</h1>
 <nav class="page-nav meta" style="margin-bottom:14px">
@@ -857,10 +1145,12 @@ def html_dashboard(
 <button class="btn" style="margin-bottom:14px" onclick="fetch('/api/run',{{method:'POST'}}).then(r=>r.json()).then(d=>showToast(d.message||d.error||'已触发', !d.ok))">立即执行一次</button>
 <a class="btn" href="/review" style="margin-bottom:14px;background:#ca8a04">📋 推荐复盘</a>
 {div_teaser}
+{day_switcher}
+{sweet_teaser}
 {wc_teaser}
 {_ai_chat_card(scope="dashboard")}
 <div class="card">
-  <h2>未开赛 / 进行中 · {len(active)} 场</h2>
+  <h2>未开赛 / 进行中 · {len(all_active)} 场</h2>
   <div class="parlay-toolbar">
     <span class="meta">自选串关 <strong id="parlay-count">0/2</strong></span>
     <button type="button" class="btn btn-sm" id="parlay-analyze-btn" disabled
@@ -875,6 +1165,11 @@ def html_dashboard(
     <span class="meta">自选仅基于本地推荐与 SP；AI自动选会参考初盘→实时盘与历史相似样本</span>
   </div>
   <div class="card parlay-result" id="parlay-result"></div>
+  <p class="meta" style="margin-bottom:8px">
+    <label><input type="checkbox" id="dash-filter-sweet" onchange="onDashFilter(this)"> 仅 SP 1.4–1.6 甜区</label>
+    &nbsp;·&nbsp;
+    <label><input type="checkbox" id="dash-filter-solid" onchange="onDashSolidFilter(this)"> 仅稳胆 / 稳胆甜区</label>
+  </p>
   <table class="dashboard-table">
     <tr><th title="勾选 2 场">串</th><th>比赛</th><th>档位</th><th>竞彩推荐</th><th>比分</th><th>亚盘</th><th>置信</th><th>详情</th><th>AI</th></tr>
     {active_rows}
@@ -3759,6 +4054,7 @@ def html_match_detail(
     pred_card = _build_pred_cards(prediction)
     settled_card = _settled_card(settled)
     strategy_panel = _build_match_strategy_panel(name, prediction)
+    sweet_spot_panel = _sweet_spot_panel(prediction)
     score_rec_panel = _score_recommend_panel(prediction)
     quant_panel = _quant_panel(prediction)
     ah_card = _build_ah_analysis_card(prediction, timeline)
@@ -3942,6 +4238,14 @@ def html_match_detail(
 .strategy-card { border-left: 4px solid #059669; margin-bottom: 14px; }
 .quant-card { border-left: 4px solid #059669; margin-bottom: 14px; }
 .score-rec-card { border-left: 4px solid #ea580c; margin-bottom: 14px; }
+.sweet-spot-card { border-left: 4px solid #ea580c; margin-bottom: 14px; }
+.sweet-spot-card.sweet-in { border-left-color: #c2410c; background: linear-gradient(135deg,#fffbf5,#fff7ed); }
+.sweet-spot-card.sweet-below { border-left-color: #059669; }
+.sweet-spot-card.sweet-above { border-left-color: #d97706; }
+.sweet-headline { font-size: 1.05rem; margin: 8px 0; }
+.sweet-check-table .chk-ok td:first-child { color: #047857; font-weight: 700; }
+.sweet-check-table .chk-bad td:first-child { color: #b91c1c; font-weight: 700; }
+.sweet-verdict { margin: 10px 0 6px; font-size: 14px; color: #1e293b; }
 .score-headline { font-size: 1.05rem; margin: 8px 0; }
 .score-rec-table .score-cell { font-size: 1.1rem; letter-spacing: 0.02em; }
 .score-track-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 8px; margin: 10px 0; font-size: 0.92rem; }
@@ -4030,6 +4334,7 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
 {settled_card}
 {_ai_chat_card(scope="match", fid=fid)}
 {strategy_panel}
+{sweet_spot_panel}
 {score_rec_panel}
 {quant_panel}
 {deep_card}

@@ -144,3 +144,9 @@ STYLE_CLASH_SAFE_PENALTY = 1.0      # 热门遇相克时 safe 分 -N
 DAILY_PICKS_SP_PREFERRED = True   # 优先胜平负；仅让球默认不进池，极高置信例外
 DAILY_PICKS_SP_ONLY = DAILY_PICKS_SP_PREFERRED  # 兼容旧名
 DAILY_PICKS_RQSP_SCORE_PENALTY = 5  # 让球场次入选后评分扣分（仍弱于胜平负）
+
+# ── 稳胆策略（正确率优先，SP 甜区 1.4–1.6）────────────────
+ACCURACY_SP_MIN = 1.40
+ACCURACY_SP_MAX = 1.60
+ACCURACY_SP_SOFT_MAX = 1.85          # 超出甜区但尚可单关的上限提示
+ACCURACY_FIRST_REQUIRE_HIGH_CONF = True  # 「稳胆/稳胆甜区」需置信=高

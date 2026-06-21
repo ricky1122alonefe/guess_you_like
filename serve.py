@@ -59,6 +59,7 @@ _API_FID_RE = re.compile(r"^/api/match/(\d+)/timeline$")
 _API_RECOMMEND_RE = re.compile(r"^/api/match/(\d+)/recommend$")
 _API_DEEP_RE = re.compile(r"^/api/match/(\d+)/deep-analyze$")
 _API_SCORE_RE = re.compile(r"^/api/match/(\d+)/score-recommend$")
+_API_SWEET_RE = re.compile(r"^/api/match/(\d+)/sweet-spot$")
 _API_CHAT_RE = re.compile(r"^/api/match/(\d+)/chat-stream$")
 _daily_ai_lock = threading.Lock()
 _daily_ai_running = False
@@ -135,6 +136,19 @@ def _ensure_quant_analysis(pred: dict | None, idx: dict | None = None) -> None:
         attach_score_recommendation(pred)
     except Exception:
         log.exception("比分推荐附加失败")
+
+
+def _ensure_post_recommendation(pred: dict | None) -> None:
+    if not pred:
+        return
+    try:
+        from jingcai_pick import ensure_match_jingcai
+        from analysis.rules.output import attach_post_recommendation
+
+        ensure_match_jingcai(pred)
+        attach_post_recommendation(pred)
+    except Exception:
+        log.exception("稳胆/甜区分析附加失败")
 
 
 from jingcai_pick import final_recommendation_cn
@@ -457,6 +471,7 @@ class Handler(BaseHTTPRequestHandler):
             pred = _load_latest_pred(root, fid)
             _ensure_similarity_analysis(pred, root)
             _ensure_quant_analysis(pred, idx)
+            _ensure_post_recommendation(pred)
             ai_records = load_ai_records(root, fid)
             deep_records = load_deep_analyses(root, fid)
             from match_settlement import load_settled_map
@@ -490,6 +505,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(build_score_recommendation(pred))
             return
 
+        swm = _API_SWEET_RE.match(path)
+        if swm:
+            fid = swm.group(1)
+            pred = _load_latest_pred(root, fid)
+            if pred is None:
+                self._send_json({"ok": False, "error": "not found"}, 404)
+                return
+            _ensure_quant_analysis(pred, _load_match_index(root, fid))
+            _ensure_post_recommendation(pred)
+            from accuracy_pick import build_sweet_spot_analysis
+
+            self._send_json(build_sweet_spot_analysis(pred))
+            return
+
         cm = _API_CHAT_RE.match(path)
         if cm:
             fid = cm.group(1)
@@ -519,8 +548,12 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/":
             latest = _read_json(root / "latest.json")
+            qs = parse_qs(urlparse(self.path).query)
+            match_date = qs.get("date", [None])[0]
             self._send_html(html_dashboard(
-                get_state(), latest, output_root=root, within_days=self.within_days,
+                get_state(), latest, output_root=root,
+                within_days=self.within_days,
+                match_date=match_date,
             ))
             return
         if path == "/api/dashboard/chat-stream":

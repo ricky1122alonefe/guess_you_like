@@ -845,3 +845,67 @@ def test_recommendation_review_builder():
         assert "pick_jingcai_cn" in row
         assert "compare_summary" in row
 
+
+def test_sweet_spot_analysis():
+    from accuracy_pick import (
+        attach_accuracy_pick,
+        build_sweet_spot_analysis,
+        evaluate_accuracy_pick,
+        sp_in_sweet_spot,
+    )
+
+    assert sp_in_sweet_spot(1.50) is True
+    assert sp_in_sweet_spot(1.35) is False
+    assert sp_in_sweet_spot(1.70) is False
+
+    pred = {
+        "fixture_id": "999",
+        "match": "A vs B",
+        "predict_row": {
+            "比赛": "A vs B",
+            "赛果预测": "主胜",
+            "初盘倾向": "主胜",
+            "置信度": "高",
+            "竞彩SP": 1.48,
+            "竞彩推荐": "主胜",
+        },
+        "reference_result_1x2_cn": "主胜",
+        "open_result_1x2_cn": "主胜",
+        "confidence_cn": "高",
+        "control_level_cn": "低",
+        "risk_level_cn": "常规",
+        "buy_tier": "A",
+        "jingcai_pick_info": {
+            "jingcai_pick": "home",
+            "jingcai_market": "sp",
+            "jingcai_sp": 1.48,
+            "jingcai_pick_cn": "主胜",
+            "jingcai_pick_display": "主胜",
+        },
+        "jingcai_snapshot": {"sp_home": 1.48, "sp_draw": 3.2, "sp_away": 4.5},
+        "eu_implied": {"fair_home_pct": 58.0, "fair_draw_pct": 24.0, "fair_away_pct": 18.0},
+    }
+
+    info = evaluate_accuracy_pick(pred)
+    assert info["sweet_spot"] is True
+    assert info["accuracy_grade"] == "稳胆甜区"
+
+    sa = build_sweet_spot_analysis(pred)
+    assert sa["ok"] is True
+    assert sa["band"] == "in_sweet"
+    assert sa["checklist_passed"] >= 7
+    assert sa["sp_implied_pct"] == round(100 / 1.48, 1)
+    assert sa["model_prob_pct"] == 58.0
+
+    attach_accuracy_pick(pred)
+    assert pred.get("sweet_spot_analysis", {}).get("sweet_spot") is True
+
+    high_sp = dict(pred)
+    high_sp["jingcai_pick_info"] = dict(pred["jingcai_pick_info"], jingcai_sp=1.85)
+    high_sp["predict_row"] = dict(pred["predict_row"], 竞彩SP=1.85)
+    high_sp.pop("accuracy_pick", None)
+    high_sp.pop("sweet_spot_analysis", None)
+    sa_high = build_sweet_spot_analysis(high_sp)
+    assert sa_high["band"] == "above_sweet"
+    assert sa_high["sweet_spot"] is False
+

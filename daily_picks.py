@@ -253,6 +253,37 @@ def _kickoff_date(m: dict, kickoff_map: dict[str, datetime]) -> str | None:
     return str(d) if d else None
 
 
+def list_available_match_days(
+    matches: list[dict],
+    kickoff_map: dict[str, datetime],
+) -> list[str]:
+    return sorted({d for m in matches if (d := _kickoff_date(m, kickoff_map))})
+
+
+def resolve_match_day(
+    matches: list[dict],
+    kickoff_map: dict[str, datetime],
+    *,
+    match_date: str | None = None,
+) -> str:
+    """Current 收益周期 / 比赛日 — same default as build_daily_picks."""
+    today = now_beijing().date().isoformat()
+    available = list_available_match_days(matches, kickoff_map)
+    target = match_date or today
+    if match_date is None and target not in available and available:
+        future = [d for d in available if d >= today]
+        target = future[0] if future else available[-1]
+    return target
+
+
+def filter_matches_by_day(
+    matches: list[dict],
+    kickoff_map: dict[str, datetime],
+    match_date: str,
+) -> list[dict]:
+    return [m for m in matches if _kickoff_date(m, kickoff_map) == match_date]
+
+
 def _kickoff_label(m: dict, kickoff_map: dict[str, datetime]) -> str:
     fid = str(m.get("fixture_id") or "")
     ko = kickoff_map.get(fid)
@@ -453,6 +484,24 @@ def _score_match(m: dict, pick: dict[str, Any], kickoff_map: dict[str, datetime]
         safe -= getattr(app_cfg, "DAILY_PICKS_RQSP_SCORE_PENALTY", 5)
     elif pick["asian_handicap_cn"] != "观望":
         safe += 1
+
+    from jingcai_pick import resolve_jingcai_sp
+    from accuracy_pick import sp_in_sweet_spot
+
+    sp = pick.get("jingcai_sp") or resolve_jingcai_sp(m, pick_key=pick["pick_key"], market=pick.get("jingcai_market"))
+    if sp is not None:
+        if sp_in_sweet_spot(sp):
+            safe += 7
+            balanced += 2
+        elif sp < getattr(app_cfg, "ACCURACY_SP_MIN", 1.40):
+            safe += 4
+        elif sp <= getattr(app_cfg, "ACCURACY_SP_SOFT_MAX", 1.85):
+            safe += 1
+        else:
+            safe -= 3
+            balanced += 2
+    if conf == "高" and pick.get("consensus"):
+        safe += 2
 
     balanced = 0.0
     balanced += conf * 3
@@ -770,6 +819,9 @@ def _score_parlay_pair(a: dict, b: dict, score_key: str, tier_id: str) -> float:
         for leg in (a, b):
             if leg.get("confidence_cn") == "高":
                 base += 1.5
+            sp = leg.get("jingcai_sp") or leg.get("odds_used")
+            if sp and getattr(app_cfg, "ACCURACY_SP_MIN", 1.40) <= float(sp) <= getattr(app_cfg, "ACCURACY_SP_MAX", 1.60):
+                base += 3
     elif tier_id == "balanced":
         if combined and 2.5 <= combined <= 8.0:
             base += 3
@@ -847,20 +899,11 @@ def build_daily_picks(
     today = now_beijing().date().isoformat()
     kickoff_map = kickoff_map or load_kickoff_map()
 
-    available_dates = sorted({
-        d for m in matches
-        if (d := _kickoff_date(m, kickoff_map))
-    })
+    available_dates = list_available_match_days(matches, kickoff_map)
 
-    target = match_date or today
-    if match_date is None and target not in available_dates and available_dates:
-        future = [d for d in available_dates if d >= today]
-        target = future[0] if future else available_dates[-1]
+    target = resolve_match_day(matches, kickoff_map, match_date=match_date)
 
-    day_matches = [
-        m for m in matches
-        if _kickoff_date(m, kickoff_map) == target
-    ]
+    day_matches = filter_matches_by_day(matches, kickoff_map, target)
     all_actionable = [
         c for m in day_matches
         if (c := _build_candidate(m, kickoff_map))

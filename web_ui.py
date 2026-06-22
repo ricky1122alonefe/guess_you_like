@@ -3544,6 +3544,18 @@ def _score_recommend_panel(prediction: dict | None) -> str:
 </div>"""
 
 
+def _format_review_kickoff(kickoff_at: str | None) -> str:
+    """Show MM-DD HH:MM for review table (full value kept in data-kickoff)."""
+    ko = str(kickoff_at or "").strip()
+    if not ko:
+        return "—"
+    if len(ko) >= 16 and ko[4] == "-" and ko[7] == "-":
+        return ko[5:16]
+    if len(ko) >= 10:
+        return ko[:10]
+    return ko
+
+
 def _review_row(r: dict) -> str:
     fid = r.get("fixture_id") or ""
     name = r.get("match_name") or fid
@@ -3558,9 +3570,11 @@ def _review_row(r: dict) -> str:
     cmp_cls = "cmp-ok" if r.get("hit_1x2") is True else ("cmp-bad" if r.get("hit_1x2") is False else "")
     ref = r.get("reference_result_1x2_cn") or "—"
     open_cn = r.get("open_result_1x2_cn") or "—"
-    ko = (r.get("kickoff_at") or "")[:10] or "—"
+    ko_raw = str(r.get("kickoff_at") or "")
+    ko = _format_review_kickoff(ko_raw)
     return (
-        f"<tr data-tier='{_e(r.get('buy_tier') or '')}' data-hit='{_e(str(r.get('hit_1x2')))}'>"
+        f"<tr data-tier='{_e(r.get('buy_tier') or '')}' data-hit='{_e(str(r.get('hit_1x2')))}'"
+        f" data-kickoff='{_e(ko_raw)}'>"
         f"<td>{_e(ko)}</td><td>{link}</td>"
         f"<td><strong>{_e(r.get('pick_jingcai_cn') or '—')}</strong></td>"
         f"<td><strong>{_e(r.get('score_text') or '—')}</strong> {_e(r.get('result_1x2_cn') or '—')}</td>"
@@ -3604,7 +3618,11 @@ def html_recommendation_review(report: dict) -> str:
 .hero-card { background: linear-gradient(135deg, #fefce8 0%, #fff 55%); border: 1px solid #fde047; }
 .cmp-ok { color: #047857; font-weight: 700; }
 .cmp-bad { color: #b91c1c; font-weight: 700; }
-.review-toolbar { display:flex; gap:8px; flex-wrap:wrap; margin:12px 0; }
+.review-toolbar { display:flex; gap:8px; flex-wrap:wrap; margin:12px 0; align-items:center; }
+.review-toolbar .review-sort-label { margin-left: auto; font-size: 12px; color: #64748b; }
+@media (max-width: 640px) {
+  .review-toolbar .review-sort-label { margin-left: 0; width: 100%; }
+}
 .review-toolbar button { padding:6px 12px; border-radius:8px; border:1px solid #e2e8f0; background:#fff; cursor:pointer; }
 .review-toolbar button.active { background:#2563eb; color:#fff; border-color:#2563eb; }
 .review-table-wrap { overflow-x:auto; }
@@ -3621,21 +3639,47 @@ table.review-table th { white-space: nowrap; }
 {review_css}
 </style>
 <script>
-function filterReview(kind) {{
-  document.querySelectorAll('.review-toolbar button').forEach(b => {{
-    b.classList.toggle('active', b.dataset.filter === kind);
-  }});
+let reviewFilter = 'all';
+let reviewSort = 'kickoff_desc';
+
+function applyReviewFilter() {{
   document.querySelectorAll('.review-table tbody tr').forEach(tr => {{
     const tier = tr.dataset.tier || '';
     const hit = tr.dataset.hit || '';
     let show = true;
-    if (kind === 'A') show = tier === 'A';
-    else if (kind === 'B') show = tier === 'B';
-    else if (kind === 'C') show = tier === 'C';
-    else if (kind === 'hit') show = hit === 'True';
-    else if (kind === 'miss') show = hit === 'False';
+    if (reviewFilter === 'A') show = tier === 'A';
+    else if (reviewFilter === 'B') show = tier === 'B';
+    else if (reviewFilter === 'C') show = tier === 'C';
+    else if (reviewFilter === 'hit') show = hit === 'True';
+    else if (reviewFilter === 'miss') show = hit === 'False';
     tr.style.display = show ? '' : 'none';
   }});
+}}
+
+function filterReview(kind) {{
+  reviewFilter = kind;
+  document.querySelectorAll('.review-toolbar button[data-filter]').forEach(b => {{
+    b.classList.toggle('active', b.dataset.filter === kind);
+  }});
+  applyReviewFilter();
+}}
+
+function sortReview(kind) {{
+  reviewSort = kind;
+  document.querySelectorAll('.review-toolbar button[data-sort]').forEach(b => {{
+    b.classList.toggle('active', b.dataset.sort === kind);
+  }});
+  const tbody = document.querySelector('.review-table tbody');
+  if (!tbody) return;
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+  rows.sort((a, b) => {{
+    const ka = a.dataset.kickoff || '';
+    const kb = b.dataset.kickoff || '';
+    if (reviewSort === 'kickoff_asc') return ka.localeCompare(kb);
+    return kb.localeCompare(ka);
+  }});
+  rows.forEach(r => tbody.appendChild(r));
+  applyReviewFilter();
 }}
 </script>
 </head><body>
@@ -3667,12 +3711,15 @@ function filterReview(kind) {{
     <button type="button" data-filter="C" onclick="filterReview('C')">C 仅参考</button>
     <button type="button" data-filter="hit" onclick="filterReview('hit')">只看命中</button>
     <button type="button" data-filter="miss" onclick="filterReview('miss')">只看失误</button>
+    <span class="review-sort-label">排序</span>
+    <button type="button" class="active" data-sort="kickoff_desc" onclick="sortReview('kickoff_desc')">开球↓最新</button>
+    <button type="button" data-sort="kickoff_asc" onclick="sortReview('kickoff_asc')">开球↑最早</button>
   </div>
   <div class="review-table-wrap">
   <table class="review-table">
     <thead>
       <tr>
-        <th>日期</th><th>比赛</th><th>竞彩推荐</th><th>实际</th><th>对照</th>
+        <th>开球</th><th>比赛</th><th>竞彩推荐</th><th>实际</th><th>对照</th>
         <th>档位</th><th>置信</th><th>参考研判</th><th>初盘</th><th>比分</th>
         <th>1X2</th><th>比分</th><th>亚盘</th><th>来源</th>
       </tr>

@@ -156,7 +156,7 @@ Sat June 20
   16:00 UTC-4    Germany  2-1 (0-1) Ivory Coast    @ Toronto
                     (Deniz Undav 68', 90+4';
                        Franck Kessié 30')
-  19:00 UTC-5    Ecuador  v Curaçao        @ Kansas City
+  19:00 UTC-5    Ecuador  0-0 (0-0) Curaçao        @ Kansas City
 Thu June 25
   16:00 UTC-4    Curaçao  v Ivory Coast     @ Philadelphia
   16:00 UTC-4    Ecuador  v Germany         @ New York/New Jersey (East Rutherford)
@@ -174,7 +174,8 @@ Sat June 20
   12:00 UTC-5    Netherlands  5-1 (2-0) Sweden         @ Houston
                     (Brian Brobbey 5', 17' Cody Gakpo 47', 54' Crysencio Summerville 89';
                        Anthony Elanga 59')
-  22:00 UTC-6    Tunisia      v Japan              @ Monterrey (Guadalupe)
+  22:00 UTC-6    Tunisia      0-4 (0-2) Japan              @ Monterrey (Guadalupe)
+                    (Daichi Kamada 4' Ayase Ueda 31' Junya Ito 69' Ayase Ueda 83')
 Thu June 25
   18:00 UTC-5    Japan        v Sweden             @ Dallas (Arlington)
   18:00 UTC-5   Tunisia      v Netherlands         @ Kansas City
@@ -189,7 +190,7 @@ Mon June 15
                     (Ramin Rezaeian 32' Mohammad Mohebbi 64';
                        Elijah Just 7', 54')
 Sun June 21
-  12:00 UTC-7    Belgium      v Iran    @ Los Angeles (Inglewood)
+  12:00 UTC-7    Belgium      0-0 (0-0) Iran    @ Los Angeles (Inglewood)
   18:00 UTC-7    New Zealand  v Egypt   @ Vancouver
 Fri June 26
   20:00 UTC-7    Egypt         v Iran      @ Seattle
@@ -203,8 +204,11 @@ Mon June 15
                     (Abdulelah Al-Amri 41';
                        Maxi Araújo 80')
 Sun June 21
-  12:00 UTC-4    Spain   v Saudi Arabia   @ Atlanta
-  18:00 UTC-4    Uruguay v Cape Verde     @ Miami (Miami Gardens)
+  12:00 UTC-4    Spain   4-0 (3-0) Saudi Arabia   @ Atlanta
+                    (Lamine Yamal 10' Mikel Oyarzabal 21', 24' Hassan Al-Tambakti 49'(OG))
+  18:00 UTC-4    Uruguay 2-2 (2-1) Cape Verde     @ Miami (Miami Gardens)
+                    (Maxi Araújo 44' Agustín Cano 45+6';
+                       Kevin Pina 21' Hélio Varela 61')
 Fri June 26
   19:00 UTC-5    Cape Verde  v Saudi Arabia   @ Houston
   18:00 UTC-6    Uruguay      v Spain          @ Guadalajara (Zapopan)

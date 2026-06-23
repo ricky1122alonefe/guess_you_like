@@ -72,7 +72,11 @@ def _row_from_settled(settled: dict, *, output_root: Path) -> dict[str, Any]:
             pred.get("reference_result_1x2_cn") or row.get("赛果预测") or pred_snap.get("reference_result_1x2_cn")
         ),
         "open_result_1x2_cn": pred.get("open_result_1x2_cn") or row.get("初盘倾向"),
-        "recommended_scores": settled.get("recommended_scores") or pred_snap.get("recommended_scores") or row.get("推荐比分"),
+        "recommended_scores": (
+            None
+            if not __import__("product_focus").score_prediction_enabled()
+            else (settled.get("recommended_scores") or pred_snap.get("recommended_scores") or row.get("推荐比分"))
+        ),
         "asian_handicap_cn": (
             settled.get("pick_ah_cn") or pred_snap.get("asian_handicap_cn") or row.get("亚盘") or pred.get("asian_handicap_cn")
         ),

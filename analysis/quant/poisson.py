@@ -29,6 +29,13 @@ def apply_poisson(
     if not sm:
         return
     quant["score_model"] = sm
-    pred["model_likely_scores"] = sm.get("likely_scores") or []
-    pred["model_likely_scores_detail"] = sm.get("likely_scores_detail") or []
-    pred["model_stretch_scores"] = [s.get("score") for s in sm.get("stretch_scores") or []]
+    from product_focus import score_prediction_enabled
+
+    if score_prediction_enabled():
+        pred["model_likely_scores"] = sm.get("likely_scores") or []
+        pred["model_likely_scores_detail"] = sm.get("likely_scores_detail") or []
+        pred["model_stretch_scores"] = [s.get("score") for s in sm.get("stretch_scores") or []]
+    else:
+        for key in ("likely_scores", "likely_scores_detail", "top_scores", "all_scores", "stretch_scores"):
+            sm.pop(key, None)
+        quant["score_model"] = sm

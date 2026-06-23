@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from product_focus import score_prediction_enabled
+
 RQ_CN = {"home": "胜", "draw": "平", "away": "负", "skip": "观望"}
 SP_CN = {"home": "主胜", "draw": "平局", "away": "客胜", "skip": "观望"}
 KEY_FROM_RQ_CN = {"胜": "home", "平": "draw", "负": "away", "观望": "skip"}
@@ -86,6 +88,48 @@ def _collect_scores(pred: dict) -> list[str]:
     return out[:6]
 
 
+def infer_rq_pick_from_probs(pred: dict, handicap: int) -> tuple[str, str]:
+    """RQSP fallback from internal Poisson matrix or reference 1X2 — no score list."""
+    sm = (pred.get("quant") or {}).get("score_model") or {}
+    lam_h, lam_a = sm.get("lambda_home"), sm.get("lambda_away")
+    sign = f"+{handicap}" if handicap > 0 else str(handicap)
+    if lam_h is not None and lam_a is not None:
+        from score_models import score_matrix
+
+        cells = score_matrix(float(lam_h), float(lam_a))
+        counts = {"home": 0.0, "draw": 0.0, "away": 0.0}
+        for (i, j), prob in cells.items():
+            counts[settle_handicap(i, j, handicap)] += prob
+        total = sum(counts.values()) or 1.0
+        best = max(counts, key=counts.get)
+        pct = counts[best] / total * 100
+        return best, (
+            f"按1X2概率模型在让球({sign})下推演，{RQ_CN[best]}约 {pct:.0f}%"
+        )
+
+    ref = pred.get("reference_result_1x2") or pred.get("result_1x2")
+    rep = {"home": (1, 0), "draw": (1, 1), "away": (0, 1)}
+    if ref in rep:
+        h, a = rep[ref]
+        rq = settle_handicap(h, a, handicap)
+        ref_cn = SP_CN.get(ref, ref)
+        return rq, f"参考研判{ref_cn}，在让球({sign})下对应{RQ_CN[rq]}"
+
+    eu = pred.get("eu_implied") or {}
+    probs = {
+        "home": float(eu.get("fair_home_pct") or 0),
+        "draw": float(eu.get("fair_draw_pct") or 0),
+        "away": float(eu.get("fair_away_pct") or 0),
+    }
+    if max(probs.values()) > 0:
+        ref = max(probs, key=probs.get)
+        h, a = rep[ref]
+        rq = settle_handicap(h, a, handicap)
+        return rq, f"欧赔隐含偏{SP_CN[ref]}，让球({sign})下对应{RQ_CN[rq]}"
+
+    return "skip", "缺少1X2概率，仅让球场次请运行 AI 分析"
+
+
 def infer_rq_pick_from_scores(scores: list[str], handicap: int) -> tuple[str, str]:
     """Return (pick_key, reason) from likely scores under handicap line."""
     counts = {"home": 0.0, "draw": 0.0, "away": 0.0}
@@ -164,10 +208,12 @@ def compute_jingcai_pick(pred: dict, jc: dict | None) -> dict[str, Any]:
         if handicap is None:
             pick_key = "skip"
             reason = "缺少让球数，无法计算让球推荐"
-        else:
+        elif score_prediction_enabled() and _collect_scores(pred):
             pick_key, reason = infer_rq_pick_from_scores(
                 _collect_scores(pred), int(handicap),
             )
+        else:
+            pick_key, reason = infer_rq_pick_from_probs(pred, int(handicap))
     else:
         pick_key = pred.get("reference_result_1x2") or pred.get("result_1x2") or "skip"
         cn = pred.get("reference_result_1x2_cn") or pred.get("result_1x2_cn") or ""

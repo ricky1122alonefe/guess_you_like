@@ -43,9 +43,12 @@ def run_quant_analysis(
     if "mc" in active:
         apply_mc(pred, home, away, pred.setdefault("quant", {}))
     try:
-        from analysis.score_recommend import attach_score_recommendation
+        from product_focus import score_prediction_enabled
 
-        attach_score_recommendation(pred)
+        if score_prediction_enabled():
+            from analysis.score_recommend import attach_score_recommendation
+
+            attach_score_recommendation(pred)
     except Exception:
         pass
     return pred

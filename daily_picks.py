@@ -668,6 +668,10 @@ def _jc_sp(jc: dict | None, market: str, pick_key: str) -> float | None:
 
 
 def _score_text(m: dict) -> str:
+    from product_focus import score_prediction_enabled
+
+    if not score_prediction_enabled():
+        return ""
     row = m.get("predict_row") or {}
     scores = row.get("推荐比分") or m.get("likely_scores_detail") or m.get("likely_scores") or []
     if isinstance(scores, list):

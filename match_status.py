@@ -83,25 +83,39 @@ def evaluate_prediction_hits(
         return out
 
     row = pred.get("predict_row") or {}
-    from jingcai_pick import final_recommendation_cn
+    from jingcai_pick import final_recommendation_cn, jingcai_market_mode, settle_handicap
 
     pick_cn = final_recommendation_cn(pred)
-    pick_key = norm_result(pick_cn)
+    info = pred.get("jingcai_pick_info") or {}
+    jc = pred.get("jingcai_snapshot") or {}
+    mode = info.get("jingcai_market") or jingcai_market_mode(jc)
+    pick_key = info.get("jingcai_pick")
     out["pick_jingcai_cn"] = pick_cn
-    out["pick_1x2_cn"] = row.get("胜平负") or pred.get("result_1x2_cn")
+    out["pick_1x2_cn"] = row.get("赛果预测") or pred.get("result_1x2_cn") or row.get("胜平负")
 
-    if pick_key:
-        out["hit_1x2"] = pick_key == actual_1x2
+    if pick_key and pick_key != "skip":
+        if mode == "rqsp" and jc.get("handicap") is not None:
+            actual_rq = settle_handicap(home_score, away_score, int(jc["handicap"]))
+            out["hit_1x2"] = pick_key == actual_rq
+        elif mode == "sp":
+            out["hit_1x2"] = pick_key == actual_1x2
+        else:
+            legacy = norm_result(pick_cn)
+            if legacy:
+                out["hit_1x2"] = legacy == actual_1x2
 
-    scores_raw = row.get("推荐比分") or ""
-    if not scores_raw:
-        detail = pred.get("likely_scores_detail") or pred.get("likely_scores") or []
-        if isinstance(detail, list):
-            scores_raw = "、".join(str(s) for s in detail)
-    out["recommended_scores"] = scores_raw or None
-    if scores_raw:
-        recommended = [s.split("(")[0].strip() for s in scores_raw.split("、") if s.strip()]
-        out["hit_score"] = score_text in recommended
+    from product_focus import score_prediction_enabled
+
+    if score_prediction_enabled():
+        scores_raw = row.get("推荐比分") or ""
+        if not scores_raw:
+            detail = pred.get("likely_scores_detail") or pred.get("likely_scores") or []
+            if isinstance(detail, list):
+                scores_raw = "、".join(str(s) for s in detail)
+        out["recommended_scores"] = scores_raw or None
+        if scores_raw:
+            recommended = [s.split("(")[0].strip() for s in scores_raw.split("、") if s.strip()]
+            out["hit_score"] = score_text in recommended
 
     pick_ah = pred.get("asian_handicap_pick")
     out["pick_ah"] = pick_ah if pick_ah in ("home", "away", "skip") else None

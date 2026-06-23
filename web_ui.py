@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from jingcai_pick import final_recommendation_cn
+from product_focus import score_prediction_enabled as _score_enabled
 from eu_odds_chart import build_eu_multi_chart_data
 from share_card import long_image_export_script
 from time_utils import beijing_date, chart_time_label, format_beijing, format_ts, now_beijing_str
@@ -979,8 +980,7 @@ def _sweet_spot_panel(prediction: dict | None) -> str:
   <p class="meta">清单 {sa.get('checklist_passed', '—')}/{sa.get('checklist_total', '—')}
      · 参考 {_e(sa.get('reference_cn') or '—')} · 初盘 {_e(sa.get('open_cn') or '—')}
      · 置信 {_e(sa.get('confidence_cn') or '—')}</p>
-  <p class="meta">比分主推 <strong>{_e(sa.get('score_headline') or '—')}</strong>
-     · 赛果轨 {_e(sa.get('score_pick_1x2_cn') or '—')}</p>
+  {f'<p class="meta">比分主推 <strong>{_e(sa.get("score_headline") or "—")}</strong> · 赛果轨 {_e(sa.get("score_pick_1x2_cn") or "—")}</p>' if _score_enabled() else ''}
   <p class="sweet-verdict"><strong>{_e(sa.get('verdict') or '—')}</strong> — {_e(sa.get('stake_hint') or '')}</p>
   <p class="meta">{_e(sa.get('reasons') or '')}</p>
   {api_link}
@@ -1731,7 +1731,9 @@ def _pred_card(pred: dict, *, title: str = "最新推荐") -> str:
     meta = (pred.get("summary") or "")[:500]
     if reasoning and reasoning not in meta:
         meta = f"{reasoning}\n{meta}" if meta else reasoning
-    scores = row.get("推荐比分") or "、".join(pred.get("likely_scores_detail") or pred.get("likely_scores") or [])
+    scores = "—"
+    if _score_enabled():
+        scores = row.get("推荐比分") or "、".join(pred.get("likely_scores_detail") or pred.get("likely_scores") or []) or "—"
     pick = final_recommendation_cn(pred)
     ref = pred.get("reference_result_1x2_cn") or row.get("赛果预测") or pred.get("match_result_1x2_cn") or ""
     jc_play = row.get("竞彩玩法") or ""
@@ -1776,9 +1778,7 @@ def _pred_card(pred: dict, *, title: str = "最新推荐") -> str:
   {tier_line}
   {buy_line}
   {div_line}
-  <p>比分 {_e(scores)}
-     · 亚盘 {_e(row.get('亚盘') or pred.get('asian_handicap_cn'))}
-     · 置信 {_e(row.get('置信度') or pred.get('confidence_cn'))}</p>
+  {f"<p>比分 {_e(scores)} · 亚盘 {_e(row.get('亚盘') or pred.get('asian_handicap_cn'))} · 置信 {_e(row.get('置信度') or pred.get('confidence_cn'))}</p>" if _score_enabled() else f"<p>亚盘 {_e(row.get('亚盘') or pred.get('asian_handicap_cn'))} · 置信 {_e(row.get('置信度') or pred.get('confidence_cn'))}</p>"}
   {odds_line}
   {market_block}
   {meta_block}
@@ -3469,7 +3469,7 @@ def _quant_panel(prediction: dict | None) -> str:
 
 
 def _score_recommend_panel(prediction: dict | None) -> str:
-    if not prediction:
+    if not _score_enabled() or not prediction:
         return ""
     from score_recommend import build_score_recommendation
 
@@ -3564,12 +3564,13 @@ def _review_row(r: dict) -> str:
     tier_css = {"可串": "tier-a", "可单关": "tier-b", "仅参考": "tier-c"}.get(tier_cn, "tier-c")
     tier_tag = f'<span class="tag tag-buy-{tier_css}">{_e(tier_cn)}</span>' if tier_cn != "—" else "—"
     hit_1x2 = _hit_badge(r.get("hit_1x2"))
-    hit_sc = _hit_badge(r.get("hit_score"))
+    hit_sc = _hit_badge(r.get("hit_score")) if _score_enabled() else "—"
     hit_ah = _hit_badge(r.get("hit_ah"))
     cmp_txt = r.get("compare_summary") or "—"
     cmp_cls = "cmp-ok" if r.get("hit_1x2") is True else ("cmp-bad" if r.get("hit_1x2") is False else "")
     ref = r.get("reference_result_1x2_cn") or "—"
     open_cn = r.get("open_result_1x2_cn") or "—"
+    rec_scores = (r.get("recommended_scores") or "—")[:36] if _score_enabled() else "—"
     ko_raw = str(r.get("kickoff_at") or "")
     ko = _format_review_kickoff(ko_raw)
     return (
@@ -3583,7 +3584,7 @@ def _review_row(r: dict) -> str:
         f"<td>{_e(r.get('confidence_cn') or '—')}</td>"
         f"<td class='meta'>{_e(ref)}</td>"
         f"<td class='meta'>{_e(open_cn)}</td>"
-        f"<td class='meta'>{_e((r.get('recommended_scores') or '—')[:36])}</td>"
+        f"<td class='meta'>{_e(rec_scores)}</td>"
         f"<td>{hit_1x2}</td><td>{hit_sc}</td><td>{hit_ah}</td>"
         f"<td class='meta'>{_e(r.get('recommendation_source') or '—')}</td>"
         f"</tr>\n"

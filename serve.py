@@ -132,9 +132,12 @@ def _ensure_quant_analysis(pred: dict | None, idx: dict | None = None) -> None:
     except Exception:
         log.exception("量化分析附加失败")
     try:
-        from analysis.score_recommend import attach_score_recommendation
+        from product_focus import score_prediction_enabled
 
-        attach_score_recommendation(pred)
+        if score_prediction_enabled():
+            from analysis.score_recommend import attach_score_recommendation
+
+            attach_score_recommendation(pred)
     except Exception:
         log.exception("比分推荐附加失败")
 
@@ -545,6 +548,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "not found"}, 404)
                 return
             _ensure_quant_analysis(pred, _load_match_index(root, fid))
+            from product_focus import score_prediction_enabled
+
+            if not score_prediction_enabled():
+                self._send_json({
+                    "ok": False,
+                    "disabled": True,
+                    "headline": "已关闭比分预测，聚焦竞彩胜平负/让球",
+                })
+                return
             from score_recommend import build_score_recommendation
 
             self._send_json(build_score_recommendation(pred))

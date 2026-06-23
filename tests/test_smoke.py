@@ -373,6 +373,28 @@ def test_parlay_uses_jingcai_sp_only():
     assert combined == round(1.85 * 2.10, 2)
 
 
+def test_jingcai_rqsp_from_probs_without_scores():
+    from jingcai_pick import attach_jingcai_recommendation, infer_rq_pick_from_probs
+
+    pred = {
+        "reference_result_1x2": "away",
+        "reference_result_1x2_cn": "客胜",
+        "eu_implied": {"fair_home_pct": 18.0, "fair_draw_pct": 24.0, "fair_away_pct": 58.0},
+        "quant": {
+            "score_model": {"lambda_home": 0.9, "lambda_away": 1.6, "prob_1x2_pct": {"home": 22, "draw": 24, "away": 54}},
+        },
+    }
+    pick, reason = infer_rq_pick_from_probs(pred, -1)
+    assert pick in ("home", "draw", "away")
+    assert "让球" in reason
+
+    jc = {"has_sp": False, "has_rqsp": True, "handicap": -1, "rqsp_home": 3.2, "rqsp_draw": 3.4, "rqsp_away": 1.85}
+    attach_jingcai_recommendation(pred, jc)
+    info = pred["jingcai_pick_info"]
+    assert info["jingcai_market"] == "rqsp"
+    assert info["jingcai_pick"] in ("home", "draw", "away")
+
+
 def test_score_model_from_odds():
     from score_models import build_score_model
 
@@ -473,13 +495,28 @@ def test_attach_quant_analysis():
     attach_jingcai_recommendation(pred, jc)
     attach_quant_analysis(pred)
     assert pred.get("quant")
-    assert pred.get("model_likely_scores")
     assert pred["quant"].get("score_model")
     assert pred["quant"].get("elo")
+    from product_focus import score_prediction_enabled
+
+    if score_prediction_enabled():
+        assert pred.get("model_likely_scores")
+    else:
+        assert not pred.get("model_likely_scores")
+        assert pred["quant"]["score_model"].get("prob_1x2_pct")
 
 
 def test_score_recommendation_module():
+    from product_focus import score_prediction_enabled
     from score_recommend import attach_score_recommendation, build_score_recommendation
+
+    if not score_prediction_enabled():
+        sr = build_score_recommendation({"result_1x2": "home"})
+        assert sr.get("disabled") is True
+        pred = {"result_1x2": "home"}
+        attach_score_recommendation(pred)
+        assert "score_recommend" not in pred or pred.get("score_recommend", {}).get("disabled")
+        return
 
     pred = {
         "match": "荷兰 vs 瑞典",

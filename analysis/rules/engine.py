@@ -367,6 +367,10 @@ def _pick_scores(
     ah_count: int = 0,
     eu_count: int = 0,
 ) -> tuple[list[str], list[str]]:
+    from product_focus import score_prediction_enabled
+
+    if not score_prediction_enabled():
+        return [], []
     if stats is not None and eu_stats is not None and hist_rates:
         historical = _pick_scores_from_history(
             stats, eu_stats, result, hist_rates,

@@ -23,8 +23,12 @@ def discover_xls(directory: Path) -> list[str]:
 
 
 def rec_to_row(rec, *, cur=None, predict_date: str = "") -> dict:
+    from product_focus import score_prediction_enabled
+
     ah = rec.asian_handicap_cn if rec.asian_handicap_pick != "skip" else "观望"
-    scores = "、".join(rec.likely_scores_detail or rec.likely_scores or [])
+    scores = "—"
+    if score_prediction_enabled():
+        scores = "、".join(rec.likely_scores_detail or rec.likely_scores or []) or "—"
     row = {
         "预测日期": predict_date,
         "比赛": rec.match,

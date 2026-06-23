@@ -170,6 +170,10 @@ def _total_goals_hint(pred: dict, sm: dict | None) -> str:
 
 def build_score_recommendation(pred: dict | None) -> dict[str, Any]:
     """Consolidate historical + model score tracks into one actionable bundle."""
+    from product_focus import score_prediction_enabled
+
+    if not score_prediction_enabled():
+        return {"ok": False, "disabled": True, "headline": "已关闭比分预测，聚焦竞彩胜平负/让球"}
     if not pred:
         return {"ok": False, "reason": "无预测数据"}
 
@@ -271,5 +275,10 @@ def build_score_recommendation(pred: dict | None) -> dict[str, Any]:
 
 def attach_score_recommendation(pred: dict) -> dict:
     """Attach score_recommend block to prediction dict."""
+    from product_focus import score_prediction_enabled
+
+    if not score_prediction_enabled():
+        pred.pop("score_recommend", None)
+        return pred
     pred["score_recommend"] = build_score_recommendation(pred)
     return pred

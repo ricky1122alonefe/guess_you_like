@@ -53,13 +53,20 @@ def recommendation_to_baseline(rec: Recommendation) -> dict:
 def attach_post_recommendation(pred: dict) -> dict:
     """Attach buy tier after jingcai + predict_row are finalized."""
     from jingcai_tier import attach_buy_tier
+    from product_focus import score_prediction_enabled
 
-    try:
-        from analysis.score_recommend import attach_score_recommendation
+    if score_prediction_enabled():
+        try:
+            from analysis.score_recommend import attach_score_recommendation
 
-        attach_score_recommendation(pred)
-    except Exception:
-        pass
+            attach_score_recommendation(pred)
+        except Exception:
+            pass
+    else:
+        pred.pop("score_recommend", None)
+        row = dict(pred.get("predict_row") or {})
+        row.pop("推荐比分", None)
+        pred["predict_row"] = row
     attach_buy_tier(pred)
     try:
         from accuracy_pick import attach_accuracy_pick
@@ -115,6 +122,11 @@ def merge_expert_prediction(
 
     if not out.get("likely_scores_detail") and out.get("likely_scores"):
         out["likely_scores_detail"] = list(out["likely_scores"])
+
+    from product_focus import score_prediction_enabled, strip_score_fields
+
+    if not score_prediction_enabled():
+        strip_score_fields(out)
 
     if baseline.get("insufficient_data") or baseline.get("control_level_cn") == "高":
         if out.get("confidence") == "high" or out.get("confidence_cn") == "高":

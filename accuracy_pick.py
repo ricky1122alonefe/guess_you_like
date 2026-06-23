@@ -6,6 +6,7 @@ from typing import Any
 
 import config as app_cfg
 from jingcai_pick import actionable_jingcai_pick, final_recommendation_cn, resolve_jingcai_sp
+from product_focus import score_prediction_enabled
 
 SKIP_PICKS = frozenset({"观望", "—", "", None, "暂无竞彩"})
 DIVERGENCE_TAGS = frozenset({"出线·欧亚分歧", "竞彩·参考分歧"})
@@ -262,7 +263,10 @@ def build_sweet_spot_analysis(pred: dict) -> dict[str, Any]:
     total = len(checklist)
 
     sr = pred.get("score_recommend") or {}
-    score_headline = sr.get("headline") or row.get("推荐比分") or "—"
+    if score_prediction_enabled():
+        score_headline = sr.get("headline") or row.get("推荐比分") or "—"
+    else:
+        score_headline = "—"
 
     if sweet:
         band = "in_sweet"

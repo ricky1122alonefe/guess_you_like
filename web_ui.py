@@ -12,7 +12,12 @@ from urllib.parse import quote
 from jingcai_pick import final_recommendation_cn
 from product_focus import score_prediction_enabled as _score_enabled
 from eu_odds_chart import build_eu_multi_chart_data
-from share_card import long_image_export_script
+from share_card import (
+    AI_SUMMARY_POSTER_CSS,
+    build_ai_summary_context,
+    html_ai_summary_panel,
+    long_image_export_script,
+)
 from time_utils import beijing_date, chart_time_label, format_beijing, format_ts, now_beijing_str
 
 
@@ -705,7 +710,7 @@ def _wrap_export_module(slug: str, html: str, *, extra_class: str = "") -> str:
         cls += f" {extra_class}"
     return (
         f'<div class="{cls}" data-export-slug="{_e(slug)}">'
-        f'<div class="export-module-toolbar">{_export_module_btn()}</div>'
+        f'<div class="export-module-toolbar export-hide">{_export_module_btn()}</div>'
         f'<div class="export-module-inner">{html}</div></div>'
     )
 
@@ -4629,7 +4634,7 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
 .export-footer { margin-top: 16px; padding-top: 10px; border-top: 1px dashed #cbd5e1; text-align: center; font-size: 11px; color: #64748b; }
 #match-export-root { background: #f8fafc; padding: 4px 0 8px; }
 .export-chart-img { border-radius: 8px; background: #fff; max-width: 100%; }
-""")
+""" + AI_SUMMARY_POSTER_CSS)
 
     safe_name = re.sub(r"[^\w\-]+", "_", name).strip("_") or fid
     export_fname = f"match-{fid}-{safe_name[:40]}"
@@ -4641,6 +4646,15 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
     {freshness}
   </div>""",
     )
+    summary_ctx = build_ai_summary_context(
+        fid,
+        match_name=name,
+        timeline=timeline,
+        prediction=prediction,
+        deep_record=latest_deep if latest_deep else None,
+        ai_records=ai_records,
+    )
+    ai_summary_panel = html_ai_summary_panel(summary_ctx)
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head>
@@ -4665,10 +4679,11 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
   <span class="tag">{len(timeline)} 快照</span>
   <span class="tag">{len(changes)} 变动</span>
 </p>
-<p class="meta">各模块标题旁点「📷 存图」可单独保存一张图（适合抖音分条发）；「整页长图」会把本页全部模块打包成一张。</p>
+<p class="meta">「竞彩足球 · AI 推荐 &amp; 总结」点红色 <strong>📷 保存推荐图</strong> 下载 PNG；含综合总结 + 各模型推荐，不含比分。</p>
 
 <div id="match-export-root" data-export-base="{_e(export_fname)}">
 {export_hero}
+{ai_summary_panel}
 {qual_banner}
 {tier_banner}
 {settled_card}

@@ -242,7 +242,43 @@ def test_long_image_export_helper():
     js = long_image_export_script(root_id="test-root", filename="demo")
     assert "savePageLongImage" in js
     assert "saveModuleImage" in js
+    assert "export-poster" in js
     assert "test-root" in js
+
+
+def test_ai_summary_card_helpers():
+    from share_card import build_ai_summary_context, html_ai_summary_card, html_ai_summary_panel
+
+    ctx = build_ai_summary_context(
+        "123",
+        match_name="葡萄牙VS乌兹别克斯坦",
+        timeline=[{"ts": "2026-06-23T18:48:03", "odds": {"jingcai": {"has_sp": True, "match_num": "周一001", "sp_home": 1.5, "sp_draw": 3.2, "sp_away": 2.35}}}],
+        prediction={
+            "predict_row": {"竞彩推荐": "客胜", "竞彩SP": 2.35, "竞彩玩法": "胜平负", "置信度": "中"},
+            "buy_tier_cn": "可串",
+            "summary": "国外隐含概率客胜偏高，SP仍有正EV",
+            "ai_analyses": {
+                "ds": {
+                    "ai_provider_label": "DeepSeek 精算师",
+                    "actuary_reasoning": "国外隐含概率客胜偏高，SP仍有正EV",
+                    "predict_row": {"竞彩推荐": "客胜", "置信度": "中"},
+                },
+            },
+        },
+    )
+    assert ctx["has_pick"]
+    assert "客胜" in ctx["recommend"]
+    assert ctx["jc_mode"] == "sp"
+    assert len(ctx["ai_models"]) >= 1
+    html = html_ai_summary_card(ctx)
+    assert "竞彩可购" in html
+    assert "AI 综合总结" in html
+    assert "各模型 AI 推荐" in html
+    assert "DeepSeek" in html
+    assert "比分" not in html
+    panel = html_ai_summary_panel(ctx)
+    assert "保存推荐图" in panel
+    assert "saveModuleImage" in panel
 
 
 def test_match_result_payload_serialized():

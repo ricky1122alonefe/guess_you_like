@@ -373,26 +373,42 @@ def test_parlay_uses_jingcai_sp_only():
     assert combined == round(1.85 * 2.10, 2)
 
 
-def test_jingcai_rqsp_from_probs_without_scores():
-    from jingcai_pick import attach_jingcai_recommendation, infer_rq_pick_from_probs
+def test_jingcai_rqsp_from_foreign_odds():
+    from jingcai_pick import attach_jingcai_recommendation, infer_rq_pick_from_foreign_odds
 
     pred = {
-        "reference_result_1x2": "away",
-        "reference_result_1x2_cn": "客胜",
+        "reference_result_1x2": "home",
+        "reference_result_1x2_cn": "主胜",
         "eu_implied": {"fair_home_pct": 18.0, "fair_draw_pct": 24.0, "fair_away_pct": 58.0},
+        "odds_snapshot": {"eu_home": 4.5, "eu_draw": 3.4, "eu_away": 1.65},
         "quant": {
             "score_model": {"lambda_home": 0.9, "lambda_away": 1.6, "prob_1x2_pct": {"home": 22, "draw": 24, "away": 54}},
         },
+        "similarity_analysis": {
+            "open": [{
+                "source": "open_eu",
+                "title": "初盘欧赔相似",
+                "count": 120,
+                "samples": [
+                    {"score": "0-1"}, {"score": "0-2"}, {"score": "1-2"},
+                    {"score": "0-1"}, {"score": "0-0"}, {"score": "1-1"},
+                    {"score": "0-2"}, {"score": "0-1"}, {"score": "1-2"},
+                ],
+            }],
+        },
     }
-    pick, reason = infer_rq_pick_from_probs(pred, -1)
+    pick, reason, meta = infer_rq_pick_from_foreign_odds(pred, -1)
     assert pick in ("home", "draw", "away")
-    assert "让球" in reason
+    assert meta.get("probs_pct")
+    assert "国外" in reason or "欧赔" in reason or "相似" in reason
+    assert "参考研判" not in reason
 
     jc = {"has_sp": False, "has_rqsp": True, "handicap": -1, "rqsp_home": 3.2, "rqsp_draw": 3.4, "rqsp_away": 1.85}
     attach_jingcai_recommendation(pred, jc)
     info = pred["jingcai_pick_info"]
     assert info["jingcai_market"] == "rqsp"
     assert info["jingcai_pick"] in ("home", "draw", "away")
+    assert pred.get("predict_row", {}).get("让球参考胜率")
 
 
 def test_score_model_from_odds():

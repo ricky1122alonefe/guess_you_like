@@ -88,33 +88,8 @@ def _collect_scores(pred: dict) -> list[str]:
     return out[:6]
 
 
-def infer_rq_pick_from_probs(pred: dict, handicap: int) -> tuple[str, str]:
-    """RQSP fallback from internal Poisson matrix or reference 1X2 — no score list."""
-    sm = (pred.get("quant") or {}).get("score_model") or {}
-    lam_h, lam_a = sm.get("lambda_home"), sm.get("lambda_away")
-    sign = f"+{handicap}" if handicap > 0 else str(handicap)
-    if lam_h is not None and lam_a is not None:
-        from score_models import score_matrix
-
-        cells = score_matrix(float(lam_h), float(lam_a))
-        counts = {"home": 0.0, "draw": 0.0, "away": 0.0}
-        for (i, j), prob in cells.items():
-            counts[settle_handicap(i, j, handicap)] += prob
-        total = sum(counts.values()) or 1.0
-        best = max(counts, key=counts.get)
-        pct = counts[best] / total * 100
-        return best, (
-            f"按1X2概率模型在让球({sign})下推演，{RQ_CN[best]}约 {pct:.0f}%"
-        )
-
-    ref = pred.get("reference_result_1x2") or pred.get("result_1x2")
-    rep = {"home": (1, 0), "draw": (1, 1), "away": (0, 1)}
-    if ref in rep:
-        h, a = rep[ref]
-        rq = settle_handicap(h, a, handicap)
-        ref_cn = SP_CN.get(ref, ref)
-        return rq, f"参考研判{ref_cn}，在让球({sign})下对应{RQ_CN[rq]}"
-
+def _resolve_eu_fair_probs(pred: dict) -> dict[str, float]:
+    """Fair 1X2 % from foreign EU odds (去水欧赔)."""
     eu = pred.get("eu_implied") or {}
     probs = {
         "home": float(eu.get("fair_home_pct") or 0),
@@ -122,12 +97,149 @@ def infer_rq_pick_from_probs(pred: dict, handicap: int) -> tuple[str, str]:
         "away": float(eu.get("fair_away_pct") or 0),
     }
     if max(probs.values()) > 0:
-        ref = max(probs, key=probs.get)
-        h, a = rep[ref]
-        rq = settle_handicap(h, a, handicap)
-        return rq, f"欧赔隐含偏{SP_CN[ref]}，让球({sign})下对应{RQ_CN[rq]}"
+        return probs
+    odds = pred.get("odds_snapshot") or {}
+    try:
+        from eu_implied_metrics import compute_eu_implied
 
-    return "skip", "缺少1X2概率，仅让球场次请运行 AI 分析"
+        m = compute_eu_implied(odds.get("eu_home"), odds.get("eu_draw"), odds.get("eu_away"))
+        if m:
+            return {
+                "home": float(m.fair_home_pct),
+                "draw": float(m.fair_draw_pct),
+                "away": float(m.fair_away_pct),
+            }
+    except Exception:
+        pass
+    return probs
+
+
+def _rq_prob_pct_from_eu_odds(pred: dict, handicap: int) -> dict[str, float] | None:
+    """Map foreign EU odds → 竞彩让球 胜/平/负 胜率（Poisson，不输出比分）."""
+    sm = (pred.get("quant") or {}).get("score_model") or {}
+    lam_h, lam_a = sm.get("lambda_home"), sm.get("lambda_away")
+    if lam_h is None or lam_a is None:
+        fair = _resolve_eu_fair_probs(pred)
+        if max(fair.values()) <= 0:
+            return None
+        odds = pred.get("odds_snapshot") or {}
+        from score_models import build_score_model
+
+        built = build_score_model(
+            eu_home=odds.get("eu_home"),
+            eu_draw=odds.get("eu_draw"),
+            eu_away=odds.get("eu_away"),
+            fair_home_pct=fair.get("home"),
+            fair_draw_pct=fair.get("draw"),
+            fair_away_pct=fair.get("away"),
+        )
+        if not built:
+            return None
+        lam_h, lam_a = built.get("lambda_home"), built.get("lambda_away")
+    if lam_h is None or lam_a is None:
+        return None
+    from score_models import score_matrix
+
+    cells = score_matrix(float(lam_h), float(lam_a))
+    counts = {"home": 0.0, "draw": 0.0, "away": 0.0}
+    for (i, j), prob in cells.items():
+        counts[settle_handicap(i, j, handicap)] += prob
+    total = sum(counts.values()) or 1.0
+    return {k: round(v / total * 100, 1) for k, v in counts.items()}
+
+
+def _rq_prob_pct_from_similar_samples(pred: dict, handicap: int) -> tuple[dict[str, float] | None, int, str]:
+    """Foreign-odds similar samples → 竞彩让球三向历史胜率."""
+    sim = pred.get("similarity_analysis") or {}
+    best: dict | None = None
+    for layer in ("live", "open"):
+        for block in sim.get(layer) or []:
+            src = block.get("source") or ""
+            if src not in ("open_ah", "live_ah", "open_eu", "live_eu"):
+                continue
+            cnt = int(block.get("count") or 0)
+            if cnt < 15:
+                continue
+            if best is None or cnt > int(best.get("count") or 0):
+                best = block
+    if not best:
+        return None, 0, ""
+
+    counts = {"home": 0.0, "draw": 0.0, "away": 0.0}
+    used = 0
+    for sample in best.get("samples") or []:
+        parsed = parse_score_text(str(sample.get("score") or ""))
+        if not parsed:
+            continue
+        h, a, _ = parsed
+        counts[settle_handicap(h, a, handicap)] += 1.0
+        used += 1
+    if used < 8:
+        return None, 0, best.get("title") or best.get("source") or "相似样本"
+
+    total = sum(counts.values()) or 1.0
+    probs = {k: round(v / total * 100, 1) for k, v in counts.items()}
+    title = best.get("title") or best.get("source") or "国外相似样本"
+    return probs, used, title
+
+
+def _format_rq_prob_line(probs: dict[str, float]) -> str:
+    return (
+        f"胜{probs.get('home', 0):.0f}% / "
+        f"平{probs.get('draw', 0):.0f}% / "
+        f"负{probs.get('away', 0):.0f}%"
+    )
+
+
+def infer_rq_pick_from_foreign_odds(pred: dict, handicap: int) -> tuple[str, str, dict[str, Any]]:
+    """
+    RQSP rule pick — foreign odds only (EU implied + similar AH/EU samples).
+    Does not use domestic SP, reference 1X2 pick, or score lists.
+    """
+    sign = f"+{handicap}" if handicap > 0 else str(handicap)
+    meta: dict[str, Any] = {"handicap": handicap, "source": None, "probs_pct": {}}
+
+    sim_probs, sim_n, sim_title = _rq_prob_pct_from_similar_samples(pred, handicap)
+    eu_probs = _rq_prob_pct_from_eu_odds(pred, handicap)
+
+    probs: dict[str, float] | None = None
+    if sim_probs and eu_probs:
+        probs = {
+            k: round(sim_probs.get(k, 0) * 0.55 + eu_probs.get(k, 0) * 0.45, 1)
+            for k in ("home", "draw", "away")
+        }
+        meta["source"] = "foreign_blend"
+        meta["similar_n"] = sim_n
+        meta["similar_title"] = sim_title
+        reason_prefix = f"国外相似样本{sim_n}场+欧赔隐含"
+    elif sim_probs:
+        probs = sim_probs
+        meta["source"] = "foreign_similar"
+        meta["similar_n"] = sim_n
+        meta["similar_title"] = sim_title
+        reason_prefix = f"{sim_title} {sim_n}场"
+    elif eu_probs:
+        probs = eu_probs
+        meta["source"] = "foreign_eu"
+        reason_prefix = "国外欧赔隐含"
+    else:
+        return "skip", "缺少国外赔率/相似样本，仅让球场次请运行 AI 分析", meta
+
+    meta["probs_pct"] = probs
+    best = max(probs, key=probs.get)
+    if probs.get(best, 0) < 34.0:
+        return "skip", f"国外参考胜率分散（让球{sign} {_format_rq_prob_line(probs)}），建议观望或跑 AI", meta
+
+    reason = (
+        f"{reason_prefix}，让球({sign})下 {_format_rq_prob_line(probs)}，取向{RQ_CN[best]}"
+    )
+    return best, reason, meta
+
+
+def infer_rq_pick_from_probs(pred: dict, handicap: int) -> tuple[str, str]:
+    """Backward-compatible wrapper — RQSP uses foreign odds only."""
+    pick, reason, _ = infer_rq_pick_from_foreign_odds(pred, handicap)
+    return pick, reason
 
 
 def infer_rq_pick_from_scores(scores: list[str], handicap: int) -> tuple[str, str]:
@@ -202,18 +314,16 @@ def compute_jingcai_pick(pred: dict, jc: dict | None) -> dict[str, Any]:
     ai_rq_cn = pred.get("jingcai_rq_pick_cn") or pred.get("jingcai_pick_cn")
     if mode == "rqsp" and ai_rq in ("home", "draw", "away"):
         pick_key = ai_rq
-        reason = pred.get("jingcai_rq_reason") or pred.get("jingcai_reason") or "AI 让球推荐"
+        reason = pred.get("jingcai_rq_reason") or pred.get("jingcai_reason") or "AI 让球推荐（参考国外赔率）"
     elif mode == "rqsp":
         handicap = jc.get("handicap")
         if handicap is None:
             pick_key = "skip"
             reason = "缺少让球数，无法计算让球推荐"
-        elif score_prediction_enabled() and _collect_scores(pred):
-            pick_key, reason = infer_rq_pick_from_scores(
-                _collect_scores(pred), int(handicap),
-            )
         else:
-            pick_key, reason = infer_rq_pick_from_probs(pred, int(handicap))
+            pick_key, reason, rq_ref = infer_rq_pick_from_foreign_odds(pred, int(handicap))
+            if rq_ref.get("probs_pct"):
+                pred["jingcai_rq_reference"] = rq_ref
     else:
         pick_key = pred.get("reference_result_1x2") or pred.get("result_1x2") or "skip"
         cn = pred.get("reference_result_1x2_cn") or pred.get("result_1x2_cn") or ""
@@ -292,11 +402,26 @@ def attach_jingcai_recommendation(pred: dict, jingcai: dict | None) -> dict:
     if jingcai:
         pred["jingcai_snapshot"] = jingcai
 
+    mode = info.get("jingcai_market") or "none"
     row = dict(pred.get("predict_row") or {})
-    analytical = pred.get("reference_result_1x2_cn") or _analytical_result_cn(pred)
-    if analytical not in ("—", NO_JINGCAI, ""):
-        row["赛果预测"] = analytical
-        pred["match_result_1x2_cn"] = analytical
+    if mode == "rqsp":
+        rq_ref = pred.get("jingcai_rq_reference") or {}
+        probs = rq_ref.get("probs_pct") or {}
+        if probs:
+            row["让球参考胜率"] = (
+                f"胜{probs.get('home', 0):.0f}% / "
+                f"平{probs.get('draw', 0):.0f}% / "
+                f"负{probs.get('away', 0):.0f}%"
+            )
+        analytical = pred.get("reference_result_1x2_cn") or _analytical_result_cn(pred)
+        if analytical not in ("—", NO_JINGCAI, ""):
+            row["赛果参考"] = analytical
+            pred["match_result_1x2_cn"] = analytical
+    else:
+        analytical = pred.get("reference_result_1x2_cn") or _analytical_result_cn(pred)
+        if analytical not in ("—", NO_JINGCAI, ""):
+            row["赛果预测"] = analytical
+            pred["match_result_1x2_cn"] = analytical
 
     div = pred.get("jingcai_divergence")
     if div:
@@ -306,7 +431,6 @@ def attach_jingcai_recommendation(pred: dict, jingcai: dict | None) -> dict:
             tags.append("竞彩·参考分歧")
         pred["alert_tags"] = tags
 
-    mode = info.get("jingcai_market") or "none"
     if mode == "none":
         row["竞彩玩法"] = "—"
         row["竞彩推荐"] = NO_JINGCAI

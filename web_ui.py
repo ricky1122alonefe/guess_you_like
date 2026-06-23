@@ -1583,8 +1583,17 @@ def _jingcai_card(jc: dict, prediction: dict | None = None) -> str:
             rec_html = f"<p><strong>推荐购买：{_e(rec)}</strong>{sp_txt}</p>"
             if reason:
                 rec_html += f"<p class='meta'>{_e(reason)}</p>"
+            rq_rate = row.get("让球参考胜率")
+            if rq_rate:
+                rec_html += f"<p class='meta'>国外参考胜率：{_e(rq_rate)}</p>"
+            match_ref = row.get("赛果参考")
+            if match_ref:
+                rec_html += f"<p class='meta'>赛果参考（非竞彩购买项）：{_e(match_ref)}</p>"
         elif not jc.get("has_sp") and jc.get("has_rqsp"):
-            rec_html = "<p class='meta'>本场仅开售让球胜平负，请运行 AI 分析获取让球推荐</p>"
+            rec_html = (
+                "<p class='meta'>本场仅开售让球胜平负；"
+                "让球方向单独参考国外欧赔/相似样本胜率，与胜平负 SP 无关</p>"
+            )
 
     num = _e(jc.get("match_num") or "—")
     hcap = jc.get("handicap_label") or jc.get("handicap") or "—"

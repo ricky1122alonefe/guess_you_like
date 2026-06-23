@@ -17,7 +17,7 @@ from jingcai_pick import (
     RQ_CN,
     SP_CN,
     actionable_jingcai_pick,
-    infer_rq_pick_from_scores,
+    infer_rq_pick_from_foreign_odds,
     jingcai_market_mode,
     market_label,
 )
@@ -701,7 +701,7 @@ def _fallback_pick_key(m: dict, market: str, jc: dict | None) -> tuple[str, str,
         hcap = jc.get("handicap")
         if hcap is None:
             return "skip", "观望", "缺少让球数"
-        pick_key, reason = infer_rq_pick_from_scores(_score_text(m).split("、"), int(hcap))
+        pick_key, reason, _ = infer_rq_pick_from_foreign_odds(m, int(hcap))
         if pick_key == "skip":
             return pick_key, "观望", reason
         label = market_label(jc, market)

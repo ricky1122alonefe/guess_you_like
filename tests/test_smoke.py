@@ -241,6 +241,7 @@ def test_long_image_export_helper():
 
     js = long_image_export_script(root_id="test-root", filename="demo")
     assert "savePageLongImage" in js
+    assert "saveModuleImage" in js
     assert "test-root" in js
 
 

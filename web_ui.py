@@ -557,6 +557,18 @@ details.fold-open > summary {{ color: #1e40af; }}
 .fold-body > .card:first-child {{ margin-top: 0; }}
 .fold-body .card {{ box-shadow: none; border: 1px solid #eef2f6; margin-bottom: 10px; }}
 .fold-stack {{ display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }}
+.fold-summary-line {{ display: flex; align-items: center; gap: 8px; width: 100%; }}
+.fold-summary-line > span:first-child {{ flex: 1; min-width: 0; }}
+.export-module {{ position: relative; background: #fff; }}
+.export-module:not(details) {{ border: 1px solid #e2e8f0; border-radius: 10px; margin-bottom: 12px; }}
+.export-module-toolbar {{ position: absolute; top: 8px; right: 8px; z-index: 5; }}
+.export-module-inner {{ padding-top: 2px; }}
+.export-module:not(details) .export-module-inner {{ padding: 36px 12px 12px; }}
+.export-module:not(details) .export-module-inner > .card:first-child {{ margin-top: 0; margin-bottom: 0; }}
+.btn-export-mod {{ font-size: 11px; padding: 3px 10px; border-radius: 6px; border: 1px solid #cbd5e1;
+  background: #fff; color: #475569; cursor: pointer; white-space: nowrap; line-height: 1.4; }}
+.btn-export-mod:hover {{ background: #f1f5f9; border-color: #94a3b8; }}
+.btn-export-mod:disabled {{ opacity: 0.6; cursor: wait; }}
 """
 
 _LAYOUT_CSS = """
@@ -677,6 +689,27 @@ def _shared_css(*extra: str) -> str:
     return raw.replace("{{", "{").replace("}}", "}")
 
 
+def _export_module_btn() -> str:
+    return (
+        '<button type="button" class="btn-export-mod" '
+        'onclick="event.preventDefault(); event.stopPropagation(); saveModuleImage(this)" '
+        'title="保存本模块为图片（适合抖音分条发）">📷 存图</button>'
+    )
+
+
+def _wrap_export_module(slug: str, html: str, *, extra_class: str = "") -> str:
+    if not html or not str(html).strip():
+        return ""
+    cls = "export-module"
+    if extra_class:
+        cls += f" {extra_class}"
+    return (
+        f'<div class="{cls}" data-export-slug="{_e(slug)}">'
+        f'<div class="export-module-toolbar">{_export_module_btn()}</div>'
+        f'<div class="export-module-inner">{html}</div></div>'
+    )
+
+
 def _fold(
     summary: str,
     body: str,
@@ -684,6 +717,7 @@ def _fold(
     open: bool = False,
     muted: bool = False,
     css_class: str = "",
+    export_slug: str = "",
 ) -> str:
     """Collapsible section — secondary data hidden until expanded."""
     if not body or not body.strip():
@@ -697,9 +731,15 @@ def _fold(
         cls += " fold-open"
     if extra:
         cls += f" {extra}"
+    export_btn = ""
+    mod_attr = ""
+    if export_slug:
+        cls += " export-module"
+        mod_attr = f' data-export-slug="{_e(export_slug)}"'
+        export_btn = _export_module_btn()
     return (
-        f'<details class="{cls}"{open_attr}>'
-        f"<summary>{summary}</summary>"
+        f'<details class="{cls}"{open_attr}{mod_attr}>'
+        f'<summary><span class="fold-summary-line"><span>{summary}</span>{export_btn}</span></summary>'
         f'<div class="fold-body">{body}</div>'
         f"</details>"
     )
@@ -3256,7 +3296,12 @@ def _team_form_fold_html(match_name: str) -> str:
             _e(h.get("match")) for h in h2h
         ) + "</p>"
     rows += f"<p class='meta'>{_e(form.get('note'))}</p>"
-    return _fold("战术变数 · 双方近期国际赛（近1年）", rows, muted=True)
+    return _fold(
+        "战术变数 · 双方近期国际赛（近1年）",
+        rows,
+        muted=True,
+        export_slug="team-form",
+    )
 
 
 def _settled_card(settled: dict | None) -> str:
@@ -4320,15 +4365,15 @@ def html_match_detail(
     timeline = index.get("timeline") or []
     changes = index.get("changes") or []
 
-    pred_card = _build_pred_cards(prediction)
-    settled_card = _settled_card(settled)
-    strategy_panel = _build_match_strategy_panel(name, prediction)
-    sweet_spot_panel = _sweet_spot_panel(prediction)
+    pred_card = _wrap_export_module("recommend", _build_pred_cards(prediction))
+    settled_card = _wrap_export_module("settled", _settled_card(settled))
+    strategy_panel = _wrap_export_module("strategy", _build_match_strategy_panel(name, prediction))
+    sweet_spot_panel = _wrap_export_module("sweet-spot", _sweet_spot_panel(prediction))
     score_rec_panel = _score_recommend_panel(prediction)
-    quant_panel = _quant_panel(prediction)
-    ah_card = _build_ah_analysis_card(prediction, timeline)
+    quant_panel = _wrap_export_module("quant", _quant_panel(prediction))
+    ah_card = _wrap_export_module("handicap", _build_ah_analysis_card(prediction, timeline))
     latest_deep = (deep_records or [None])[0]
-    deep_card = _deep_analysis_card(latest_deep)
+    deep_card = _wrap_export_module("deep", _deep_analysis_card(latest_deep))
 
     from ai_deep_analysis import has_prior_ai_analysis
 
@@ -4367,8 +4412,8 @@ def html_match_detail(
         src_bits.append("推荐来自文件")
     last_ts = format_ts(index.get("updated_at") or (timeline[-1].get("ts") if timeline else None))
     freshness = f"<p class='meta freshness'>{' · '.join(src_bits)} · 最新 {_e(last_ts)} · 北京时间</p>"
-    qual_banner = _qualification_divergence_banner(prediction)
-    tier_banner = _buy_tier_banner(prediction)
+    qual_banner = _wrap_export_module("qual", _qualification_divergence_banner(prediction))
+    tier_banner = _wrap_export_module("tier", _buy_tier_banner(prediction))
 
     jingcai_card = _jingcai_card(_latest_jingcai(timeline), prediction)
     bf = _latest_betfair(timeline)
@@ -4447,6 +4492,7 @@ def html_match_detail(
         "竞彩 · 必发 · 隐含概率",
         jingcai_card + implied_card + betfair_card,
         muted=True,
+        export_slug="market",
     )
     charts_fold = _fold(
         "欧赔 & 亚盘走势",
@@ -4455,8 +4501,9 @@ def html_match_detail(
   <div class="card inner"><h4>亚盘</h4><canvas id="ahChart"></canvas></div>
 </div>""",
         open=True,
+        export_slug="charts",
     )
-    bf_fold = _fold("必发占比走势", bf_charts_inner, muted=True) if bf_charts_inner else ""
+    bf_fold = _fold("必发占比走势", bf_charts_inner, muted=True, export_slug="betfair") if bf_charts_inner else ""
     changes_fold = _fold(
         f"推荐变动（{len(changes)} 次）",
         f"""<table>
@@ -4464,6 +4511,7 @@ def html_match_detail(
     {ch_rows}
   </table>""",
         muted=True,
+        export_slug="changes",
     )
     snapshot_fold = _fold(
         f"Poll 快照明细（{len(timeline)} 条）",
@@ -4472,20 +4520,28 @@ def html_match_detail(
     {tbl_rows}
   </table>""",
         muted=True,
+        export_slug="snapshot",
     )
     ai_body = _build_ai_history_html(ai_records)
-    ai_fold = _fold(f"AI 分析记录（{len(ai_records or [])} 次）", ai_body, muted=True) if ai_body else ""
+    ai_fold = _fold(
+        f"AI 分析记录（{len(ai_records or [])} 次）",
+        ai_body,
+        muted=True,
+        export_slug="ai-records",
+    ) if ai_body else ""
     deep_hist = _build_deep_history_html(deep_records)
     deep_fold = _fold(
         f"深度分析历史（{len(deep_records or [])} 次）",
         deep_hist,
         muted=True,
+        export_slug="deep-history",
     ) if deep_hist else ""
     similar_body = _build_similarity_html(prediction, fixture_id=fid, output_root=output_root)
     similar_fold = _fold(
         "历史相似盘口 Top10（初盘 / 实时盘）",
         similar_body,
         open=True,
+        export_slug="similar",
     ) if similar_body else ""
     team_form_fold = _team_form_fold_html(name)
 
@@ -4578,6 +4634,13 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
     safe_name = re.sub(r"[^\w\-]+", "_", name).strip("_") or fid
     export_fname = f"match-{fid}-{safe_name[:40]}"
     export_script = long_image_export_script(root_id="match-export-root", filename=export_fname)
+    export_hero = _wrap_export_module(
+        "header",
+        f"""<div class="export-hero">
+    <h1>{_e(name)}</h1>
+    {freshness}
+  </div>""",
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head>
@@ -4596,19 +4659,16 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
   <button type="button" class="btn btn-ai" data-label="✨ AI 推荐本场"
     onclick="aiRecommend('{_e(fid)}', this)">✨ AI 推荐本场</button>
   {deep_btn}
-  <button type="button" class="btn" style="background:#7c3aed" onclick="savePageLongImage(this)">📷 保存长图</button>
+  <button type="button" class="btn" style="background:#64748b" onclick="savePageLongImage(this)">📷 整页长图（可选）</button>
   <a class="btn" href="/share/match/{_e(fid)}" target="_blank" rel="noopener">📷 朋友圈分享图</a>
   <a class="btn" style="background:#2563eb" href="/kelly?fixture_id={_e(fid)}">🧮 Kelly</a>
   <span class="tag">{len(timeline)} 快照</span>
   <span class="tag">{len(changes)} 变动</span>
 </p>
-<p class="meta">「保存长图」会打包本页全部分析模块（含图表、相似样本、AI记录）；「朋友圈分享图」是精简单图。</p>
+<p class="meta">各模块标题旁点「📷 存图」可单独保存一张图（适合抖音分条发）；「整页长图」会把本页全部模块打包成一张。</p>
 
-<div id="match-export-root">
-  <div class="export-hero">
-    <h1>{_e(name)}</h1>
-    {freshness}
-  </div>
+<div id="match-export-root" data-export-base="{_e(export_fname)}">
+{export_hero}
 {qual_banner}
 {tier_banner}
 {settled_card}
@@ -4619,8 +4679,8 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
 {quant_panel}
 {deep_card}
 <div class="rec-grid">
-  <div>{pred_card}</div>
-  <div>{ah_card}</div>
+  {pred_card}
+  {ah_card}
 </div>
 <div class="fold-stack">
 {market_fold}

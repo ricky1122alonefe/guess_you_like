@@ -336,7 +336,7 @@ HTML2CANVAS_CDN = (
 
 
 def long_image_export_script(*, root_id: str, filename: str) -> str:
-    """Reusable browser-side long PNG export for a page section."""
+    """Reusable browser-side long PNG export + per-module PNG export."""
     safe_fname = re.sub(r"[^\w\-]+", "_", filename).strip("_") or "page"
     return f"""{HTML2CANVAS_CDN}
 <script>
@@ -364,6 +364,55 @@ function _restoreCanvases(backups) {{
     cv.style.display = '';
     if (img && img.parentNode) img.parentNode.removeChild(img);
   }});
+}}
+function _exportBaseName() {{
+  const root = document.getElementById('{_e(root_id)}');
+  return (root && root.dataset.exportBase) || '{_e(safe_fname)}';
+}}
+async function saveModuleImage(btn) {{
+  const mod = btn && btn.closest ? btn.closest('.export-module') : null;
+  if (!mod) {{
+    alert('未找到可导出的模块');
+    return;
+  }}
+  const label = btn ? btn.textContent : '';
+  if (btn) {{ btn.disabled = true; btn.textContent = '生成中…'; }}
+  const slug = mod.dataset.exportSlug || 'module';
+  const filename = _exportBaseName() + '-' + slug + '.png';
+  const detailsEl = mod.matches('details') ? mod : mod.closest('details');
+  const wasOpen = detailsEl ? detailsEl.open : true;
+  if (detailsEl && !detailsEl.open) detailsEl.open = true;
+  const hidden = mod.querySelectorAll('.export-hide');
+  hidden.forEach(n => {{ n.dataset.exportPrev = n.style.display; n.style.display = 'none'; }});
+  let canvasBackups = [];
+  try {{
+    canvasBackups = _freezeCanvases(mod);
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const canvas = await html2canvas(mod, {{
+      scale: Math.min(2, window.devicePixelRatio || 1.5),
+      useCORS: true,
+      backgroundColor: '#ffffff',
+      logging: false,
+      scrollY: -window.scrollY,
+      scrollX: 0,
+      width: mod.scrollWidth,
+      height: mod.scrollHeight,
+    }});
+    const a = document.createElement('a');
+    a.download = filename;
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+  }} catch (e) {{
+    alert('模块存图失败：' + e);
+  }} finally {{
+    _restoreCanvases(canvasBackups);
+    if (detailsEl) detailsEl.open = wasOpen;
+    hidden.forEach(n => {{
+      n.style.display = n.dataset.exportPrev || '';
+      delete n.dataset.exportPrev;
+    }});
+    if (btn) {{ btn.disabled = false; btn.textContent = label || '📷 存图'; }}
+  }}
 }}
 async function savePageLongImage(btn) {{
   const root = document.getElementById('{_e(root_id)}');

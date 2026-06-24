@@ -195,14 +195,158 @@ def test_c_group_r3_haiti_confirmed_out_with_h2h():
     sa = scenario_analysis("海地", standings["C"], fixtures, best_third_cutoff=4)
     assert sa["achievable_ranks"] == [4]
     assert not sa["can_qualify"]
-    assert any("苏格兰" in n for n in sa["h2h_notes"])
 
     race = analyze_team_race("海地", standings["C"], fixtures=fixtures)
     assert race["status"] == "out"
     assert race["status_cn"] == "确认出局"
     assert race["possible_ranks"] == []
-    assert "苏格兰" in race["note"] or "4分" in race["note"]
-    assert race["form_cn"] == "负苏格兰 0-1 · 负巴西 0-3"
+    assert "4分" in race["note"]
+    assert not race["can_qualify_top2"]
+    assert race["form_cn"]  # internal only, not echoed in note
+    assert "前两场" not in race["note"]
+
+
+def test_mexico_korea_h2h_two_way_six_points():
+    """FIFA Art.13: two teams level on 6pts — direct H2H decides (Mexico beat Korea)."""
+    from analysis.tournament.group_race import analyze_team_race
+    from analysis.tournament.group_tiebreak import rank_group_table, build_rows_from_fixtures
+
+    fixtures = [
+        {"group": "A", "round": 1, "home": "墨西哥", "away": "南非", "home_score": 2, "away_score": 0, "is_finished": True},
+        {"group": "A", "round": 1, "home": "韩国", "away": "捷克", "home_score": 2, "away_score": 1, "is_finished": True},
+        {"group": "A", "round": 2, "home": "墨西哥", "away": "韩国", "home_score": 1, "away_score": 0, "is_finished": True},
+        {"group": "A", "round": 2, "home": "南非", "away": "捷克", "home_score": 1, "away_score": 0, "is_finished": True},
+        {"group": "A", "round": 3, "home": "捷克", "away": "墨西哥", "home_score": 1, "away_score": 0, "is_finished": True},
+        {"group": "A", "round": 3, "home": "南非", "away": "韩国", "home_score": 0, "away_score": 3, "is_finished": True},
+    ]
+    rows = build_rows_from_fixtures(["墨西哥", "韩国", "捷克", "南非"], fixtures)
+    ranked = rank_group_table(list(rows.values()), fixtures)
+    assert [(r["team"], r["points"]) for r in ranked[:2]] == [("墨西哥", 6), ("韩国", 6)]
+
+    standings = {"A": list(rows.values())}
+    mx = analyze_team_race("墨西哥", standings["A"], fixtures=fixtures)
+    kr = analyze_team_race("韩国", standings["A"], fixtures=fixtures)
+    assert mx["rank"] == 1
+    assert kr["rank"] == 2
+    assert 1 not in (kr.get("achievable_ranks") or kr.get("possible_ranks") or [])
+
+
+def test_scenario_compare_mexico_korea_user_wins():
+    from pathlib import Path
+
+    from analysis.tournament.group_scenario_compare import (
+        apply_user_results_to_fixtures,
+        build_scenario_standings,
+        compare_group_scenario,
+        outcome_from_scores,
+    )
+    from user_final_picks import pick_key_from_cn, pick_to_representative_score
+
+    fixtures = [
+        {"group": "A", "round": 1, "home": "墨西哥", "away": "南非", "home_score": 2, "away_score": 0, "is_finished": True},
+        {"group": "A", "round": 1, "home": "韩国", "away": "捷克", "home_score": 2, "away_score": 1, "is_finished": True},
+        {"group": "A", "round": 2, "home": "墨西哥", "away": "韩国", "home_score": 1, "away_score": 0, "is_finished": True},
+        {"group": "A", "round": 2, "home": "南非", "away": "捷克", "home_score": 1, "away_score": 0, "is_finished": True},
+        {"group": "A", "round": 3, "fixture_id": "r3-cz-mx", "home": "捷克", "away": "墨西哥", "is_finished": False},
+        {"group": "A", "round": 3, "fixture_id": "r3-za-kr", "home": "南非", "away": "韩国", "is_finished": False},
+    ]
+    standings = {
+        "A": [
+            {"team": "墨西哥", "played": 2, "points": 6, "gd": 3, "gf": 3, "ga": 0},
+            {"team": "韩国", "played": 2, "points": 3, "gd": 1, "gf": 3, "ga": 2},
+            {"team": "捷克", "played": 2, "points": 3, "gd": -1, "gf": 2, "ga": 3},
+            {"team": "南非", "played": 2, "points": 3, "gd": -1, "gf": 1, "ga": 2},
+        ],
+    }
+    user_results = [
+        {"fixture_id": "r3-cz-mx", "pick": "home"},
+        {"fixture_id": "r3-za-kr", "pick": "away"},
+    ]
+    assert outcome_from_scores(0, 3) == "away"
+    assert pick_key_from_cn("客胜") == "away"
+    assert pick_to_representative_score("away") == (0, 1)
+
+    scenario_fixtures, errors = apply_user_results_to_fixtures(fixtures, user_results)
+    assert not errors
+    scenario_standings = build_scenario_standings(standings, scenario_fixtures)
+
+    payload = compare_group_scenario(
+        Path("/tmp"),
+        "A",
+        standings=standings,
+        fixtures=fixtures,
+        scenario_fixtures=scenario_fixtures,
+        scenario_standings=scenario_standings,
+        user_results=user_results,
+    )
+    assert payload["stats"]["match_count"] == 2
+    ranked = [r["team"] for r in payload["standings_after"]]
+    assert ranked[0] == "墨西哥"
+    assert ranked[1] == "韩国"
+    mx_after = next(t for t in payload["race_after"]["teams"] if t["team"] == "墨西哥")
+    assert mx_after["rank"] == 1
+
+
+def test_scenario_compare_haiti_still_out():
+    from pathlib import Path
+
+    from analysis.tournament.group_scenario_compare import (
+        apply_user_results_to_fixtures,
+        build_scenario_standings,
+        compare_group_scenario,
+    )
+
+    standings = {
+        "C": [
+            {"team": "巴西", "played": 2, "points": 4, "gd": 3, "gf": 4, "ga": 1},
+            {"team": "摩洛哥", "played": 2, "points": 4, "gd": 1, "gf": 2, "ga": 1},
+            {"team": "苏格兰", "played": 2, "points": 3, "gd": 0, "gf": 1, "ga": 1},
+            {"team": "海地", "played": 2, "points": 0, "gd": -4, "gf": 0, "ga": 4},
+        ],
+    }
+    fixtures = [
+        {"group": "C", "round": 1, "home": "巴西", "away": "摩洛哥", "home_score": 1, "away_score": 1, "is_finished": True},
+        {"group": "C", "round": 1, "home": "海地", "away": "苏格兰", "home_score": 0, "away_score": 1, "is_finished": True},
+        {"group": "C", "round": 2, "home": "苏格兰", "away": "摩洛哥", "home_score": 0, "away_score": 1, "is_finished": True},
+        {"group": "C", "round": 2, "home": "巴西", "away": "海地", "home_score": 3, "away_score": 0, "is_finished": True},
+        {"group": "C", "round": 3, "home": "苏格兰", "away": "巴西", "is_finished": False},
+        {"group": "C", "round": 3, "home": "摩洛哥", "away": "海地", "is_finished": False},
+    ]
+    user_pick = [{"group": "C", "home": "摩洛哥", "away": "海地", "pick": "home"}]
+    scenario_fixtures, _ = apply_user_results_to_fixtures(fixtures, user_pick)
+    scenario_standings = build_scenario_standings(standings, scenario_fixtures)
+    payload = compare_group_scenario(
+        Path("/tmp"),
+        "C",
+        standings=standings,
+        fixtures=fixtures,
+        scenario_fixtures=scenario_fixtures,
+        scenario_standings=scenario_standings,
+        user_results=user_pick,
+    )
+    haiti_after = next(t for t in payload["race_after"]["teams"] if t["team"] == "海地")
+    assert haiti_after["status_cn"] == "确认出局"
+
+
+def test_user_final_picks_lock_immutable(tmp_path):
+    from user_final_picks import finalize_user_picks, get_locked_pick
+
+    first = finalize_user_picks(tmp_path, [{
+        "fixture_id": "fx1",
+        "group": "A",
+        "home": "墨西哥",
+        "away": "韩国",
+        "pick": "home",
+    }])
+    assert first["ok"] is True
+    assert get_locked_pick(tmp_path, "fx1")["pick_cn"] == "主胜"
+
+    second = finalize_user_picks(tmp_path, [{
+        "fixture_id": "fx1",
+        "pick": "draw",
+    }])
+    assert second["ok"] is False
+    assert get_locked_pick(tmp_path, "fx1")["pick"] == "home"
 
 
 def test_group_stage_does_not_flip_clear_open_home():
@@ -312,6 +456,8 @@ def test_long_image_export_helper():
     assert "savePageLongImage" in js
     assert "saveModuleImage" in js
     assert "saveAllPosterImages" in js
+    assert "_swapPosterForExport" in js
+    assert "export-poster-safe" in js
     assert "export-poster" in js
     assert "test-root" in js
 
@@ -320,6 +466,7 @@ def test_ai_summary_card_helpers():
     from share_card import (
         build_ai_summary_context,
         html_ai_summary_card,
+        html_ai_summary_card_safe,
         html_ai_summary_panel,
         html_share_posters_batch,
     )
@@ -354,6 +501,15 @@ def test_ai_summary_card_helpers():
     panel = html_ai_summary_panel(ctx)
     assert "保存推荐图" in panel
     assert "saveModuleImage" in panel
+    assert "export-poster-safe" in panel
+    assert "AI 赛事分析" in panel
+
+    safe = html_ai_summary_card_safe(ctx)
+    assert "竞彩" not in safe
+    assert "SP" not in safe
+    assert "公益体彩" not in safe
+    assert "模型倾向" in safe
+    assert "jc-poster-safe" in safe
 
     batch = html_share_posters_batch([{"fixture_id": "123", "match_name": "葡萄牙VS乌兹别克斯坦", "ctx": ctx}])
     assert "批量推荐图" in batch

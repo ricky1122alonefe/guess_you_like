@@ -175,6 +175,58 @@ def _sanitize_jingcai_text(text: str) -> str:
     return out[:280]
 
 
+def _sanitize_export_text(text: str) -> str:
+    """Strip betting/lottery terms for social-media PNG export."""
+    if not text:
+        return ""
+    out = str(text)
+    replacements = [
+        (r"竞彩(?:足球|可购|推荐|SP|方向)?", "AI"),
+        (r"SP(?:\s*[\d.]+)?", ""),
+        (r"[\d.]+\s*倍(?:赔率)?", ""),
+        (r"胜平负", "走势"),
+        (r"仓位|投注|可购|购彩|体彩|下注|串关|Kelly", ""),
+        (r"赔率|欧赔|亚盘|盘口|水位", "走势"),
+        (r"购彩建议", "分析参考"),
+        (r"推荐", "分析"),
+        (r"公益体彩[^。]*", ""),
+        (r"不构成投注建议", ""),
+    ]
+    for pat, repl in replacements:
+        out = re.sub(pat, repl, out, flags=re.IGNORECASE)
+    out = re.sub(r"[（(]\s*[）)]", "", out)
+    out = re.sub(r"\s{2,}", " ", out)
+    return out.strip()
+
+
+def _pick_to_trend_cn(pick: str) -> str:
+    pick = (pick or "").strip()
+    if pick in ("主胜", "胜") or pick.endswith(" 胜"):
+        return "主队"
+    if pick in ("客胜", "负") or pick.endswith(" 负"):
+        return "客队"
+    if pick in ("平局", "平") or pick.endswith(" 平"):
+        return "均衡"
+    if pick in ("—", "", NO_JINGCAI, "观望"):
+        return "待定"
+    return _sanitize_export_text(pick) or "待定"
+
+
+def _tier_to_safe_cn(tier_cn: str) -> str:
+    return {
+        "可串": "一致性强",
+        "可单关": "中等把握",
+        "仅参考": "观望",
+    }.get((tier_cn or "").strip(), tier_cn or "")
+
+
+def _confidence_to_safe_cn(conf: str) -> str:
+    conf = (conf or "").strip()
+    if conf in ("高", "中", "低"):
+        return f"把握 · {conf}"
+    return conf
+
+
 def _latest_jingcai(timeline: list | None) -> dict:
     for p in reversed(timeline or []):
         jc = (p.get("odds") or {}).get("jingcai")
@@ -555,6 +607,123 @@ def html_ai_summary_card(ctx: dict[str, Any]) -> str:
 </div>"""
 
 
+def html_ai_summary_card_safe(ctx: dict[str, Any]) -> str:
+    """Social-media safe poster — no lottery/betting surface; used only in PNG export."""
+    home = _e(ctx.get("home"))
+    away = _e(ctx.get("away"))
+    kickoff_full = _e(ctx.get("kickoff_full") or "—")
+    kickoff_line = _e(ctx.get("kickoff_line") or "—")
+    num = _e(ctx.get("match_num") or "—")
+    rec = ctx.get("recommend") or NO_JINGCAI
+    trend = _pick_to_trend_cn(rec)
+    pick_key = _pick_row_key(rec) or ""
+
+    pills_html = ""
+    for key, lbl, active_cls in (
+        ("home", "主", "jc-safe-pill-home"),
+        ("draw", "平", "jc-safe-pill-draw"),
+        ("away", "客", "jc-safe-pill-away"),
+    ):
+        on = " is-on" if pick_key == key else ""
+        pills_html += f'<span class="jc-safe-pill {active_cls}{on}">{lbl}</span>'
+
+    tier_cn = _tier_to_safe_cn(ctx.get("buy_tier_cn") or "")
+    tier_html = ""
+    if tier_cn:
+        tier_css = {"一致性强": "a", "中等把握": "b", "观望": "c"}.get(tier_cn, "c")
+        reason = _sanitize_export_text(ctx.get("buy_tier_reason") or "")
+        tier_html = (
+            f'<div class="jc-safe-tier jc-safe-tier-{tier_css}">'
+            f'<strong>{_e(tier_cn)}</strong>'
+            f'{f"<span>{_e(reason)}</span>" if reason else ""}'
+            f"</div>"
+        )
+
+    synth = _sanitize_export_text(ctx.get("summary_text") or "")
+    synth_html = ""
+    if synth:
+        synth_html = (
+            f'<div class="jc-safe-synth">'
+            f'<div class="jc-safe-synth-hd">AI 综合总结</div>'
+            f"<p>{_e(synth[:260])}</p></div>"
+        )
+    elif ctx.get("has_pick"):
+        synth_html = (
+            '<div class="jc-safe-synth is-muted">'
+            '<div class="jc-safe-synth-hd">AI 综合总结</div>'
+            f"<p>模型综合倾向 {_e(trend)}，详见下方各模型分析。</p></div>"
+        )
+
+    ai_models = ctx.get("ai_models") or []
+    models_agree = ctx.get("models_agree")
+    agree_html = ""
+    if len(ai_models) > 1:
+        agree_txt = "多模型一致" if models_agree else "模型存在分歧"
+        agree_cls = "is-ok" if models_agree else "is-warn"
+        agree_html = f'<div class="jc-safe-agree {agree_cls}">{_e(agree_txt)}</div>'
+
+    models_html = ""
+    for m in ai_models[:3]:
+        pick = m.get("pick") or "—"
+        trend_m = _pick_to_trend_cn(pick)
+        pick_cls = "jc-safe-model-pick"
+        if trend_m == "待定":
+            pick_cls += " is-muted"
+        conf = _confidence_to_safe_cn(m.get("confidence") or "")
+        conf_tag = f'<span class="jc-safe-model-conf">{_e(conf)}</span>' if conf and conf != "—" else ""
+        summ = _sanitize_export_text(m.get("summary") or "")
+        summ_block = (
+            f'<p class="jc-safe-model-sum">{_e(summ[:180])}</p>'
+            if summ else '<p class="jc-safe-model-sum is-muted">暂无文字总结</p>'
+        )
+        models_html += (
+            f'<div class="jc-safe-model-card">'
+            f'<div class="jc-safe-model-head">'
+            f'<strong class="jc-safe-model-name">{_e(m.get("label", "AI"))}</strong>'
+            f'<span class="{pick_cls}">倾向 · {_e(trend_m)}</span>'
+            f'{conf_tag}'
+            f"</div>{summ_block}</div>"
+        )
+    if not models_html:
+        models_html = (
+            '<div class="jc-safe-model-card is-empty">'
+            "<p>请先生成 AI 分析后再存图。</p></div>"
+        )
+
+    conf = ctx.get("confidence") or ""
+    conf_html = ""
+    if conf and conf != "—":
+        conf_html = f'<span class="jc-safe-meta-chip">{_e(_confidence_to_safe_cn(conf))}</span>'
+
+    return f"""
+<div class="jc-poster jc-poster-safe">
+  <div class="jc-safe-top">
+    <div class="jc-safe-brand">AI 赛事分析 · 数据复盘</div>
+    <div class="jc-safe-num">{num}</div>
+  </div>
+  <div class="jc-teams">
+    <div class="jc-team"><span>{home}</span></div>
+    <div class="jc-vs">VS</div>
+    <div class="jc-team"><span>{away}</span></div>
+  </div>
+  <div class="jc-schedule">{kickoff_full} · {kickoff_line} 开球</div>
+  <div class="jc-safe-trend-panel">
+    <div class="jc-safe-trend-hd">模型倾向</div>
+    <div class="jc-safe-trend-pick">{_e(trend)}</div>
+    <div class="jc-safe-pills">{pills_html}</div>
+  </div>
+  {tier_html}
+  {synth_html}
+  <div class="jc-safe-ai-section">
+    <div class="jc-safe-ai-hd">各模型 AI 分析 · 总结</div>
+    {agree_html}
+    <div class="jc-safe-model-list">{models_html}</div>
+  </div>
+  <div class="jc-safe-meta-row">{conf_html}</div>
+  <div class="jc-safe-foot">数据模型输出 · 仅供交流参考</div>
+</div>"""
+
+
 AI_SUMMARY_POSTER_CSS = """
 .export-module-poster { max-width: 420px; margin: 0 auto 16px; }
 .export-poster-actions { text-align: center; margin-bottom: 10px; }
@@ -671,12 +840,83 @@ AI_SUMMARY_POSTER_CSS = """
   padding: 10px 14px 14px; text-align: center; font-size: 10px; color: #94a3b8; line-height: 1.45;
   border-top: 1px dashed #e2e8f0; margin-top: 4px;
 }
+.jc-poster-safe { background: #fff; }
+.jc-safe-top {
+  background: linear-gradient(135deg, #1e3a5f 0%, #334155 55%, #475569 100%);
+  color: #fff; padding: 14px 16px 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px;
+}
+.jc-safe-brand { font-size: 14px; font-weight: 800; letter-spacing: .04em; }
+.jc-safe-num {
+  font-size: 12px; font-weight: 700; background: rgba(255,255,255,.16); padding: 3px 10px; border-radius: 999px;
+}
+.jc-safe-trend-panel {
+  margin: 0 14px 12px; padding: 16px 12px 14px; border-radius: 12px;
+  background: linear-gradient(180deg, #f8fafc 0%, #fff 100%); border: 1px solid #e2e8f0;
+  text-align: center;
+}
+.jc-safe-trend-hd { font-size: 11px; font-weight: 800; color: #64748b; letter-spacing: .14em; }
+.jc-safe-trend-pick {
+  font-size: clamp(1.8rem, 7vw, 2.4rem); font-weight: 900; color: #0f172a; line-height: 1.15; margin: 8px 0 10px;
+}
+.jc-safe-pills { display: flex; justify-content: center; gap: 10px; }
+.jc-safe-pill {
+  min-width: 42px; padding: 6px 12px; border-radius: 999px; font-size: 13px; font-weight: 800;
+  color: #64748b; background: #f1f5f9; border: 1px solid #e2e8f0;
+}
+.jc-safe-pill.is-on { color: #fff; background: linear-gradient(135deg, #2563eb, #1d4ed8); border-color: #1d4ed8; }
+.jc-safe-tier {
+  margin: 0 14px 10px; padding: 8px 12px; border-radius: 10px; font-size: 13px; text-align: center; line-height: 1.45;
+}
+.jc-safe-tier strong { font-weight: 800; }
+.jc-safe-tier span { display: block; font-size: 12px; opacity: .88; margin-top: 2px; }
+.jc-safe-tier-a { background: #ecfdf5; color: #166534; border: 1px solid #86efac; }
+.jc-safe-tier-b { background: #eff6ff; color: #1e40af; border: 1px solid #93c5fd; }
+.jc-safe-tier-c { background: #f8fafc; color: #64748b; border: 1px solid #e2e8f0; }
+.jc-safe-synth {
+  margin: 0 14px 10px; padding: 10px 12px; background: #f0fdf4; border-radius: 10px;
+  border: 1px solid #86efac; text-align: left;
+}
+.jc-safe-synth-hd { font-size: 11px; font-weight: 800; color: #166534; margin-bottom: 4px; letter-spacing: .06em; }
+.jc-safe-synth p { margin: 0; font-size: 13px; line-height: 1.6; color: #14532d; }
+.jc-safe-synth.is-muted { background: #f8fafc; border-color: #e2e8f0; }
+.jc-safe-synth.is-muted .jc-safe-synth-hd { color: #64748b; }
+.jc-safe-synth.is-muted p { color: #64748b; }
+.jc-safe-ai-section { margin: 0 14px 10px; text-align: left; }
+.jc-safe-ai-hd { font-size: 12px; font-weight: 800; color: #334155; margin-bottom: 6px; }
+.jc-safe-agree {
+  display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; margin-bottom: 8px;
+}
+.jc-safe-agree.is-ok { background: #dcfce7; color: #166534; }
+.jc-safe-agree.is-warn { background: #fff7ed; color: #c2410c; }
+.jc-safe-model-list { display: flex; flex-direction: column; gap: 8px; }
+.jc-safe-model-card {
+  background: #faf5ff; border: 1px solid #ddd6fe; border-radius: 10px; padding: 10px 12px;
+}
+.jc-safe-model-card.is-empty p { margin: 0; font-size: 12px; color: #64748b; line-height: 1.5; }
+.jc-safe-model-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-bottom: 6px; }
+.jc-safe-model-name { font-size: 13px; color: #5b21b6; }
+.jc-safe-model-pick {
+  font-size: 12px; font-weight: 800; color: #1d4ed8; background: #eff6ff;
+  padding: 2px 8px; border-radius: 999px; border: 1px solid #bfdbfe;
+}
+.jc-safe-model-pick.is-muted { color: #64748b; background: #f1f5f9; border-color: #e2e8f0; }
+.jc-safe-model-conf { font-size: 11px; color: #64748b; }
+.jc-safe-model-sum { margin: 0; font-size: 12px; line-height: 1.55; color: #334155; }
+.jc-safe-model-sum.is-muted { color: #94a3b8; }
+.jc-safe-meta-row { display: flex; justify-content: center; gap: 8px; padding: 0 14px 8px; }
+.jc-safe-meta-chip { font-size: 11px; color: #64748b; background: #f1f5f9; padding: 3px 10px; border-radius: 999px; }
+.jc-safe-foot {
+  padding: 10px 14px 14px; text-align: center; font-size: 10px; color: #94a3b8; line-height: 1.45;
+  border-top: 1px dashed #e2e8f0; margin-top: 4px;
+}
+.export-poster-safe { display: none; }
 """
 
 
 def html_ai_summary_panel(ctx: dict[str, Any], *, slug: str = "ai-summary") -> str:
     """Poster + prominent save button (button hidden inside saved PNG)."""
     poster = html_ai_summary_card(ctx)
+    safe_poster = html_ai_summary_card_safe(ctx)
     btn = (
         '<button type="button" class="btn-poster-save export-hide" '
         'onclick="saveModuleImage(this)">📷 保存推荐图（发抖音）</button>'
@@ -684,7 +924,9 @@ def html_ai_summary_panel(ctx: dict[str, Any], *, slug: str = "ai-summary") -> s
     return (
         f'<div class="export-module export-module-poster" data-export-slug="{_e(slug)}">'
         f'<div class="export-poster-actions">{btn}</div>'
-        f'<div class="export-poster">{poster}</div></div>'
+        f'<div class="export-poster export-poster-screen">{poster}</div>'
+        f'<div class="export-poster export-poster-safe" hidden>{safe_poster}</div>'
+        f"</div>"
     )
 
 
@@ -907,6 +1149,39 @@ function _restoreCanvases(backups) {{
     if (img && img.parentNode) img.parentNode.removeChild(img);
   }});
 }}
+function _swapPosterForExport(mod) {{
+  const screen = mod.querySelector('.export-poster-screen');
+  const safe = mod.querySelector('.export-poster-safe');
+  if (!safe) return {{ target: mod.querySelector('.export-poster') || mod, state: null }};
+  const state = {{
+    screenHidden: screen ? screen.hidden : false,
+    screenDisplay: screen ? screen.style.display : '',
+    safeHidden: safe.hidden,
+    safeDisplay: safe.style.display,
+  }};
+  if (screen) {{
+    screen.hidden = true;
+    screen.style.display = 'none';
+  }}
+  safe.hidden = false;
+  safe.style.display = 'block';
+  return {{ target: safe, state }};
+}}
+function _restorePosterSwap(state) {{
+  if (!state) return;
+  const mod = state.mod;
+  if (!mod) return;
+  const screen = mod.querySelector('.export-poster-screen');
+  const safe = mod.querySelector('.export-poster-safe');
+  if (screen) {{
+    screen.hidden = state.screenHidden;
+    screen.style.display = state.screenDisplay;
+  }}
+  if (safe) {{
+    safe.hidden = state.safeHidden;
+    safe.style.display = state.safeDisplay;
+  }}
+}}
 function _exportBaseName() {{
   const root = document.getElementById('{_e(root_id)}');
   return (root && root.dataset.exportBase) || '{_e(safe_fname)}';
@@ -926,9 +1201,14 @@ async function saveModuleImage(btn) {{
   if (detailsEl && !detailsEl.open) detailsEl.open = true;
   const hidden = mod.querySelectorAll('.export-hide');
   hidden.forEach(n => {{ n.dataset.exportPrev = n.style.display; n.style.display = 'none'; }});
-  const target = mod.querySelector('.export-poster') || mod;
+  let target = mod.querySelector('.export-poster-screen') || mod.querySelector('.export-poster') || mod;
   let canvasBackups = [];
+  let posterSwap = null;
   try {{
+    const swapped = _swapPosterForExport(mod);
+    if (swapped.target) target = swapped.target;
+    posterSwap = swapped.state;
+    if (posterSwap) posterSwap.mod = mod;
     canvasBackups = _freezeCanvases(target);
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
     const canvas = await html2canvas(target, {{
@@ -948,6 +1228,7 @@ async function saveModuleImage(btn) {{
   }} catch (e) {{
     alert('模块存图失败：' + e);
   }} finally {{
+    _restorePosterSwap(posterSwap);
     _restoreCanvases(canvasBackups);
     if (detailsEl) detailsEl.open = wasOpen;
     hidden.forEach(n => {{

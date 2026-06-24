@@ -3273,6 +3273,110 @@ def _group_picker_chip(g: dict, *, checked: bool = False) -> str:
     )
 
 
+def _group_scenario_form_rows(selected: list[dict]) -> str:
+    rows = ""
+    for g in selected:
+        group = g.get("group") or "?"
+        for m in g.get("matches") or []:
+            if m.get("is_finished"):
+                continue
+            fid = m.get("fixture_id") or ""
+            home = m.get("home") or ""
+            away = m.get("away") or ""
+            name = m.get("match_name") or f"{home}VS{away}"
+            ai_pick = m.get("jingcai_pick") if m.get("jingcai_pick") not in ("—", "", "观望", "暂无竞彩") else "—"
+            locked = m.get("user_locked") or {}
+            if locked.get("locked"):
+                rows += f"""
+<div class="gsc-match gsc-locked" data-fixture-id="{_e(fid)}" data-group="{_e(group)}"
+  data-home="{_e(home)}" data-away="{_e(away)}" data-locked="1">
+  <div class="gsc-match-hd">
+    <strong>{_e(group)}组</strong> · {_e(name)}
+    <span class="tag tag-acc-sweet">已定稿 {_e(locked.get('pick_cn') or '—')}</span>
+    <span class="meta">{_e(locked.get('locked_at') or '')}</span>
+  </div>
+  <p class="meta">AI倾向 {_e(ai_pick)} · 定稿后不可修改，赛后见 <a href="/review">推荐复盘</a></p>
+</div>"""
+                continue
+            rows += f"""
+<div class="gsc-match" data-fixture-id="{_e(fid)}" data-group="{_e(group)}"
+  data-home="{_e(home)}" data-away="{_e(away)}" data-match-name="{_e(name)}">
+  <div class="gsc-match-hd">
+    <strong>{_e(group)}组</strong> · {_e(name)}
+    <span class="meta">AI倾向 {_e(ai_pick)}</span>
+  </div>
+  <div class="gsc-pick-row">
+    <label class="gsc-pick-opt"><input type="radio" name="gsc-{_e(fid or name)}" class="gsc-pick" value="home"/> 主胜</label>
+    <label class="gsc-pick-opt"><input type="radio" name="gsc-{_e(fid or name)}" class="gsc-pick" value="draw"/> 平</label>
+    <label class="gsc-pick-opt"><input type="radio" name="gsc-{_e(fid or name)}" class="gsc-pick" value="away"/> 客胜</label>
+  </div>
+</div>"""
+    if not rows:
+        return '<p class="meta gsc-empty">所选小组暂无未踢完的末轮场次。</p>'
+    return f'<div class="gsc-grid">{rows}</div>'
+
+
+def _render_locked_compare_html(locked_compare: dict) -> str:
+    if not locked_compare or not locked_compare.get("groups"):
+        return ""
+    blocks = ""
+    for g in locked_compare.get("groups") or []:
+        blocks += _group_scenario_compare_block(g)
+    summary = locked_compare.get("summary") or ""
+    return f"""
+<div class="card hero-gsc gsc-result">
+  <h3>📊 已定稿 · 比对总结</h3>
+  <p>{_e(summary)}</p>
+</div>
+{blocks}"""
+
+
+def _group_scenario_compare_block(g: dict) -> str:
+    group = g.get("group") or "?"
+    narrative = g.get("narrative") or ""
+    matches = g.get("matches") or []
+    changes = g.get("team_changes") or []
+    stats = g.get("stats") or {}
+
+    match_rows = ""
+    for m in matches:
+        ai_cls = "gsc-yes" if m.get("ai_agrees") is True else ("gsc-no" if m.get("ai_agrees") is False else "gsc-na")
+        rule_cls = "gsc-yes" if m.get("rule_aligns") is True else ("gsc-no" if m.get("rule_aligns") is False else "gsc-na")
+        match_rows += (
+            f"<tr><td>{_e(m.get('match_name') or '—')}</td>"
+            f"<td>{_e(m.get('user_pick_cn') or m.get('user_outcome_cn') or '—')}</td>"
+            f"<td class='{ai_cls}'>{_e(m.get('ai_pick') or '—')}</td>"
+            f"<td class='{rule_cls}'>{_e(m.get('rule_motivation_cn') or '—')} · {_e(m.get('rule_direction_cn') or '—')}</td>"
+            f"<td class='meta'>{_e(m.get('verdict_cn') or '—')}</td></tr>"
+        )
+
+    change_bits = ""
+    for ch in changes:
+        change_bits += (
+            f"<li>{_e(ch.get('team') or '—')}："
+            f"第{_e(ch.get('before_rank'))}→第{_e(ch.get('after_rank'))} · "
+            f"{_e(ch.get('before_status_cn'))} → {_e(ch.get('after_status_cn'))}</li>"
+        )
+    change_html = f"<ul class='gsc-changes meta'>{change_bits}</ul>" if change_bits else "<p class='meta'>出线状态与当前形势一致。</p>"
+
+    return f"""
+<div class="card gsc-group" id="gsc-group-{_e(group)}">
+  <div class="gsc-head">
+    <h3>{_e(group)} 组 · 比对结果</h3>
+    <span class="meta">AI一致 {stats.get('ai_agree', 0)} · 不同 {stats.get('ai_disagree', 0)} · 规则 {stats.get('rule_align', 0)}</span>
+  </div>
+  <p class="meta">{_e(g.get('standings_line_before') or '—')} → {_e(g.get('standings_line_after') or '—')}</p>
+  <table class="gsc-table"><thead><tr>
+    <th>场次</th><th>你的定稿</th><th>AI</th><th>规则战意</th><th>结论</th>
+  </tr></thead><tbody>{match_rows or '<tr><td colspan="5" class="meta">暂无</td></tr>'}</tbody></table>
+  {change_html}
+  <details class="gsc-fold"><summary>展开文字总结</summary>
+    <pre class="gfc-copy gsc-narrative" id="gsc-narr-{_e(group)}">{_e(narrative)}</pre>
+    <button type="button" class="btn btn-sm" onclick="copyGroupText('gsc-narr-{_e(group)}', this)">复制总结</button>
+  </details>
+</div>"""
+
+
 def _group_final_copy_block(g: dict) -> str:
     group = g.get("group") or "?"
     race = g.get("race") or {}
@@ -3381,6 +3485,27 @@ def html_group_final_copy(report: dict) -> str:
 .gfc-empty { text-align:center; color:#64748b; }
 .gfc-prompt-pre { max-height: 360px; font-size: 12px; }
 .gfc-prompt-fold > summary { cursor:pointer; font-weight:600; padding:4px 0; }
+.gsc-grid { display:grid; gap:12px; margin-top:12px; }
+.gsc-match { border:1px solid #e2e8f0; border-radius:10px; padding:12px; background:#fff; }
+.gsc-match-hd { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px; font-size:13px; }
+.gsc-pick-row { display:flex; gap:12px; flex-wrap:wrap; }
+.gsc-pick-opt {
+  display:inline-flex; align-items:center; gap:6px; padding:8px 12px;
+  border:1px solid #cbd5e1; border-radius:999px; background:#fff; cursor:pointer; font-size:13px;
+}
+.gsc-pick-opt:has(input:checked) { border-color:#059669; background:#ecfdf5; font-weight:700; }
+.gsc-match.gsc-locked { background:#f8fafc; border-color:#cbd5e1; }
+.gsc-score-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.gsc-result { margin-top:16px; }
+.gsc-table { width:100%; border-collapse:collapse; font-size:13px; margin:10px 0; }
+.gsc-table th, .gsc-table td { border-bottom:1px solid #e2e8f0; padding:8px 6px; text-align:left; vertical-align:top; }
+.gsc-yes { color:#15803d; font-weight:600; }
+.gsc-no { color:#b91c1c; font-weight:600; }
+.gsc-na { color:#64748b; }
+.gsc-changes { margin:8px 0 0; padding-left:18px; }
+.gsc-fold > summary { cursor:pointer; font-weight:600; margin-top:8px; }
+.gsc-narrative { max-height:280px; }
+.hero-gsc { background: linear-gradient(135deg, #f0fdf4 0%, #fff 60%); border:1px solid #bbf7d0; margin-top:16px; }
 """)
 
     js = """
@@ -3451,9 +3576,116 @@ function aiAllGroupCopy(btn) {
     alert('请求失败: ' + e);
   });
 }
+function collectScenarioPicks() {
+  const results = [];
+  document.querySelectorAll('.gsc-match:not([data-locked="1"])').forEach(el => {
+    const checked = el.querySelector('.gsc-pick:checked');
+    if (!checked) return;
+    const item = {
+      pick: checked.value,
+      group: el.dataset.group || '',
+      home: el.dataset.home || '',
+      away: el.dataset.away || '',
+      match_name: el.dataset.matchName || '',
+    };
+    if (el.dataset.fixtureId) item.fixture_id = el.dataset.fixtureId;
+    results.push(item);
+  });
+  return results;
+}
+function renderScenarioCompare(data) {
+  const box = document.getElementById('gsc-result');
+  if (!box) return;
+  if (!data.ok) {
+    box.innerHTML = '<div class="card"><p class="gsc-no">' + (data.error || '定稿失败') + '</p></div>';
+    return;
+  }
+  let html = '<div class="card hero-gsc gsc-result"><h3>📊 定稿比对总结</h3><p>' + (data.summary || '') + '</p></div>';
+  (data.groups || []).forEach(g => {
+    const stats = g.stats || {};
+    let rows = '';
+    (g.matches || []).forEach(m => {
+      const aiCls = m.ai_agrees === true ? 'gsc-yes' : (m.ai_agrees === false ? 'gsc-no' : 'gsc-na');
+      const ruleCls = m.rule_aligns === true ? 'gsc-yes' : (m.rule_aligns === false ? 'gsc-no' : 'gsc-na');
+      rows += '<tr><td>' + (m.match_name || '—') + '</td>'
+        + '<td>' + (m.user_pick_cn || m.user_outcome_cn || '—') + '</td>'
+        + '<td class="' + aiCls + '">' + (m.ai_pick || '—') + '</td>'
+        + '<td class="' + ruleCls + '">' + (m.rule_motivation_cn || '—') + ' · ' + (m.rule_direction_cn || '—') + '</td>'
+        + '<td class="meta">' + (m.verdict_cn || '—') + '</td></tr>';
+    });
+    let changes = '';
+    (g.team_changes || []).forEach(ch => {
+      changes += '<li>' + ch.team + '：第' + ch.before_rank + '→第' + ch.after_rank
+        + ' · ' + ch.before_status_cn + ' → ' + ch.after_status_cn + '</li>';
+    });
+    const changeHtml = changes
+      ? '<ul class="gsc-changes meta">' + changes + '</ul>'
+      : '<p class="meta">出线状态与当前形势一致。</p>';
+    html += '<div class="card gsc-group"><div class="gsc-head"><h3>' + g.group + ' 组 · 比对结果</h3>'
+      + '<span class="meta">AI一致 ' + (stats.ai_agree || 0) + ' · 不同 ' + (stats.ai_disagree || 0)
+      + ' · 规则 ' + (stats.rule_align || 0) + '</span></div>'
+      + '<p class="meta">' + (g.standings_line_before || '—') + ' → ' + (g.standings_line_after || '—') + '</p>'
+      + '<p class="meta">积分榜按胜平负最小比分推演（1-0/1-1/0-1），净胜球 tie 时仅供参考。</p>'
+      + '<table class="gsc-table"><thead><tr><th>场次</th><th>你的定稿</th><th>AI</th><th>规则战意</th><th>结论</th></tr></thead><tbody>'
+      + (rows || '<tr><td colspan="5" class="meta">暂无</td></tr>') + '</tbody></table>' + changeHtml
+      + '<details class="gsc-fold"><summary>展开文字总结</summary><pre class="gfc-copy gsc-narrative">'
+      + (g.narrative || '') + '</pre></details></div>';
+  });
+  box.innerHTML = html;
+  document.querySelectorAll('.gsc-match:not([data-locked="1"])').forEach(el => {
+    el.querySelectorAll('input').forEach(inp => { inp.disabled = true; });
+    el.classList.add('gsc-locked');
+  });
+  box.scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+function finalizeUserPicks(btn) {
+  const ids = selectedGroupIds();
+  const picks = collectScenarioPicks();
+  if (!picks.length) { alert('请至少选择一场的胜平负'); return; }
+  if (!confirm('定稿后不可修改。确定锁定这 ' + picks.length + ' 场吗？')) return;
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '定稿中…';
+  fetch('/api/worldcup/groups/scenario-compare', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({groups: ids, picks: picks, finalize: true, user_ai_only: true})
+  }).then(r => r.json()).then(d => {
+    btn.disabled = false;
+    btn.textContent = label;
+    if (!d.ok) { alert(d.error || (d.errors && d.errors[0]) || '定稿失败'); return; }
+    renderScenarioCompare(d);
+  }).catch(e => {
+    btn.disabled = false;
+    btn.textContent = label;
+    alert('请求失败: ' + e);
+  });
+}
 """
 
     ai_btn_disabled = " disabled" if not selected else ""
+
+    scenario_section = ""
+    if selected:
+        scenario_form = _group_scenario_form_rows(selected)
+        locked_html = _render_locked_compare_html(report.get("locked_compare") or {})
+        has_unlocked = "gsc-pick" in scenario_form
+        finalize_btn = ""
+        if has_unlocked:
+            finalize_btn = (
+                '<button type="button" class="btn" style="background:#059669" '
+                'onclick="finalizeUserPicks(this)">🔒 定稿锁定（不可修改）</button>'
+            )
+        scenario_section = f"""
+<div class="card hero-gsc" id="gsc-form">
+  <h2>🎯 2. 我的末轮胜平负 · 定稿后不可改</h2>
+  <p class="meta">只选主胜/平/客胜，不用填比分。点「定稿锁定」后写入本地归档，防止临场改作业；赛后与 AI、实际赛果一起在 <a href="/review">推荐复盘</a> 对照。</p>
+  {scenario_form}
+  <div class="gfc-toolbar">
+    {finalize_btn}
+  </div>
+  <div id="gsc-result">{locked_html}</div>
+</div>"""
 
     prompt_fold = f"""
 <details class="card gfc-prompt-fold">
@@ -3495,10 +3727,12 @@ function aiAllGroupCopy(btn) {
 
 {prompt_fold}
 
+{scenario_section}
+
 {empty_hint}
 {blocks}
 
-  <p class="meta">流程：列表/详情跑模型 → 勾选小组 → 生成文案 → 复制发抖音 · 定位：数据研发工程师看球</p>
+  <p class="meta">流程：跑模型 → 勾选小组 → 生成文案 → 选定胜平负并定稿 → 赛后复盘 · 定稿后不可修改</p>
 </body></html>"""
 
 
@@ -3919,10 +4153,17 @@ def _review_row(r: dict) -> str:
     rec_scores = (r.get("recommended_scores") or "—")[:36] if _score_enabled() else "—"
     ko_raw = str(r.get("kickoff_at") or "")
     ko = _format_review_kickoff(ko_raw)
+    user_pick = r.get("user_pick_cn") or "—"
+    user_hit = _hit_badge(r.get("user_hit_1x2")) if r.get("user_pick_cn") else "—"
+    user_locked = r.get("user_locked_at") or ""
+    user_cell = f"<strong>{_e(user_pick)}</strong>"
+    if user_locked:
+        user_cell += f"<br/><span class='meta'>定稿 {_e(user_locked[:16])}</span>"
     return (
         f"<tr data-tier='{_e(r.get('buy_tier') or '')}' data-hit='{_e(str(r.get('hit_1x2')))}'"
         f" data-kickoff='{_e(ko_raw)}'>"
         f"<td>{_e(ko)}</td><td>{link}</td>"
+        f"<td>{user_cell}</td>"
         f"<td><strong>{_e(r.get('pick_jingcai_cn') or '—')}</strong></td>"
         f"<td><strong>{_e(r.get('score_text') or '—')}</strong> {_e(r.get('result_1x2_cn') or '—')}</td>"
         f"<td class='{cmp_cls}'>{_e(cmp_txt)}</td>"
@@ -3931,7 +4172,7 @@ def _review_row(r: dict) -> str:
         f"<td class='meta'>{_e(ref)}</td>"
         f"<td class='meta'>{_e(open_cn)}</td>"
         f"<td class='meta'>{_e(rec_scores)}</td>"
-        f"<td>{hit_1x2}</td><td>{hit_sc}</td><td>{hit_ah}</td>"
+        f"<td>{user_hit}</td><td>{hit_1x2}</td><td>{hit_sc}</td><td>{hit_ah}</td>"
         f"<td class='meta'>{_e(r.get('recommendation_source') or '—')}</td>"
         f"</tr>\n"
     )
@@ -3954,7 +4195,21 @@ def html_recommendation_review(report: dict) -> str:
         ("C 仅参考", _pct((purchase.get("tier_c") or {}).get("rate_pct"))),
     ])
     tier_table = _buy_tier_table(acc.get("by_buy_tier") or {})
-    rows = "".join(_review_row(r) for r in records) or "<tr><td colspan='14'>暂无已结算场次</td></tr>"
+    rows = "".join(_review_row(r) for r in records) or "<tr><td colspan='16'>暂无已结算场次</td></tr>"
+
+    user_acc = report.get("user_pick_accuracy") or {}
+    user_locked_n = report.get("user_locked_count") or 0
+    user_stats = ""
+    if user_locked_n:
+        user_stats = f"""
+<div class="card" style="border-color:#bbf7d0;background:#f0fdf4">
+  <h2>🔒 我的定稿 vs 赛果</h2>
+  <p class="meta">末轮定稿 {user_locked_n} 场 · 已结算对照 {user_acc.get('judged') or 0} 场</p>
+  <p><strong>定稿命中率</strong> {_pct(user_acc.get('rate_pct'))} ·
+  <strong>与 AI 同向</strong> {_pct(user_acc.get('vs_ai_rate_pct'))}
+  （{user_acc.get('vs_ai_same') or 0}/{user_acc.get('vs_ai_judged') or 0}）</p>
+  <p class="meta">定稿在 <a href="/worldcup/groups/final">末轮出线文案</a> 页锁定，此处与工具推荐、实际赛果并列复盘。</p>
+</div>"""
 
     miss_li = "".join(
         f"<li><strong>{_e(m.get('pattern'))}</strong> × {m.get('count', 0)}</li>"
@@ -4038,6 +4293,8 @@ function sortReview(kind) {{
   {stats}
 </div>
 
+{user_stats}
+
 <div class="card">
   <h2>购买档位胜率</h2>
   {tier_table}
@@ -4066,9 +4323,9 @@ function sortReview(kind) {{
   <table class="review-table">
     <thead>
       <tr>
-        <th>开球</th><th>比赛</th><th>竞彩推荐</th><th>实际</th><th>对照</th>
+        <th>开球</th><th>比赛</th><th>我的定稿</th><th>竞彩推荐</th><th>实际</th><th>对照</th>
         <th>档位</th><th>置信</th><th>参考研判</th><th>初盘</th><th>比分</th>
-        <th>1X2</th><th>比分</th><th>亚盘</th><th>来源</th>
+        <th>定稿</th><th>1X2</th><th>比分</th><th>亚盘</th><th>来源</th>
       </tr>
     </thead>
     <tbody>
@@ -4986,7 +5243,7 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
   <span class="tag">{len(timeline)} 快照</span>
   <span class="tag">{len(changes)} 变动</span>
 </p>
-<p class="meta">「竞彩足球 · AI 推荐 &amp; 总结」点红色 <strong>📷 保存推荐图</strong> 下载 PNG；含综合总结 + 各模型推荐，不含比分。</p>
+<p class="meta">「AI 分析 &amp; 总结」点 <strong>📷 保存推荐图</strong> 下载 PNG（存图时自动隐藏竞彩/SP/免责声明等敏感字样，适合发抖音）；页面上仍可见完整分析。</p>
 
 <div id="match-export-root" data-export-base="{_e(export_fname)}">
 {export_hero}

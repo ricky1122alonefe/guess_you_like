@@ -115,6 +115,7 @@ def is_locked_first(row: dict, table: list[dict], *, fixtures: list[dict] | None
         sa = scenario_analysis(row["team"], table, fixtures, best_third_cutoff=3)
         if sa.get("known"):
             return sa.get("achievable_ranks") == [1]
+        return False
     others = [r for r in table if r.get("team") != row.get("team")]
     if not others:
         return True
@@ -128,7 +129,8 @@ def is_locked_top2(row: dict, table: list[dict], *, fixtures: list[dict] | None 
         sa = scenario_analysis(row["team"], table, fixtures, best_third_cutoff=3)
         if sa.get("known"):
             ranks = sa.get("achievable_ranks") or []
-            return ranks and max(ranks) <= 2
+            return bool(ranks) and max(ranks) <= 2
+        return False
     sorted_t = _sort_table(table)
     if len(sorted_t) < 3:
         return is_locked_first(row, table, fixtures=fixtures)
@@ -231,23 +233,15 @@ def qualifying_possible_ranks(
 def _out_note(
     team: str,
     *,
-    row: dict,
     mx: int,
     top2_pts: int,
     qual_floor: int,
-    sa: dict[str, Any],
 ) -> str:
     bits = [f"{team} 已确认出局"]
     if mx < top2_pts:
         bits.append(f"最高{mx}分无法直通前二({top2_pts}分)")
     if mx < qual_floor:
         bits.append(f"亦难挤入8个最佳第三名额(门槛约{qual_floor}分)")
-    h2h = sa.get("h2h_notes") or []
-    if h2h:
-        bits.append(h2h[0])
-    form = sa.get("form_cn")
-    if form:
-        bits.append(f"前两场 {form}")
     return "；".join(bits) + "。"
 
 
@@ -257,15 +251,12 @@ def _must_win_qualification_note(
     draw_pts: int,
     top2_pts: int,
     bt_cut: int,
-    form_cn: str = "",
 ) -> str:
     bits = [f"{team} 末轮须全取三分"]
     if top2_pts > 0 and draw_pts < top2_pts:
         bits.append(f"平局仅{draw_pts}分无法威胁前二({top2_pts}分)")
     if draw_pts < bt_cut:
         bits.append(f"亦无法进入最佳第三竞争(门槛约{bt_cut}分)")
-    if form_cn:
-        bits.append(f"前两场 {form_cn}")
     return "，".join(bits) + "。"
 
 
@@ -311,15 +302,13 @@ def analyze_team_race(
     elif out:
         status, status_cn = "out", "确认出局"
         if sa.get("known"):
-            note = _out_note(
-                team, row=row, mx=mx, top2_pts=top2_pts, qual_floor=qual_floor, sa=sa,
-            )
+            note = _out_note(team, mx=mx, top2_pts=top2_pts, qual_floor=qual_floor)
         else:
             note = f"{team} 最高可达 {mx} 分，已无法进入32强。"
     elif still_qualifies and draw_no_top2 and mx >= qual_floor:
         status, status_cn = "must_win", "必须争胜"
         note = _must_win_qualification_note(
-            team, draw_pts=draw_pts, top2_pts=top2_pts, bt_cut=bt_cut, form_cn=form_cn,
+            team, draw_pts=draw_pts, top2_pts=top2_pts, bt_cut=bt_cut,
         )
     elif 1 in possible and len([
         t for t in table
@@ -336,7 +325,7 @@ def analyze_team_race(
         status, status_cn = "fight_2nd_3rd", "争第二 / 最佳第三"
         if draw_no_top2:
             note = _must_win_qualification_note(
-                team, draw_pts=draw_pts, top2_pts=top2_pts, bt_cut=bt_cut, form_cn=form_cn,
+                team, draw_pts=draw_pts, top2_pts=top2_pts, bt_cut=bt_cut,
             )
         else:
             note = f"{team} 需在「直通前二」与「争最佳第三」之间权衡。"
@@ -344,7 +333,7 @@ def analyze_team_race(
         status, status_cn = "fight_2nd", "争小组第二"
         if draw_no_top2:
             note = _must_win_qualification_note(
-                team, draw_pts=draw_pts, top2_pts=top2_pts, bt_cut=bt_cut, form_cn=form_cn,
+                team, draw_pts=draw_pts, top2_pts=top2_pts, bt_cut=bt_cut,
             )
         else:
             note = f"{team} 末轮主要争夺小组第二出线。"
@@ -353,10 +342,7 @@ def analyze_team_race(
         note = f"{team} 目标小组第三并冲击8个最佳第三名额（同分看相互战绩）。"
     else:
         status, status_cn = "out", "确认出局"
-        note = _out_note(
-            team, row=row, mx=mx, top2_pts=top2_pts, qual_floor=qual_floor,
-            sa=sa if sa.get("known") else {"h2h_notes": [], "form_cn": form_cn},
-        )
+        note = _out_note(team, mx=mx, top2_pts=top2_pts, qual_floor=qual_floor)
 
     return {
         "team": team,

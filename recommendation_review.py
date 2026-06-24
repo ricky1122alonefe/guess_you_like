@@ -11,6 +11,7 @@ from match_settlement import load_settled_map
 from prediction_archive import load_best_prediction
 from time_utils import now_beijing_str
 from worldcup_analytics import compute_accuracy_report
+from user_final_picks import enrich_settled_with_user_pick, list_locked_picks, user_pick_accuracy
 
 log = logging.getLogger(__name__)
 
@@ -133,7 +134,8 @@ def build_recommendation_review(output_root: str | Path) -> dict[str, Any]:
         if not settled.get("score_text"):
             continue
         try:
-            records.append(_row_from_settled(settled, output_root=root))
+            rec = _row_from_settled(settled, output_root=root)
+            records.append(enrich_settled_with_user_pick(rec, output_root=root))
         except Exception as exc:
             log.warning("复盘行构建失败 %s: %s", fid, exc)
 
@@ -149,6 +151,8 @@ def build_recommendation_review(output_root: str | Path) -> dict[str, Any]:
         key = f"{pick}→{actual}"
         miss_patterns[key] = miss_patterns.get(key, 0) + 1
     top_misses = sorted(miss_patterns.items(), key=lambda x: -x[1])[:8]
+    user_locked = list_locked_picks(root)
+    user_acc = user_pick_accuracy(records)
 
     return {
         "updated_at": now_beijing_str(),
@@ -156,5 +160,7 @@ def build_recommendation_review(output_root: str | Path) -> dict[str, Any]:
         "with_recommendation": len(judged),
         "accuracy": accuracy,
         "miss_patterns": [{"pattern": k, "count": v} for k, v in top_misses],
+        "user_locked_count": len(user_locked),
+        "user_pick_accuracy": user_acc,
         "records": records,
     }

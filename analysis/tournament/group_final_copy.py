@@ -360,9 +360,6 @@ def compose_group_narrative(
         ranks = t.get("possible_ranks") or []
         rank_txt = f"仍可能名次：{('/'.join(str(x) for x in ranks))}" if ranks else ""
         parts.append(f"· {t['team']}（{t.get('status_cn')}）{rank_txt}")
-        form_cn = t.get("form_cn") or ""
-        if form_cn:
-            parts.append(f"  前两场 {sanitize_social_copy(form_cn) if social_safe else form_cn}")
         note = sanitize_social_copy(t.get("note") or "") if social_safe else (t.get("note") or "")
         extra_clean = sanitize_social_copy(extra) if social_safe else extra
         parts.append(f"  {note}{extra_clean}".strip())
@@ -483,6 +480,18 @@ def build_group_final_copy(
             )
         )
 
+    try:
+        from user_final_picks import get_locked_pick
+
+        for b in match_briefs:
+            locked = get_locked_pick(output_root, str(b.get("fixture_id") or ""))
+            if locked:
+                b["user_locked"] = locked
+                b["user_pick_cn"] = locked.get("pick_cn")
+                b["user_locked_at"] = locked.get("locked_at")
+    except Exception:
+        pass
+
     user_briefs = [b for b in match_briefs if b.get("has_user_ai")] if user_ai_only else match_briefs
     narrative = compose_group_narrative(
         group,
@@ -589,6 +598,18 @@ def build_group_final_copy_report(
     total_user_ai = sum(g.get("user_ai_match_count") or 0 for g in groups_out)
     active_groups = [g for g in groups_out if (g.get("match_count") or 0) > 0]
 
+    locked_compare: dict[str, Any] = {"ok": True, "locked_count": 0, "groups": []}
+    try:
+        from analysis.tournament.group_scenario_compare import build_locked_picks_review
+
+        locked_compare = build_locked_picks_review(
+            output_root,
+            force_refresh=force_refresh,
+            user_ai_only=user_ai_only,
+        )
+    except Exception:
+        pass
+
     return {
         "ok": True,
         "updated_at": now_beijing_str(),
@@ -599,6 +620,7 @@ def build_group_final_copy_report(
         "groups": groups_out,
         "selected_groups": selected_keys,
         "selected": selected_out,
+        "locked_compare": locked_compare,
         "user_ai_only": user_ai_only,
         "social_safe": social_safe,
         "stats": {

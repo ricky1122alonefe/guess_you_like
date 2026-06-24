@@ -878,6 +878,15 @@ class Handler(BaseHTTPRequestHandler):
 
             self._send_json(build_recommendation_review(root))
             return
+        if path == "/api/worldcup/groups/user-picks":
+            from user_final_picks import list_locked_picks, load_user_picks
+
+            self._send_json({
+                "ok": True,
+                "picks": list_locked_picks(root),
+                "store": load_user_picks(root),
+            })
+            return
         if path == "/api/divergence/report":
             from eu_ah_divergence import build_divergence_report
 
@@ -1118,6 +1127,34 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "请求体须为 JSON"}, 400)
             except Exception as exc:
                 log.exception("小组末轮 AI 文案失败")
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/worldcup/groups/scenario-compare":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b"{}"
+                payload = json.loads(raw.decode("utf-8"))
+                force = payload.get("force") is True or qs.get("force", ["0"])[0] in ("1", "true", "yes")
+                from analysis.tournament.group_scenario_compare import build_scenario_compare_report
+
+                groups = payload.get("groups")
+                if payload.get("group") and not groups:
+                    groups = [payload.get("group")]
+                entries = payload.get("picks") or payload.get("results") or []
+                result = build_scenario_compare_report(
+                    self.output_root,
+                    picks=entries,
+                    groups=groups,
+                    round_num=int(payload.get("round_num") or 3),
+                    force_refresh=force,
+                    user_ai_only=payload.get("user_ai_only", True) is not False,
+                    finalize=payload.get("finalize") is True,
+                )
+                self._send_json(result, 200 if result.get("ok") else 400)
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "请求体须为 JSON"}, 400)
+            except Exception as exc:
+                log.exception("小组末轮定稿比对失败")
                 self._send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/worldcup/match-ai":

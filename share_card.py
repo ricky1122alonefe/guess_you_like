@@ -674,9 +674,8 @@ AI_SUMMARY_POSTER_CSS = """
 """
 
 
-def html_ai_summary_panel(ctx: dict[str, Any]) -> str:
+def html_ai_summary_panel(ctx: dict[str, Any], *, slug: str = "ai-summary") -> str:
     """Poster + prominent save button (button hidden inside saved PNG)."""
-    slug = "ai-summary"
     poster = html_ai_summary_card(ctx)
     btn = (
         '<button type="button" class="btn-poster-save export-hide" '
@@ -1001,7 +1000,96 @@ async function savePageLongImage(btn) {{
     if (btn) {{ btn.disabled = false; btn.textContent = label || '📷 保存长图'; }}
   }}
 }}
+async function saveAllPosterImages(btn) {{
+  const mods = document.querySelectorAll('.export-module-poster');
+  if (!mods.length) {{
+    alert('没有可导出的推荐图');
+    return;
+  }}
+  const label = btn ? btn.textContent : '';
+  if (btn) {{ btn.disabled = true; }}
+  for (let i = 0; i < mods.length; i++) {{
+    if (btn) btn.textContent = '生成中 ' + (i + 1) + '/' + mods.length + '…';
+    const saveBtn = mods[i].querySelector('.btn-poster-save');
+    if (saveBtn) await saveModuleImage(saveBtn);
+    if (i + 1 < mods.length) await new Promise(r => setTimeout(r, 450));
+  }}
+  if (btn) {{ btn.disabled = false; btn.textContent = label || '📷 一键保存全部'; }}
+}}
 </script>"""
+
+
+POSTER_BATCH_PAGE_CSS = """
+body.poster-batch-page { background: #e2e8f0; }
+.poster-batch-toolbar {
+  position: sticky; top: 0; z-index: 20; background: rgba(248,250,252,.96);
+  backdrop-filter: blur(8px); border-bottom: 1px solid #cbd5e1;
+  padding: 12px clamp(12px, 3vw, 24px); margin: 0 0 16px;
+  display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+}
+.poster-batch-toolbar .btn { margin: 0; }
+.poster-batch-list { max-width: 460px; margin: 0 auto; padding: 0 12px 32px; }
+.poster-batch-item { margin-bottom: 28px; }
+.poster-batch-item h2 {
+  font-size: 15px; margin: 0 0 10px; color: #334155; font-weight: 700;
+}
+.poster-batch-item h2 a { color: #1e40af; text-decoration: none; }
+.poster-batch-meta { color: #64748b; font-size: 13px; margin: 0 0 16px; line-height: 1.5; }
+"""
+
+
+def html_share_posters_batch(items: list[dict[str, Any]]) -> str:
+    """One AI recommendation poster per selected match."""
+    if not items:
+        return f"""<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"/><title>批量推荐图</title></head>
+<body><p><a href="/">← 返回首页</a></p><p>未找到有效比赛。</p></body></html>"""
+
+    sections: list[str] = []
+    for item in items:
+        ctx = item.get("ctx") or {}
+        fid = str(item.get("fixture_id") or ctx.get("fixture_id") or "")
+        name = item.get("match_name") or ctx.get("match_name") or fid or "—"
+        slug = f"ai-summary-{fid}" if fid else "ai-summary"
+        panel = html_ai_summary_panel(ctx, slug=slug)
+        sections.append(
+            f'<section class="poster-batch-item">'
+            f'<h2><a href="/match/{_e(fid)}">{_e(name)}</a></h2>'
+            f"{panel}</section>"
+        )
+
+    n = len(items)
+    export_script = long_image_export_script(root_id="poster-batch-root", filename="batch-posters")
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>批量推荐图 · {n} 场</title>
+{export_script}
+<style>
+{POSTER_BATCH_PAGE_CSS}
+{AI_SUMMARY_POSTER_CSS}
+.btn {{
+  display: inline-block; padding: 8px 16px; background: #2563eb; color: #fff !important;
+  border: none; border-radius: 6px; cursor: pointer; font-size: 14px; text-decoration: none;
+}}
+.btn:disabled {{ opacity: 0.6; cursor: wait; }}
+</style>
+</head>
+<body class="poster-batch-page">
+<div class="poster-batch-toolbar">
+  <a class="btn" style="background:#64748b" href="/">← 返回列表</a>
+  <button type="button" class="btn" style="background:#dc2626"
+    onclick="saveAllPosterImages(this)">📷 一键保存全部（{n} 张）</button>
+</div>
+<p class="poster-batch-meta poster-batch-list" style="max-width:460px">
+  共 {n} 场 · 每场一张 PNG，适合发抖音；也可点每张下方的「保存推荐图」单独下载。
+  若某场尚无 AI 推荐，请先在列表或详情页点「AI推荐」后再刷新本页。
+</p>
+<div id="poster-batch-root" class="poster-batch-list" data-export-base="batch-posters">
+{"".join(sections)}
+</div>
+</body></html>"""
 
 
 def build_parlay_share_context(analysis: dict[str, Any]) -> dict[str, Any]:

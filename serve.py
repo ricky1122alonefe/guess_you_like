@@ -32,8 +32,15 @@ from match_timeline import load_ai_records, load_deep_analyses, load_match_index
 from timeline_merge import load_latest_poll_meta, merge_match_indexes
 from time_utils import now_beijing
 from daily_picks import load_daily_picks_from_output, save_daily_picks
-from share_card import build_parlay_share_context, build_share_context, html_share_match, html_share_parlay
-from web_ui import html_ah_analytics, html_ai_settings, html_daily_picks, html_dashboard, html_eu_ah_divergence, html_group_stage, html_kelly_calculator, html_match_detail, html_quant_analytics, html_recommendation_review, html_worldcup_ledger
+from share_card import (
+    build_ai_summary_context,
+    build_parlay_share_context,
+    build_share_context,
+    html_share_match,
+    html_share_parlay,
+    html_share_posters_batch,
+)
+from web_ui import html_ah_analytics, html_ai_settings, html_daily_picks, html_dashboard, html_eu_ah_divergence, html_group_final_copy, html_group_stage, html_kelly_calculator, html_match_detail, html_quant_analytics, html_recommendation_review, html_worldcup_ledger
 
 
 def _error_html(body: str) -> str:
@@ -53,6 +60,8 @@ a {{ color: #2563eb; }}
 </body></html>"""
 
 log = logging.getLogger("serve")
+
+_CLIENT_GONE = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
 _FID_RE = re.compile(r"^/match/(\d+)$")
 _SHARE_RE = re.compile(r"^/share/match/(\d+)$")
 _API_FID_RE = re.compile(r"^/api/match/(\d+)/timeline$")
@@ -248,11 +257,14 @@ def _ask_ai_chat(
 
 
 def _sse_write(handler: BaseHTTPRequestHandler, event: str, data: str) -> None:
-    handler.wfile.write(f"event: {event}\n".encode("utf-8"))
-    for line in str(data).splitlines() or [""]:
-        handler.wfile.write(f"data: {line}\n".encode("utf-8"))
-    handler.wfile.write(b"\n")
-    handler.wfile.flush()
+    try:
+        handler.wfile.write(f"event: {event}\n".encode("utf-8"))
+        for line in str(data).splitlines() or [""]:
+            handler.wfile.write(f"data: {line}\n".encode("utf-8"))
+        handler.wfile.write(b"\n")
+        handler.wfile.flush()
+    except _CLIENT_GONE:
+        pass
 
 
 def _send_chat_sse(
@@ -392,19 +404,25 @@ class Handler(BaseHTTPRequestHandler):
 
     def _send_json(self, data, status=200):
         body = json.dumps(data, ensure_ascii=False, indent=2, default=str).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except _CLIENT_GONE:
+            log.debug("%s - client disconnected before JSON response finished", self.address_string())
 
     def _send_html(self, html: str, status=200):
         body = html.encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except _CLIENT_GONE:
+            log.debug("%s - client disconnected before HTML response finished", self.address_string())
 
     def _trigger_run(self, background: bool = True, *, force_ai: bool | None = None) -> dict:
         force = self.force_ai if force_ai is None else force_ai
@@ -472,6 +490,60 @@ class Handler(BaseHTTPRequestHandler):
                 prediction=pred,
             )
             self._send_html(html_share_match(ctx))
+            return
+
+        if path == "/share/posters":
+            qs = parse_qs(urlparse(self.path).query)
+            raw_ids = qs.get("ids", [""])[0]
+            fixture_ids = [x.strip() for x in raw_ids.split(",") if x.strip()]
+            if not fixture_ids:
+                self._send_html(
+                    _error_html(
+                        "<p>请在 URL 中提供至少 1 个 fixture_id，"
+                        "例如 <code>/share/posters?ids=123,456</code></p>"
+                    ),
+                    400,
+                )
+                return
+            if len(fixture_ids) > 20:
+                self._send_html(
+                    _error_html("<p>一次最多 20 场，请减少勾选数量。</p>"),
+                    400,
+                )
+                return
+            items: list[dict] = []
+            missing: list[str] = []
+            for fid in fixture_ids:
+                idx = _load_match_index(root, fid)
+                if idx is None:
+                    missing.append(fid)
+                    continue
+                pred = _load_latest_pred(root, fid)
+                ai_records = load_ai_records(root, fid)
+                deep_records = load_deep_analyses(root, fid)
+                latest_deep = (deep_records or [None])[0]
+                ctx = build_ai_summary_context(
+                    fid,
+                    match_name=idx.get("match_name") or "",
+                    timeline=idx.get("timeline") or [],
+                    prediction=pred,
+                    deep_record=latest_deep,
+                    ai_records=ai_records,
+                )
+                items.append({
+                    "fixture_id": fid,
+                    "match_name": idx.get("match_name") or "",
+                    "ctx": ctx,
+                })
+            if not items:
+                self._send_html(
+                    _error_html(
+                        f"<p>未找到有效比赛：{html.escape(', '.join(missing))}</p>"
+                    ),
+                    404,
+                )
+                return
+            self._send_html(html_share_posters_batch(items))
             return
 
         if path == "/share/parlay":
@@ -662,6 +734,50 @@ class Handler(BaseHTTPRequestHandler):
                 generated_at=payload.get("generated_at") or "",
             )
             self._send_html(html_share_parlay(build_parlay_share_context(analysis)))
+            return
+        if path == "/worldcup/groups/final":
+            from analysis.tournament.group_final_copy import (
+                _parse_groups_param,
+                build_group_final_copy_report,
+            )
+
+            qs = parse_qs(urlparse(self.path).query)
+            force = qs.get("refresh", ["0"])[0] in ("1", "true", "yes")
+            raw_groups = qs.get("groups", [""])[0]
+            selected = _parse_groups_param(raw_groups) if raw_groups else []
+            self._send_html(html_group_final_copy(
+                build_group_final_copy_report(
+                    root, force_refresh=force, groups=selected or None,
+                ),
+            ))
+            return
+        if path == "/api/worldcup/groups/final-copy":
+            from analysis.tournament.group_final_copy import (
+                _parse_groups_param,
+                build_group_final_copy_report,
+            )
+
+            qs = parse_qs(urlparse(self.path).query)
+            force = qs.get("refresh", ["0"])[0] in ("1", "true", "yes")
+            raw_groups = qs.get("groups", [""])[0]
+            selected = _parse_groups_param(raw_groups) if raw_groups else []
+            self._send_json(build_group_final_copy_report(
+                root, force_refresh=force, groups=selected or None,
+            ))
+            return
+        if path == "/api/worldcup/groups/final-copy/prompt":
+            from analysis.tournament.group_final_prompt import (
+                GROUP_FINAL_DOUYIN_SYSTEM_PROMPT,
+                GROUP_FINAL_USER_INSTRUCTION,
+                prompt_documentation,
+            )
+
+            self._send_json({
+                "ok": True,
+                "system_prompt": GROUP_FINAL_DOUYIN_SYSTEM_PROMPT,
+                "user_instruction": GROUP_FINAL_USER_INSTRUCTION,
+                "documentation": prompt_documentation(),
+            })
             return
         if path == "/worldcup/groups":
             from group_stage_model import build_group_stage_report
@@ -967,6 +1083,41 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self._send_json({"ok": True, "ledger": ledger})
             except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/worldcup/groups/final-copy/ai":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b"{}"
+                payload = json.loads(raw.decode("utf-8"))
+                force = payload.get("force") is True or qs.get("force", ["0"])[0] in ("1", "true", "yes")
+                from analysis.tournament.group_final_copy import (
+                    build_all_groups_final_ai_narratives,
+                    build_group_final_copy_report,
+                )
+
+                report = build_group_final_copy_report(self.output_root, force_refresh=force)
+                if not report.get("ok"):
+                    self._send_json({"ok": False, "error": report.get("error") or "报告生成失败"}, 500)
+                    return
+                groups = payload.get("groups")
+                if payload.get("all"):
+                    groups = None
+                elif not groups:
+                    groups = [payload.get("group")] if payload.get("group") else None
+                result = build_all_groups_final_ai_narratives(
+                    self.output_root,
+                    report,
+                    ai_model=self.ai_model,
+                    ai_base_url=self.ai_base_url,
+                    force=force,
+                    groups=groups,
+                )
+                self._send_json(result, 200 if result.get("ok") else 500)
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "请求体须为 JSON"}, 400)
+            except Exception as exc:
+                log.exception("小组末轮 AI 文案失败")
                 self._send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/worldcup/match-ai":

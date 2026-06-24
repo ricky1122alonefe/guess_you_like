@@ -136,6 +136,75 @@ def test_group_stage_motivation():
     assert b_open["match_type"] in ("open_race", "draw_friendly")
 
 
+def test_b_group_r3_bosnia_qatar_must_win():
+    """R3: 1pt teams vs each other while leaders on 4 — draw to 2pts cannot qualify."""
+    from analysis.tournament.group_race import analyze_team_race
+    from group_stage_model import analyze_fixture_motivation, rank_best_third_places
+
+    standings = {
+        "B": [
+            {"team": "加拿大", "played": 2, "points": 4, "gd": 2, "gf": 7, "ga": 5, "won": 1, "drawn": 1, "lost": 0},
+            {"team": "瑞士", "played": 2, "points": 4, "gd": 1, "gf": 5, "ga": 4, "won": 1, "drawn": 1, "lost": 0},
+            {"team": "波黑", "played": 2, "points": 1, "gd": -3, "gf": 2, "ga": 5, "won": 0, "drawn": 1, "lost": 1},
+            {"team": "卡塔尔", "played": 2, "points": 1, "gd": -4, "gf": 2, "ga": 6, "won": 0, "drawn": 1, "lost": 1},
+        ],
+    }
+    fixtures = [
+        {"group": "B", "round": 3, "home": "波黑", "away": "卡塔尔", "is_finished": False},
+        {"group": "B", "round": 3, "home": "加拿大", "away": "瑞士", "is_finished": False},
+    ]
+    best3 = rank_best_third_places(standings, fixtures=fixtures)
+
+    mot = analyze_fixture_motivation(
+        home="波黑", away="卡塔尔", group="B", standings=standings, round_num=3, best_thirds=best3,
+    )
+    assert mot["match_type"] == "must_win"
+    reason_txt = "".join(mot.get("reasoning") or [])
+    assert "2分" in reason_txt
+    assert "前二" in reason_txt
+
+    for team in ("波黑", "卡塔尔"):
+        race = analyze_team_race(team, standings["B"], best_thirds=best3, fixtures=fixtures)
+        assert race["status"] == "must_win"
+        assert race["status_cn"] == "必须争胜"
+        assert "2分" in race["note"]
+        assert race["possible_ranks"]
+
+
+def test_c_group_r3_haiti_confirmed_out_with_h2h():
+    """Haiti 0pts: max 3 cannot reach top2; H2H vs Scotland blocks group 3rd even if points tie."""
+    from analysis.tournament.group_race import analyze_team_race
+    from analysis.tournament.group_tiebreak import scenario_analysis
+
+    standings = {
+        "C": [
+            {"team": "巴西", "played": 2, "points": 4, "gd": 3, "gf": 4, "ga": 1},
+            {"team": "摩洛哥", "played": 2, "points": 4, "gd": 1, "gf": 2, "ga": 1},
+            {"team": "苏格兰", "played": 2, "points": 3, "gd": 0, "gf": 1, "ga": 1},
+            {"team": "海地", "played": 2, "points": 0, "gd": -4, "gf": 0, "ga": 4},
+        ],
+    }
+    fixtures = [
+        {"group": "C", "round": 1, "home": "巴西", "away": "摩洛哥", "home_score": 1, "away_score": 1, "is_finished": True},
+        {"group": "C", "round": 1, "home": "海地", "away": "苏格兰", "home_score": 0, "away_score": 1, "is_finished": True},
+        {"group": "C", "round": 2, "home": "苏格兰", "away": "摩洛哥", "home_score": 0, "away_score": 1, "is_finished": True},
+        {"group": "C", "round": 2, "home": "巴西", "away": "海地", "home_score": 3, "away_score": 0, "is_finished": True},
+        {"group": "C", "round": 3, "home": "苏格兰", "away": "巴西", "is_finished": False},
+        {"group": "C", "round": 3, "home": "摩洛哥", "away": "海地", "is_finished": False},
+    ]
+    sa = scenario_analysis("海地", standings["C"], fixtures, best_third_cutoff=4)
+    assert sa["achievable_ranks"] == [4]
+    assert not sa["can_qualify"]
+    assert any("苏格兰" in n for n in sa["h2h_notes"])
+
+    race = analyze_team_race("海地", standings["C"], fixtures=fixtures)
+    assert race["status"] == "out"
+    assert race["status_cn"] == "确认出局"
+    assert race["possible_ranks"] == []
+    assert "苏格兰" in race["note"] or "4分" in race["note"]
+    assert race["form_cn"] == "负苏格兰 0-1 · 负巴西 0-3"
+
+
 def test_group_stage_does_not_flip_clear_open_home():
     from analysis.rules.engine import _open_hist_favors, _resolve_group_stage_pick
     from analysis.tournament.group_stage import adjust_rates_for_group_stage
@@ -242,12 +311,18 @@ def test_long_image_export_helper():
     js = long_image_export_script(root_id="test-root", filename="demo")
     assert "savePageLongImage" in js
     assert "saveModuleImage" in js
+    assert "saveAllPosterImages" in js
     assert "export-poster" in js
     assert "test-root" in js
 
 
 def test_ai_summary_card_helpers():
-    from share_card import build_ai_summary_context, html_ai_summary_card, html_ai_summary_panel
+    from share_card import (
+        build_ai_summary_context,
+        html_ai_summary_card,
+        html_ai_summary_panel,
+        html_share_posters_batch,
+    )
 
     ctx = build_ai_summary_context(
         "123",
@@ -280,6 +355,12 @@ def test_ai_summary_card_helpers():
     assert "保存推荐图" in panel
     assert "saveModuleImage" in panel
 
+    batch = html_share_posters_batch([{"fixture_id": "123", "match_name": "葡萄牙VS乌兹别克斯坦", "ctx": ctx}])
+    assert "批量推荐图" in batch
+    assert "saveAllPosterImages" in batch
+    assert "葡萄牙VS乌兹别克斯坦" in batch
+    assert "ai-summary-123" in batch
+
 
 def test_match_result_payload_serialized():
     from db.repository import _match_result_values
@@ -299,6 +380,113 @@ def test_match_result_payload_serialized():
     payload_idx = 22  # payload column position
     assert isinstance(vals[payload_idx], str)
     assert json.loads(vals[payload_idx])["line_move"] == 0.25
+
+
+def test_group_final_prompt():
+    from analysis.tournament.group_final_prompt import (
+        GROUP_FINAL_DOUYIN_SYSTEM_PROMPT,
+        build_group_final_user_payload,
+        chat_messages,
+    )
+
+    assert "数据研发工程师" in GROUP_FINAL_DOUYIN_SYSTEM_PROMPT
+    assert "SP" in GROUP_FINAL_DOUYIN_SYSTEM_PROMPT  # listed as forbidden
+    assert "只返回 JSON" in GROUP_FINAL_DOUYIN_SYSTEM_PROMPT
+    payload = build_group_final_user_payload({
+        "group": "A",
+        "race": {},
+        "standings": [],
+        "matches": [{"has_user_ai": True, "match_name": "AVS B", "ai_lines": ["m→主胜"]}],
+        "narrative": "草稿",
+    })
+    assert payload["group"] == "A"
+    assert len(payload["matches_with_model"]) == 1
+    msgs = chat_messages({"group": "A", "matches": [], "narrative": "x"})
+    assert msgs[0]["role"] == "system"
+    assert msgs[1]["role"] == "user"
+
+
+def test_group_final_copy_narrative():
+    from analysis.tournament.group_final_copy import compose_group_narrative, _parse_groups_param
+
+    assert _parse_groups_param("A,C, K") == ["A", "C", "K"]
+
+    table = [
+        {"team": "墨西哥", "points": 6, "played": 2, "gd": 3, "gf": 4, "ga": 1},
+        {"team": "韩国", "points": 1, "played": 2, "gd": 0, "gf": 2, "ga": 2},
+        {"team": "南非", "points": 1, "played": 2, "gd": -1, "gf": 1, "ga": 2},
+        {"team": "捷克", "points": 1, "played": 2, "gd": -2, "gf": 1, "ga": 3},
+    ]
+    from analysis.tournament.group_race import build_group_race_context
+
+    race = build_group_race_context("A", {"A": table}, round_num=3)
+    briefs = [{
+        "match_name": "墨西哥VS捷克",
+        "motivation_type_cn": "控节奏",
+        "likely_direction_cn": "主不败",
+        "jingcai_pick": "主胜",
+        "jingcai_sp": "1.45",
+        "has_user_ai": True,
+        "has_ai": True,
+        "ai_lines": ["DeepSeek→主胜（仍有正EV参考）"],
+        "motivation_reasons": ["已锁定头名，轮换控节奏"],
+    }]
+    text = compose_group_narrative("A", race_ctx=race, table=table, match_briefs=briefs, user_ai_only=True)
+    assert "A组" in text
+    assert "墨西哥" in text
+    assert "已锁定小组第一" in text
+    assert "DeepSeek" in text
+    assert "数据研发工程师" in text
+    assert "模型逐场输出" in text
+    assert "#世界杯" in text
+    assert "竞彩" not in text
+    assert "购彩无关" in text
+
+
+def test_group_race_lock_and_chaos():
+    from analysis.tournament.group_race import (
+        analyze_group_chaos,
+        analyze_team_race,
+        enrich_knockout_paths,
+        is_locked_first,
+        likely_r32_opponents_for_team,
+    )
+    from knockout_path import analyze_opponent_picking
+
+    table = [
+        {"team": "墨西哥", "points": 6, "played": 2, "gd": 3, "gf": 4, "ga": 1},
+        {"team": "韩国", "points": 1, "played": 2, "gd": 0, "gf": 2, "ga": 2},
+        {"team": "南非", "points": 1, "played": 2, "gd": -1, "gf": 1, "ga": 2},
+        {"team": "某队", "points": 1, "played": 2, "gd": -2, "gf": 1, "ga": 3},
+    ]
+    assert is_locked_first(table[0], table)
+    race = analyze_team_race("墨西哥", table)
+    assert race["locked_first"]
+    assert race["status"] == "locked_1st"
+
+    open_table = [
+        {"team": "A", "points": 4, "played": 2, "gd": 1, "gf": 3, "ga": 2},
+        {"team": "B", "points": 4, "played": 2, "gd": 0, "gf": 2, "ga": 2},
+        {"team": "C", "points": 3, "played": 2, "gd": 0, "gf": 2, "ga": 2},
+        {"team": "D", "points": 3, "played": 2, "gd": -1, "gf": 1, "ga": 2},
+    ]
+    chaos = analyze_group_chaos(open_table, round_num=3)
+    assert chaos["chaos_level"] in ("high", "medium")
+    assert len(chaos["fighting_1st"]) >= 2
+
+    standings = {
+        "A": table,
+        "B": [
+            {"team": "巴西", "points": 3, "played": 2, "gd": 1, "gf": 2, "ga": 1, "rank": 1},
+            {"team": "X", "points": 0, "played": 2, "gd": -2, "gf": 0, "ga": 2, "rank": 2},
+        ],
+    }
+    pick = analyze_opponent_picking("墨西哥", "A", standings_row=table[0])
+    pick = enrich_knockout_paths(pick, "A", standings)
+    assert pick["paths"]["second"].get("opponent_preview")
+
+    preview = likely_r32_opponents_for_team("墨西哥", "A", assumed_rank=1, all_standings=standings)
+    assert preview.get("summary")
 
 
 def test_knockout_path_group_a():

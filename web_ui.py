@@ -299,19 +299,15 @@ function onDashSolidFilter(el) {
 
 _PARLAY_JS = """
 const parlaySelected = new Map();
+const PICK_MAX = 20;
 
 function toggleParlayPick(el) {
   const fid = el.dataset.fid;
     if (el.checked) {
-    const day = el.dataset.matchDate || '';
-    if (parlaySelected.size >= 1) {
-      const firstCb = document.querySelector('.parlay-cb:checked');
-      const firstDay = firstCb && firstCb !== el ? (firstCb.dataset.matchDate || '') : '';
-      if (firstDay && day && firstDay !== day) {
-        el.checked = false;
-        showToast('2串1 须同一比赛日（' + firstDay + '），不可跨天', true);
-        return;
-      }
+    if (parlaySelected.size >= PICK_MAX) {
+      el.checked = false;
+      showToast('最多选 ' + PICK_MAX + ' 场', true);
+      return;
     }
     const tier = el.dataset.tier || '';
     const sweet = el.dataset.sweet === '1';
@@ -322,11 +318,6 @@ function toggleParlayPick(el) {
     }
     if (!sweet && grade !== '稳胆甜区' && grade !== '稳胆') {
       showToast('非 SP 1.3–1.6 甜区，重正确率可单关，串关请优先「稳胆甜区」', true);
-    }
-    if (parlaySelected.size >= 2) {
-      el.checked = false;
-      showToast('最多选 2 场', true);
-      return;
     }
     parlaySelected.set(fid, el.dataset.name || fid);
   } else {
@@ -340,10 +331,18 @@ function updateParlayToolbar() {
   const countEl = document.getElementById('parlay-count');
   const btn = document.getElementById('parlay-analyze-btn');
   const aiBtn = document.getElementById('parlay-ai-btn');
-  if (countEl) countEl.textContent = n + '/2';
+  const posterBtn = document.getElementById('poster-batch-btn');
+  if (countEl) countEl.textContent = n + ' 场 · 串关需 2';
   const ready = n === 2;
   if (btn) btn.disabled = !ready;
   if (aiBtn) aiBtn.disabled = !ready;
+  if (posterBtn) posterBtn.disabled = n === 0;
+}
+
+function openSelectedPosters() {
+  const ids = [...parlaySelected.keys()];
+  if (!ids.length) { showToast('请先勾选场次', true); return; }
+  window.open('/share/posters?ids=' + encodeURIComponent(ids.join(',')), '_blank', 'noopener');
 }
 
 function escHtml(s) {
@@ -1102,7 +1101,7 @@ def _dashboard_active_row(
         f'data-sweet="{sweet_flag}" '
         f'data-match-date="{_e(match_day)}" '
         f'data-acc-grade="{_e(grade)}" '
-        f'data-name="{_e(name)}" onchange="toggleParlayPick(this)" title="加入 2串1">'
+        f'data-name="{_e(name)}" onchange="toggleParlayPick(this)" title="勾选：2串1 / 批量推荐图">'
         if fid else "—"
     )
     sp_cell = _e(sp_val) if sp_val else "—"
@@ -1330,7 +1329,9 @@ def html_dashboard(
 <div class="card">
   <h2>{_e(active_title)}</h2>
   <div class="parlay-toolbar">
-    <span class="meta">自选串关 <strong id="parlay-count">0/2</strong></span>
+    <span class="meta">已选 <strong id="parlay-count">0 场 · 串关需 2</strong></span>
+    <button type="button" class="btn btn-sm" style="background:#dc2626" id="poster-batch-btn" disabled
+            onclick="openSelectedPosters()">📷 批量推荐图</button>
     <button type="button" class="btn btn-sm" id="parlay-analyze-btn" disabled
             onclick="analyzeParlay(false)">2串1 分析</button>
     <button type="button" class="btn btn-sm btn-ai" id="parlay-ai-btn" disabled
@@ -1340,7 +1341,7 @@ def html_dashboard(
     </select>
     <button type="button" class="btn btn-sm btn-ai" id="list-parlay-ai-btn"
             onclick="analyzeListParlayAi()">AI自动选2串1</button>
-    <span class="meta">自选仅基于本地推荐与 SP；AI自动选会参考初盘→实时盘与历史相似样本</span>
+    <span class="meta">勾选后可「批量推荐图」（每场一张 PNG，可跨天）；2串1 须恰好选 2 场且同一比赛日</span>
   </div>
   <div class="card parlay-result" id="parlay-result"></div>
   <p class="meta" style="margin-bottom:8px">
@@ -1349,7 +1350,7 @@ def html_dashboard(
     <label><input type="checkbox" id="dash-filter-solid" onchange="onDashSolidFilter(this)"> 仅稳胆 / 稳胆甜区</label>
   </p>
   <table class="dashboard-table">
-    <tr><th title="勾选 2 场">串</th><th>比赛</th><th>档位</th><th>竞彩推荐</th><th>比分</th><th>亚盘</th><th>置信</th><th>详情</th><th>AI</th></tr>
+    <tr><th title="勾选场次">选</th><th>比赛</th><th>档位</th><th>竞彩推荐</th><th>比分</th><th>亚盘</th><th>置信</th><th>详情</th><th>AI</th></tr>
     {active_rows}
   </table>
 </div>
@@ -3252,6 +3253,252 @@ def html_group_stage(report: dict) -> str:
 </div>
 
 <p class="meta" style="margin-top:20px">战意模型已接入规则引擎推荐与 AI 分析上下文 · 仅供参考</p>
+<p><a class="btn" href="/worldcup/groups/final">📋 末轮出线形势文案（按小组 · 基于 AI）</a></p>
+</body></html>"""
+
+
+def _group_picker_chip(g: dict, *, checked: bool = False) -> str:
+    group = g.get("group") or "?"
+    m_n = g.get("match_count") or 0
+    u_n = g.get("user_ai_match_count") or 0
+    disabled = "" if m_n else " disabled"
+    chk = " checked" if checked else ""
+    meta = f"末轮{m_n}场 · 你已AI {u_n}场" if m_n else "暂无末轮"
+    warn = ' <span class="tag tag-warn">待AI</span>' if m_n and u_n < m_n else ""
+    ok = ' <span class="tag tag-acc-sweet">可生成</span>' if u_n else ""
+    return (
+        f'<label class="gfc-pick{" is-off" if not m_n else ""}">'
+        f'<input type="checkbox" class="gfc-group-cb" value="{_e(group)}"{chk}{disabled}/> '
+        f'<strong>{_e(group)}组</strong> <span class="meta">{meta}</span>{ok}{warn}</label>'
+    )
+
+
+def _group_final_copy_block(g: dict) -> str:
+    group = g.get("group") or "?"
+    race = g.get("race") or {}
+    chaos = race.get("chaos") or {}
+    chaos_cls = {"high": "tag-warn", "medium": "tag-live", "low": "tag"}.get(chaos.get("chaos_level") or "", "tag")
+    u_n = g.get("user_ai_match_count") or 0
+    m_n = g.get("match_count") or 0
+    narrative = g.get("narrative") or ""
+    ai_narrative = g.get("ai_narrative") or ""
+    ai_at = g.get("ai_narrative_at") or ""
+
+    match_bits = ""
+    for m in g.get("matches") or []:
+        fid = m.get("fixture_id") or ""
+        link = f'<a href="/match/{_e(fid)}">{_e(m.get("match_name") or "—")}</a>' if fid else _e(m.get("match_name") or "—")
+        ai_tag = '<span class="tag tag-acc-sweet">已AI</span>' if m.get("has_user_ai") else '<span class="meta">未AI</span>'
+        match_bits += (
+            f'<li>{link} · {_e(m.get("motivation_type_cn") or "—")} · '
+            f'倾向 {_e(m.get("jingcai_pick") if m.get("jingcai_pick") not in ("—", "", "观望", "暂无竞彩") else "—")} {ai_tag}</li>'
+        )
+
+    ai_block = ""
+    if ai_narrative:
+        ai_block = f"""
+<div class="gfc-ai-box">
+  <div class="gfc-ai-hd">✨ 工程师口吻 · AI 润色版 <span class="meta">{_e(ai_at)}</span></div>
+  <pre class="gfc-copy gfc-ai-copy" id="gfc-ai-{_e(group)}">{_e(ai_narrative)}</pre>
+  <button type="button" class="btn btn-sm" onclick="copyGroupText('gfc-ai-{_e(group)}', this)">复制 AI 文案</button>
+</div>"""
+
+    return f"""
+<div class="card gfc-group" id="group-{_e(group)}">
+  <div class="gfc-head">
+    <h3>{_e(group)} 组 · 数据复盘</h3>
+    <span class="tag {chaos_cls}">{_e(chaos.get('chaos_level_cn') or '—')}</span>
+    <span class="meta">末轮 {m_n} 场 · 你的 AI {u_n}/{m_n}</span>
+  </div>
+  <ul class="gfc-matches meta">{match_bits or '<li>暂无末轮场次</li>'}</ul>
+  <div class="gfc-rule-box">
+    <div class="gfc-copy-hd">👨‍💻 数据研发工程师 · 抖音发文版（已隐藏 SP/赔率）</div>
+    <pre class="gfc-copy" id="gfc-rule-{_e(group)}">{_e(narrative)}</pre>
+    <div class="gfc-actions">
+      <button type="button" class="btn btn-sm" onclick="copyGroupText('gfc-rule-{_e(group)}', this)">复制发抖音</button>
+      <button type="button" class="btn btn-sm btn-ai" data-group="{_e(group)}"
+        onclick="aiGroupCopy('{_e(group)}', this)">✨ 工程师口吻润色</button>
+    </div>
+  </div>
+  {ai_block}
+</div>"""
+
+
+def html_group_final_copy(report: dict) -> str:
+    from analysis.tournament.group_final_prompt import GROUP_FINAL_DOUYIN_SYSTEM_PROMPT
+
+    if not report.get("ok"):
+        err = report.get("error") or "无法生成文案"
+        return f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"/>
+<title>末轮出线文案</title></head><body>
+<p><a href="/worldcup/groups">← 返回小组战意</a></p>
+<p>加载失败：{_e(err)}</p></body></html>"""
+
+    rs = report.get("round_summary") or {}
+    stats = report.get("stats") or {}
+    updated = report.get("updated_at") or now_beijing_str()
+    selected_keys = report.get("selected_groups") or []
+    selected_set = set(selected_keys)
+    all_groups = report.get("groups") or []
+    selected = report.get("selected") or []
+
+    picker = "".join(
+        _group_picker_chip(g, checked=g.get("group") in selected_set) for g in all_groups
+    )
+    blocks = "".join(_group_final_copy_block(g) for g in selected) if selected else ""
+
+    empty_hint = ""
+    if not selected:
+        empty_hint = """
+<div class="card gfc-empty">
+  <p>请勾选上方小组，再点「生成出线文案」。</p>
+  <p class="meta">只会汇总你在列表/详情页点过「AI推荐」的场次；未 AI 的末轮场不会写入文案。</p>
+</div>"""
+
+    gfc_css = _shared_css("""
+.gfc-pick-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px; margin:12px 0; }
+.gfc-pick {
+  display:flex; align-items:flex-start; gap:8px; padding:10px 12px; border:1px solid #e2e8f0;
+  border-radius:10px; background:#fff; cursor:pointer;
+}
+.gfc-pick.is-off { opacity:.55; cursor:not-allowed; }
+.gfc-pick input { margin-top:3px; }
+.gfc-pick strong { min-width:2em; }
+.gfc-toolbar { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:12px; }
+.gfc-head { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px; }
+.gfc-head h3 { margin:0; flex:1; min-width:160px; }
+.gfc-matches { margin:0 0 12px; padding-left:18px; line-height:1.6; }
+.gfc-copy-hd, .gfc-ai-hd { font-size:13px; font-weight:700; color:#475569; margin-bottom:6px; }
+.gfc-copy {
+  white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 13px; line-height: 1.65;
+  background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; margin: 0 0 10px;
+  max-height: 420px; overflow: auto;
+}
+.gfc-ai-box { margin-top: 14px; padding-top: 14px; border-top: 1px dashed #e2e8f0; }
+.gfc-ai-copy { background: #faf5ff; border-color: #ddd6fe; }
+.gfc-actions { display:flex; gap:8px; flex-wrap:wrap; }
+.hero-gfc { background: linear-gradient(135deg, #eff6ff 0%, #fff 55%); border: 1px solid #bfdbfe; }
+.gfc-empty { text-align:center; color:#64748b; }
+.gfc-prompt-pre { max-height: 360px; font-size: 12px; }
+.gfc-prompt-fold > summary { cursor:pointer; font-weight:600; padding:4px 0; }
+""")
+
+    js = """
+function selectedGroupIds() {
+  return [...document.querySelectorAll('.gfc-group-cb:checked')].map(el => el.value);
+}
+function generateGroupCopy() {
+  const ids = selectedGroupIds();
+  if (!ids.length) { alert('请先勾选至少 1 个小组'); return; }
+  const url = '/worldcup/groups/final?groups=' + encodeURIComponent(ids.join(','));
+  window.location.href = url;
+}
+function copyGroupText(id, btn) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const text = el.textContent || '';
+  navigator.clipboard.writeText(text).then(() => {
+    const label = btn.textContent;
+    btn.textContent = '已复制';
+    setTimeout(() => { btn.textContent = label; }, 1500);
+  }).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    btn.textContent = '已复制';
+  });
+}
+function aiGroupCopy(group, btn) {
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'AI生成中…';
+  fetch('/api/worldcup/groups/final-copy/ai', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({groups: [group], user_ai_only: true})
+  }).then(r => r.json()).then(d => {
+    btn.disabled = false;
+    btn.textContent = label;
+    if (!d.ok) { alert(d.error || 'AI 文案失败'); return; }
+    location.reload();
+  }).catch(e => {
+    btn.disabled = false;
+    btn.textContent = label;
+    alert('请求失败: ' + e);
+  });
+}
+function aiAllGroupCopy(btn) {
+  const ids = selectedGroupIds();
+  if (!ids.length) { alert('请先勾选小组'); return; }
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '批量生成中…';
+  fetch('/api/worldcup/groups/final-copy/ai', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({groups: ids, user_ai_only: true})
+  }).then(r => r.json()).then(d => {
+    btn.disabled = false;
+    btn.textContent = label;
+    if (!d.ok) { alert(d.error || '部分失败'); }
+    location.reload();
+  }).catch(e => {
+    btn.disabled = false;
+    btn.textContent = label;
+    alert('请求失败: ' + e);
+  });
+}
+"""
+
+    ai_btn_disabled = " disabled" if not selected else ""
+
+    prompt_fold = f"""
+<details class="card gfc-prompt-fold">
+  <summary>📝 Prompt 模板 · 数据研发工程师 · 抖音（改代码见 analysis/tournament/group_final_prompt.py）</summary>
+  <p class="meta">点「工程师口吻润色」即走此 System Prompt + 你的小组数据 JSON。可复制到 ChatGPT / Cursor 手动调。</p>
+  <pre class="gfc-copy gfc-prompt-pre" id="gfc-system-prompt">{_e(GROUP_FINAL_DOUYIN_SYSTEM_PROMPT)}</pre>
+  <button type="button" class="btn btn-sm" onclick="copyGroupText('gfc-system-prompt', this)">复制 System Prompt</button>
+  <a class="btn btn-sm" style="background:#64748b" href="/api/worldcup/groups/final-copy/prompt" target="_blank" rel="noopener">JSON API</a>
+</details>"""
+
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>末轮出线形势文案 · 按小组</title>
+<style>{gfc_css}</style>
+<script>{js}</script>
+</head><body>
+<p class="back page-nav">
+  <a href="/">← 返回首页</a> · <a href="/worldcup/groups">⚔️ 小组战意</a> · <a href="/worldcup">🏆 开盘套路</a>
+</p>
+
+<div class="card hero-gfc">
+  <h1>👨‍💻 数据研发 · 抖音出线文案</h1>
+  <p class="meta">{_e(rs.get('stage_label'))} · 更新 {_e(updated)}</p>
+  <p>{_e(report.get('advance_rule_cn') or '')}</p>
+  <p class="meta">全库末轮 {stats.get('match_count', 0)} 场 · 你已跑模型 {stats.get('user_ai_match_count', 0)} 场</p>
+  <p class="meta"><strong>人设：数据研发工程师</strong> — 用「积分榜引擎 + 战意规则 + 多模型 AI」的口吻写抖音，自动去掉 SP/赔率等敏感词，文末带话题标签。</p>
+
+  <h3 style="margin:16px 0 0;font-size:15px">1. 选择小组</h3>
+  <div class="gfc-pick-grid">{picker}</div>
+  <div class="gfc-toolbar">
+    <button type="button" class="btn" style="background:#dc2626" onclick="generateGroupCopy()">生成出线文案</button>
+    <button class="btn" onclick="location.href='/worldcup/groups/final'">重新选择</button>
+    <button class="btn" onclick="location.reload()">刷新 AI 状态</button>
+    <button type="button" class="btn btn-ai" onclick="aiAllGroupCopy(this)"{ai_btn_disabled}>✨ 工程师口吻润色已选组</button>
+  </div>
+</div>
+
+{prompt_fold}
+
+{empty_hint}
+{blocks}
+
+  <p class="meta">流程：列表/详情跑模型 → 勾选小组 → 生成文案 → 复制发抖音 · 定位：数据研发工程师看球</p>
 </body></html>"""
 
 
@@ -3394,6 +3641,9 @@ def _path_block(team: str, pick: dict) -> str:
     for key, label in (("first", "若夺头名"), ("second", "若拿第二"), ("third", "若第三(最佳8)")):
         p = paths.get(key) or {}
         summary = p.get("r32_summary") or p.get("r32_label") or "—"
+        preview = p.get("opponent_preview") or ""
+        if preview:
+            summary = f"{summary}<br><span class='meta'>潜在对手：{_e(preview)}</span>"
         r16 = p.get("r16_hint") or ""
         extra = f"<br><span class='meta'>{_e(r16)}</span>" if r16 and r16 != "—" else ""
         highlight = " class='path-row-preferred'" if key == pref_key else ""
@@ -3403,10 +3653,46 @@ def _path_block(team: str, pick: dict) -> str:
             f"<td>{p.get('difficulty_score', '—')}</td></tr>\n"
         )
     notes = pick.get("notes") or []
-    note_html = "".join(f"<li>{_e(x)}</li>" for x in notes[:3])
+    note_html = "".join(f"<li>{_e(x)}</li>" for x in notes[:4])
+    race = pick.get("race") or {}
+    race_html = ""
+    if race.get("status_cn"):
+        race_cls = {
+            "locked_1st": "race-lock",
+            "locked_top2": "race-lock",
+            "out": "race-out",
+            "fight_1st": "race-fight",
+        }.get(race.get("status"), "race-normal")
+        race_html = (
+            f"<p class='race-badge {race_cls}'>"
+            f"<strong>{_e(race.get('status_cn'))}</strong>"
+            f" · 可达成名次 {', '.join(str(x) for x in (race.get('possible_ranks') or []))}"
+            f"</p>"
+        )
+    likely = pick.get("likely_r32") or {}
+    likely_html = ""
+    if likely.get("summary"):
+        likely_html = f"<p class='meta likely-r32'><strong>32强前瞻</strong> {_e(likely.get('summary'))}</p>"
+    opp_rows = ""
+    for o in likely.get("opponents") or []:
+        teams = " / ".join(o.get("teams") or []) or o.get("current") or "—"
+        opp_rows += (
+            f"<tr><td>{_e(o.get('label') or o.get('slot'))}</td>"
+            f"<td>{_e(teams)}</td>"
+            f"<td class='meta'>{_e(o.get('note') or '')}</td></tr>"
+        )
+    opp_table = ""
+    if opp_rows:
+        opp_table = f"""
+  <table class="mini likely-opp-table">
+    <tr><th>签位</th><th>潜在对手</th><th>说明</th></tr>
+    {opp_rows}
+  </table>"""
     return f"""
 <div class="path-block">
   <h4>{_e(team)} · 淘汰赛路径</h4>
+  {race_html}
+  {likely_html}
   <p class="meta">挑对手风险：<span class="tag">{_e(pick.get('picking_level_cn'))}</span>
      · 相对更优路径：<strong>{_e(pick.get('preferred_path_cn'))}</strong></p>
   <div class="bracket-lane" aria-label="潜在对阵图">
@@ -3418,6 +3704,7 @@ def _path_block(team: str, pick: dict) -> str:
     {rows}
   </table>
   <ul class="meta path-notes">{note_html or '<li>—</li>'}</ul>
+  {opp_table}
 </div>"""
 
 
@@ -4271,6 +4558,16 @@ def _build_match_strategy_panel(match_name: str, prediction: dict | None = None)
 
     rs = ctx.get("round_summary") or {}
     stage = rs.get("stage_label") or ""
+    gr = ctx.get("group_race") or {}
+    chaos = gr.get("chaos") or {}
+    chaos_banner = ""
+    if chaos.get("summary"):
+        cls = "chaos-high" if chaos.get("chaos_level") == "high" else "chaos-med"
+        chaos_banner = (
+            f"<div class='group-chaos-banner {cls}'>"
+            f"<strong>{_e(chaos.get('chaos_level_cn') or '小组形势')}</strong> "
+            f"{_e(chaos.get('summary'))}</div>"
+        )
 
     return f"""
 <div class="card strategy-card">
@@ -4280,6 +4577,7 @@ def _build_match_strategy_panel(match_name: str, prediction: dict | None = None)
     <span class="meta">{_e(stage)}</span>
     <a class="btn btn-sm" href="/worldcup/groups">全组看板 →</a>
   </div>
+{chaos_banner}
 
   <div class="strategy-grid">
     <div class="strategy-col">
@@ -4607,6 +4905,15 @@ def html_match_detail(
 .bracket-notes { margin-top: 12px; font-size: 13px; }
 .group-bracket-strip { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px;
   padding: 10px; background: #f0fdf4; border-radius: 8px; border: 1px solid #bbf7d0; }
+.group-chaos-banner { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; font-size: 13px; line-height: 1.5; }
+.group-chaos-banner.chaos-high { background: #fff7ed; border: 1px solid #fdba74; color: #9a3412; }
+.group-chaos-banner.chaos-med { background: #eff6ff; border: 1px solid #93c5fd; color: #1e40af; }
+.race-badge { font-size: 12px; padding: 6px 10px; border-radius: 8px; margin: 0 0 8px; }
+.race-badge.race-lock { background: #ecfdf5; color: #166534; border: 1px solid #86efac; }
+.race-badge.race-fight { background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; }
+.race-badge.race-out { background: #f1f5f9; color: #64748b; border: 1px solid #e2e8f0; }
+.likely-r32 { background: #f0fdf4; padding: 8px 10px; border-radius: 6px; margin-bottom: 8px; }
+.likely-opp-table { margin-top: 8px; }
 .bracket-chip { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; }
 .bracket-chip.r32 { background: #dcfce7; color: #166534; }
 .rec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 12px; margin-bottom: 12px; }

@@ -341,6 +341,25 @@ def build_match_knockout_context(match_name: str) -> dict[str, Any] | None:
 
     motivation = analyze_match_from_name(match_name)
     bracket = _load_bracket()
+    all_standings = snap.get("standings") or {}
+    all_fixtures = snap.get("fixtures") or []
+    round_num = int((motivation or {}).get("round") or 2)
+
+    from analysis.tournament.group_race import (
+        analyze_team_race,
+        build_group_race_context,
+        enrich_knockout_paths,
+        likely_r32_opponents_for_team,
+    )
+
+    grp_fx = [f for f in all_fixtures if f.get("group") == group]
+    group_race = build_group_race_context(
+        group, all_standings, round_num=round_num, fixtures=grp_fx or None,
+    )
+    from analysis.tournament.group_stage import rank_best_third_places as _rank_thirds
+    bt = _rank_thirds(all_standings, fixtures=all_fixtures)
+    home_race = analyze_team_race(home, standings, best_thirds=bt, fixtures=grp_fx or None)
+    away_race = analyze_team_race(away, standings, best_thirds=bt, fixtures=grp_fx or None)
 
     home_pick = analyze_opponent_picking(
         home, group, standings_row=table.get(home), remaining_rounds=3 - (table.get(home) or {}).get("played", 0),
@@ -348,6 +367,18 @@ def build_match_knockout_context(match_name: str) -> dict[str, Any] | None:
     away_pick = analyze_opponent_picking(
         away, group, standings_row=table.get(away), remaining_rounds=3 - (table.get(away) or {}).get("played", 0),
     )
+    if home_race.get("locked_first"):
+        prev = likely_r32_opponents_for_team(home, group, assumed_rank=1, all_standings=all_standings)
+        home_pick["notes"] = [home_race.get("note", ""), prev.get("summary", "")] + (home_pick.get("notes") or [])
+        home_pick["likely_r32"] = prev
+    home_pick["race"] = home_race
+    if away_race.get("locked_first"):
+        prev = likely_r32_opponents_for_team(away, group, assumed_rank=1, all_standings=all_standings)
+        away_pick["notes"] = [away_race.get("note", ""), prev.get("summary", "")] + (away_pick.get("notes") or [])
+        away_pick["likely_r32"] = prev
+    away_pick["race"] = away_race
+    enrich_knockout_paths(home_pick, group, all_standings)
+    enrich_knockout_paths(away_pick, group, all_standings)
 
     scenarios = project_scenarios(
         home, away, group,
@@ -378,6 +409,7 @@ def build_match_knockout_context(match_name: str) -> dict[str, Any] | None:
         "picking_level": combined_picking,
         "picking_level_cn": {"low": "低", "watch": "观察", "medium": "中等", "high": "较高"}.get(combined_picking, "低"),
         "prediction_hint": prediction_hint,
+        "group_race": group_race,
     }
 
 

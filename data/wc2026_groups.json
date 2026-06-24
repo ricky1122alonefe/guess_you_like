@@ -9,7 +9,17 @@
     "best_third_count": 8,
     "knockout_teams": 32,
     "third_rank_tiebreakers": ["points", "goal_diff", "goals_for"],
-    "advance_rule_cn": "12个小组前二直接晋级，12个小组第三中成绩最好的8队晋级32强淘汰赛。",
+    "group_tiebreakers_cn": [
+      "同分球队相互交手积分",
+      "同分球队相互交手净胜球",
+      "同分球队相互交手进球数",
+      "小组总净胜球",
+      "小组总进球",
+      "公平竞赛分",
+      "FIFA排名"
+    ],
+    "group_tiebreakers": ["h2h_points", "h2h_gd", "h2h_gf", "overall_gd", "overall_gf", "fair_play", "fifa_ranking"],
+    "advance_rule_cn": "12个小组前二直接晋级，12个小组第三中成绩最好的8队晋级32强淘汰赛。同分先看相互战绩，再看小组净胜球。",
     "strategy_notes": [
       "小组第三有8/12个晋级名额，弱队或中游队拿到平局的战略价值明显高于传统32队赛制。",
       "强队首轮或次轮领先后，若净胜球优势足够，末段可能更保守，亚盘穿盘风险上升。",

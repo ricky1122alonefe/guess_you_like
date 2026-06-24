@@ -149,13 +149,38 @@ def _stage_label(r1_done: int, r1_total: int, r2_done: int, r2_total: int) -> st
     return "第三轮/末轮阶段"
 
 
-def rank_best_third_places(standings: dict[str, list[dict]]) -> list[dict]:
-    """Rank 12 group thirds for 8 best-third slots."""
+def best_third_cutoff_points(best_thirds: list[dict] | None) -> int:
+    """Points of the 8th-ranked group third (best-third qualification bar)."""
+    if best_thirds and len(best_thirds) >= 8:
+        return int(best_thirds[7].get("points") or 3)
+    return 3
+
+
+def second_place_points(table: list[dict]) -> int:
+    """Current second-place points in a group table (0 if unknown)."""
+    rows = [r for r in table if int(r.get("played") or 0) > 0]
+    if len(rows) < 2:
+        return 0
+    sorted_t = sorted(
+        rows,
+        key=lambda x: (-int(x.get("points") or 0), -int(x.get("gd") or 0), -int(x.get("gf") or 0)),
+    )
+    return int(sorted_t[1].get("points") or 0)
+
+
+def rank_best_third_places(
+    standings: dict[str, list[dict]],
+    fixtures: list[dict] | None = None,
+) -> list[dict]:
+    """Rank 12 group thirds for 8 best-third slots (FIFA table order when fixtures given)."""
+    from analysis.tournament.group_tiebreak import rank_group_table
+
     thirds: list[dict] = []
     for group, table in standings.items():
         if len(table) < 3:
             continue
-        sorted_t = sorted(table, key=lambda x: (-x["points"], -x["gd"], -x["gf"], x["team"]))
+        grp_fx = [f for f in (fixtures or []) if f.get("group") == group]
+        sorted_t = rank_group_table(table, grp_fx or None)
         row = dict(sorted_t[2])
         row["group"] = group
         thirds.append(row)
@@ -184,10 +209,26 @@ def _team_situation(
     tier = tiers.get(team, "mid")
 
     needs: list[str] = []
+    top2_pts = second_place_points(table)
+    bt_cut = best_third_cutoff_points(best_thirds)
+    draw_pts = int(row["points"]) + 1
+    decisive = round_num >= 3 or remaining <= 1
+    draw_dead = decisive and top2_pts > 0 and draw_pts < top2_pts and draw_pts < bt_cut
+
     if row["points"] == 0 and remaining <= 2:
         needs.append("下场再丢分则出线形势极其被动，必须抢分")
     elif row["points"] == 1:
-        needs.append("平局仍有战略价值，抢3分可跃升榜首")
+        if draw_dead:
+            needs.append(
+                f"末轮平局仅{draw_pts}分，无法威胁前二({top2_pts}分)，"
+                f"亦难挤入最佳第三(门槛约{bt_cut}分)，必须争胜"
+            )
+        elif decisive and top2_pts > 0 and draw_pts < top2_pts:
+            needs.append(
+                f"末轮平局仅{draw_pts}分，无法威胁前二({top2_pts}分)，须全取三分才仍有出线可能"
+            )
+        else:
+            needs.append("平局仍有战略价值，抢3分可跃升榜首")
     elif row["points"] >= 3 and rank <= 2:
         needs.append("已占晋级主动，可接受小胜/平局但需留意净胜球")
     elif rank == 3:
@@ -198,7 +239,14 @@ def _team_situation(
         else:
             needs.append("争夺小组第三或前二，净胜球可能关键")
     elif rank == 4:
-        needs.append("榜末抢分压力大，平局价值取决于其他队赛果")
+        if draw_dead:
+            needs.append(
+                f"榜末末轮须争胜：平局仅{draw_pts}分，前二({top2_pts}分)与最佳第三({bt_cut}分)均不可达"
+            )
+        elif decisive and top2_pts > 0 and draw_pts < top2_pts:
+            needs.append(f"榜末末轮须抢3分，平局{draw_pts}分无法威胁前二({top2_pts}分)")
+        else:
+            needs.append("榜末抢分压力大，平局价值取决于其他队赛果")
 
     pressure = "low"
     if row["points"] == 0:
@@ -220,6 +268,86 @@ def _team_situation(
         "tier": tier,
         "pressure": pressure,
         "needs": needs,
+    }
+
+
+def _max_points_row(row: dict) -> int:
+    rem = max(0, 3 - int(row.get("played") or 0))
+    return int(row.get("points") or 0) + 3 * rem
+
+
+def _is_decisive_round(hs: dict, aws: dict, round_num: int) -> bool:
+    return round_num >= 3 or (
+        int(hs.get("remaining") or 0) <= 1 and int(aws.get("remaining") or 0) <= 1
+    )
+
+
+def _row_for_team(table: list[dict], team: str) -> dict | None:
+    for r in table:
+        if r.get("team") == team:
+            return r
+    return None
+
+
+def _equal_points_duel_outlook(
+    home: str,
+    away: str,
+    *,
+    hp: int,
+    ap: int,
+    table: list[dict],
+    round_num: int,
+    hs: dict,
+    aws: dict,
+    best_thirds: list[dict] | None = None,
+) -> dict[str, Any]:
+    """Whether a draw actually helps both teams given live table (esp. R3)."""
+    top2_pts = second_place_points(table)
+    bt_cut = best_third_cutoff_points(best_thirds)
+    draw_pts = hp + 1
+    h_row = _row_for_team(table, home)
+    a_row = _row_for_team(table, away)
+    h_max = _max_points_row(h_row) if h_row else draw_pts
+    a_max = _max_points_row(a_row) if a_row else draw_pts
+    draw_reaches_top2 = draw_pts >= top2_pts
+    win_can_threat_top2 = h_max >= top2_pts or a_max >= top2_pts
+    decisive = _is_decisive_round(hs, aws, round_num)
+
+    if decisive and not draw_reaches_top2:
+        bt_clause = (
+            f"亦无法进入最佳第三竞争(门槛约{bt_cut}分)，"
+            if draw_pts < bt_cut
+            else ""
+        )
+        if win_can_threat_top2:
+            return {
+                "kind": "must_win",
+                "reason": (
+                    f"{home}({hp}分) vs {away}({ap}分) 末轮直接对话："
+                    f"平局仅各{draw_pts}分，低于目前第二名({top2_pts}分)，无法威胁前二；"
+                    f"{bt_clause}必须争胜才仍有出线可能，守平动机弱。"
+                ),
+                "likely_cn": "分胜负、抢三分",
+            }
+        return {
+            "kind": "must_win",
+            "reason": (
+                f"{home}({hp}分) vs {away}({ap}分) 末轮对话："
+                f"平局各{draw_pts}分仍无法追平前二({top2_pts}分)，"
+                f"{bt_clause}双方出线希望已极渺茫，平局无战略价值。"
+            ),
+            "likely_cn": "分胜负",
+        }
+    if hp == ap == 1:
+        return {
+            "kind": "draw_friendly",
+            "reason": "双方均1分，平局可同时抬升积分、保留出线希望，守平动机较强。",
+            "likely_cn": "平局权重上升",
+        }
+    return {
+        "kind": "draw_friendly",
+        "reason": f"双方同分({hp}分)，平局对两队都是可接受结果，守平动机较强。",
+        "likely_cn": "平局或小比分",
     }
 
 
@@ -287,6 +415,25 @@ def analyze_fixture_motivation(
             reasoning.append("双方均未得分，次轮直接对话属于典型拼命球，平局对双方仍优于输球。")
             draw_bias += 0.05
             likely_cn = "分胜负但比分可能不大"
+        elif hp == 1 and ap == 1 and round_num >= 2 and len(points_set) == 1 and 1 in points_set:
+            match_type = "open_race"
+            reasoning.append("本组仍处同分混战，次轮平局对双方都能保留出线主动权。")
+            draw_bias += 0.10
+            likely_cn = "平局或小比分"
+        elif hp == ap and hp is not None:
+            outlook = _equal_points_duel_outlook(
+                home, away, hp=hp, ap=ap, table=table, round_num=round_num, hs=hs, aws=aws,
+                best_thirds=best_thirds,
+            )
+            match_type = outlook["kind"]
+            reasoning.append(outlook["reason"])
+            if match_type == "draw_friendly":
+                draw_bias += 0.11
+            elif match_type == "must_win":
+                draw_bias += 0.02
+                home_bias += 0.04
+                away_bias += 0.04
+            likely_cn = outlook["likely_cn"]
         elif max(hp or 0, ap or 0) >= 3 and min(hp or 0, ap or 0) <= 1:
             _, tiers, _ = _team_maps()
             weak = home if (aws.get("tier") == "weak" or hp <= 1) else away
@@ -295,11 +442,6 @@ def analyze_fixture_motivation(
                 match_type = "gd_race"
                 reasoning.append(f"{strong} 对 {weak}：领先方可能抢净胜球，但领先后亦可能控节奏。")
                 ah_hint = "穿盘不稳"
-        elif hp == 1 and ap == 1:
-            match_type = "draw_friendly"
-            reasoning.append("双方均1分，平局对两队都是可接受结果，守平动机强。")
-            draw_bias += 0.11
-            likely_cn = "平局权重上升"
 
     if hs.get("pressure") == "high" and aws.get("pressure") != "high":
         match_type = match_type if match_type != "normal" else "must_win"

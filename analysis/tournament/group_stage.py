@@ -484,6 +484,16 @@ def analyze_fixture_motivation(
     }
 
 
+def team_group_from_name(match_name: str) -> str | None:
+    """Resolve WC group letter (A–L) from a match name."""
+    home_raw, away_raw = split_teams(match_name or "")
+    if not home_raw or not away_raw:
+        return None
+    home, away = _normalize(home_raw), _normalize(away_raw)
+    team_to_group, _, _ = _team_maps()
+    return team_to_group.get(home) or team_to_group.get(away)
+
+
 def analyze_match_from_name(match_name: str, *, snapshot: dict | None = None) -> dict[str, Any] | None:
     home_raw, away_raw = split_teams(match_name or "")
     if not home_raw or not away_raw:

@@ -18,6 +18,7 @@ from jingcai_pick import (
     market_label,
 )
 from time_utils import format_beijing, to_beijing
+from ui_theme import poster_batch_page_css, poster_css, share_match_page_css
 
 _WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 _SCORE_SNIP_RE = re.compile(
@@ -762,19 +763,22 @@ def html_ai_summary_card_safe(ctx: dict[str, Any]) -> str:
     return f"""
 <div class="jc-poster jc-poster-safe">
   <div class="jc-safe-top">
-    <div class="jc-safe-brand">AI 赛事分析 · 数据复盘</div>
+    <div class="jc-safe-brand">FIFA WORLD CUP · AI 分析</div>
     <div class="jc-safe-num">{num}</div>
   </div>
-  <div class="jc-teams">
-    <div class="jc-team"><span>{home}</span></div>
-    <div class="jc-vs">VS</div>
-    <div class="jc-team"><span>{away}</span></div>
-  </div>
-  <div class="jc-schedule">{kickoff_full} · {kickoff_line} 开球</div>
-  <div class="jc-safe-trend-panel">
-    <div class="jc-safe-trend-hd">模型倾向</div>
-    <div class="jc-safe-trend-pick">{_e(trend)}</div>
-    <div class="jc-safe-pills">{pills_html}</div>
+  <div class="jc-hero-layout">
+    <div class="jc-hero-left">
+      <div class="jc-hero-kicker">用 AI 和数据，算这场世界杯</div>
+      <div class="jc-hero-match">{home} <span class="jc-vs-inline">VS</span> {away}</div>
+      <div class="jc-hero-pills">
+        <div class="jc-glass-pill"><span class="jc-pill-lbl">北京时间</span><strong>{kickoff_line}</strong></div>
+        <div class="jc-glass-pill"><span class="jc-pill-lbl">开赛</span><strong>{kickoff_full}</strong></div>
+      </div>
+    </div>
+    <div class="jc-hero-right">
+      <div class="jc-hero-score">{_e(trend)}</div>
+      <div class="jc-safe-pills">{pills_html}</div>
+    </div>
   </div>
   {tier_html}
   {synth_html}
@@ -788,193 +792,8 @@ def html_ai_summary_card_safe(ctx: dict[str, Any]) -> str:
 </div>"""
 
 
-AI_SUMMARY_POSTER_CSS = """
-.export-module-poster { max-width: 420px; margin: 0 auto 16px; }
-.export-poster-actions { text-align: center; margin-bottom: 10px; }
-.btn-poster-save {
-  display: inline-block; width: 100%; max-width: 420px; padding: 12px 16px;
-  border: none; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 700;
-  color: #fff; background: linear-gradient(90deg, #dc2626, #b91c1c);
-  box-shadow: 0 4px 14px rgba(220,38,38,.35);
-}
-.btn-poster-save:hover { filter: brightness(1.05); }
-.btn-poster-save:disabled { opacity: .65; cursor: wait; }
-.export-poster { border-radius: 14px; overflow: hidden; box-shadow: 0 8px 28px rgba(15,23,42,.12); }
-.jc-poster {
-  background: #fff; color: #1e293b; font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-}
-.jc-poster-top {
-  background: linear-gradient(135deg, #b91c1c 0%, #991b1b 55%, #7f1d1d 100%);
-  color: #fff; padding: 14px 16px 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px;
-}
-.jc-brand { font-size: 14px; font-weight: 800; letter-spacing: .04em; }
-.jc-match-num {
-  font-size: 12px; font-weight: 700; background: rgba(255,255,255,.18); padding: 3px 10px; border-radius: 999px;
-}
-.jc-teams {
-  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px;
-  padding: 18px 16px 8px; text-align: center;
-}
-.jc-team span {
-  display: block; font-size: clamp(1.05rem, 4.2vw, 1.35rem); font-weight: 900; line-height: 1.25; color: #0f172a;
-}
-.jc-vs {
-  font-size: 13px; font-weight: 900; color: #dc2626; background: #fef2f2; border-radius: 999px;
-  padding: 6px 10px; border: 1px solid #fecaca;
-}
-.jc-schedule { text-align: center; font-size: 12px; color: #64748b; padding: 0 16px 14px; line-height: 1.5; }
-.jc-rec-panel {
-  margin: 0 14px 12px; padding: 14px 12px 12px; border-radius: 12px;
-  background: linear-gradient(180deg, #fffbeb 0%, #fff 100%); border: 2px solid #fbbf24;
-}
-.jc-rec-hd { font-size: 11px; font-weight: 800; color: #b45309; letter-spacing: .12em; text-align: center; }
-.jc-rec-pick {
-  font-size: clamp(2rem, 8vw, 2.6rem); font-weight: 900; color: #dc2626; text-align: center;
-  line-height: 1.1; margin: 6px 0 2px;
-}
-.jc-rec-pick.is-wait { font-size: clamp(1.2rem, 5vw, 1.6rem); color: #64748b; }
-.jc-rec-sub { text-align: center; font-size: 14px; font-weight: 700; color: #475569; margin-bottom: 10px; }
-.jc-sp-grid-hd { font-size: 11px; color: #94a3b8; text-align: center; margin-bottom: 6px; font-weight: 600; }
-.jc-sp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.jc-sp-cell {
-  background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 8px 4px; text-align: center;
-}
-.jc-sp-lbl { display: block; font-size: 12px; color: #64748b; font-weight: 600; }
-.jc-sp-val { display: block; font-size: 18px; font-weight: 900; color: #0f172a; margin-top: 2px; }
-.jc-sp-cell.is-rec {
-  background: linear-gradient(180deg, #fef3c7, #fde68a); border-color: #f59e0b; position: relative;
-}
-.jc-sp-cell.is-rec .jc-sp-val { color: #92400e; }
-.jc-rec-tag {
-  display: block; font-style: normal; font-size: 10px; font-weight: 800; color: #fff;
-  background: #dc2626; border-radius: 4px; margin-top: 4px; padding: 1px 0;
-}
-.jc-sp-empty { grid-column: 1 / -1; text-align: center; font-size: 13px; color: #94a3b8; padding: 8px; }
-.jc-tier {
-  margin: 0 14px 10px; padding: 8px 12px; border-radius: 10px; font-size: 13px; text-align: center; line-height: 1.45;
-}
-.jc-tier strong { font-weight: 800; }
-.jc-tier span { display: block; font-size: 12px; opacity: .85; margin-top: 2px; }
-.jc-tier-a { background: #ecfdf5; color: #166534; border: 1px solid #86efac; }
-.jc-tier-b { background: #eff6ff; color: #1e40af; border: 1px solid #93c5fd; }
-.jc-tier-c { background: #f8fafc; color: #64748b; border: 1px solid #e2e8f0; }
-.jc-synth {
-  margin: 0 14px 10px; padding: 10px 12px; background: #f0fdf4; border-radius: 10px;
-  border: 1px solid #86efac; text-align: left;
-}
-.jc-synth-hd { font-size: 11px; font-weight: 800; color: #166534; margin-bottom: 4px; letter-spacing: .06em; }
-.jc-synth p { margin: 0; font-size: 13px; line-height: 1.6; color: #14532d; }
-.jc-synth.is-muted { background: #f8fafc; border-color: #e2e8f0; }
-.jc-synth.is-muted .jc-synth-hd { color: #64748b; }
-.jc-synth.is-muted p { color: #64748b; }
-.jc-ai-section { margin: 0 14px 10px; text-align: left; }
-.jc-ai-section-hd { font-size: 12px; font-weight: 800; color: #334155; margin-bottom: 6px; }
-.jc-agree {
-  display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
-  margin-bottom: 8px;
-}
-.jc-agree.is-ok { background: #dcfce7; color: #166534; }
-.jc-agree.is-warn { background: #fff7ed; color: #c2410c; }
-.jc-model-list { display: flex; flex-direction: column; gap: 8px; }
-.jc-model-card {
-  background: #faf5ff; border: 1px solid #ddd6fe; border-radius: 10px; padding: 10px 12px;
-}
-.jc-model-card.is-empty p { margin: 0; font-size: 12px; color: #64748b; line-height: 1.5; }
-.jc-model-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-bottom: 6px; }
-.jc-model-name { font-size: 13px; color: #5b21b6; }
-.jc-model-pick {
-  font-size: 12px; font-weight: 800; color: #dc2626; background: #fef2f2;
-  padding: 2px 8px; border-radius: 999px; border: 1px solid #fecaca;
-}
-.jc-model-pick.is-muted { color: #64748b; background: #f1f5f9; border-color: #e2e8f0; }
-.jc-model-conf { font-size: 11px; color: #64748b; }
-.jc-model-sum { margin: 0; font-size: 12px; line-height: 1.55; color: #334155; }
-.jc-model-sum.is-muted { color: #94a3b8; }
-.jc-rq-ref { margin: 0 14px 8px; font-size: 12px; color: #475569; text-align: center; }
-.jc-ref-box {
-  margin: 0 14px 10px; padding: 8px 12px; background: #f1f5f9; border-radius: 8px;
-  font-size: 12px; text-align: center; color: #475569;
-}
-.jc-ref-label { font-weight: 800; color: #334155; }
-.jc-ref-note { font-size: 11px; color: #94a3b8; margin: 0 4px; }
-.jc-ref-box strong { color: #1e293b; margin-left: 4px; }
-.jc-meta-row { display: flex; justify-content: center; gap: 8px; padding: 0 14px 8px; }
-.jc-meta-chip { font-size: 11px; color: #64748b; background: #f1f5f9; padding: 3px 10px; border-radius: 999px; }
-.jc-foot {
-  padding: 10px 14px 14px; text-align: center; font-size: 10px; color: #94a3b8; line-height: 1.45;
-  border-top: 1px dashed #e2e8f0; margin-top: 4px;
-}
-.jc-poster-safe { background: #fff; }
-.jc-safe-top {
-  background: linear-gradient(135deg, #1e3a5f 0%, #334155 55%, #475569 100%);
-  color: #fff; padding: 14px 16px 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px;
-}
-.jc-safe-brand { font-size: 14px; font-weight: 800; letter-spacing: .04em; }
-.jc-safe-num {
-  font-size: 12px; font-weight: 700; background: rgba(255,255,255,.16); padding: 3px 10px; border-radius: 999px;
-}
-.jc-safe-trend-panel {
-  margin: 0 14px 12px; padding: 16px 12px 14px; border-radius: 12px;
-  background: linear-gradient(180deg, #f8fafc 0%, #fff 100%); border: 1px solid #e2e8f0;
-  text-align: center;
-}
-.jc-safe-trend-hd { font-size: 11px; font-weight: 800; color: #64748b; letter-spacing: .14em; }
-.jc-safe-trend-pick {
-  font-size: clamp(1.8rem, 7vw, 2.4rem); font-weight: 900; color: #0f172a; line-height: 1.15; margin: 8px 0 10px;
-}
-.jc-safe-pills { display: flex; justify-content: center; gap: 10px; }
-.jc-safe-pill {
-  min-width: 42px; padding: 6px 12px; border-radius: 999px; font-size: 13px; font-weight: 800;
-  color: #64748b; background: #f1f5f9; border: 1px solid #e2e8f0;
-}
-.jc-safe-pill.is-on { color: #fff; background: linear-gradient(135deg, #2563eb, #1d4ed8); border-color: #1d4ed8; }
-.jc-safe-tier {
-  margin: 0 14px 10px; padding: 8px 12px; border-radius: 10px; font-size: 13px; text-align: center; line-height: 1.45;
-}
-.jc-safe-tier strong { font-weight: 800; }
-.jc-safe-tier span { display: block; font-size: 12px; opacity: .88; margin-top: 2px; }
-.jc-safe-tier-a { background: #ecfdf5; color: #166534; border: 1px solid #86efac; }
-.jc-safe-tier-b { background: #eff6ff; color: #1e40af; border: 1px solid #93c5fd; }
-.jc-safe-tier-c { background: #f8fafc; color: #64748b; border: 1px solid #e2e8f0; }
-.jc-safe-synth {
-  margin: 0 14px 10px; padding: 10px 12px; background: #f0fdf4; border-radius: 10px;
-  border: 1px solid #86efac; text-align: left;
-}
-.jc-safe-synth-hd { font-size: 11px; font-weight: 800; color: #166534; margin-bottom: 4px; letter-spacing: .06em; }
-.jc-safe-synth p { margin: 0; font-size: 13px; line-height: 1.6; color: #14532d; }
-.jc-safe-synth.is-muted { background: #f8fafc; border-color: #e2e8f0; }
-.jc-safe-synth.is-muted .jc-safe-synth-hd { color: #64748b; }
-.jc-safe-synth.is-muted p { color: #64748b; }
-.jc-safe-ai-section { margin: 0 14px 10px; text-align: left; }
-.jc-safe-ai-hd { font-size: 12px; font-weight: 800; color: #334155; margin-bottom: 6px; }
-.jc-safe-agree {
-  display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; margin-bottom: 8px;
-}
-.jc-safe-agree.is-ok { background: #dcfce7; color: #166534; }
-.jc-safe-agree.is-warn { background: #fff7ed; color: #c2410c; }
-.jc-safe-model-list { display: flex; flex-direction: column; gap: 8px; }
-.jc-safe-model-card {
-  background: #faf5ff; border: 1px solid #ddd6fe; border-radius: 10px; padding: 10px 12px;
-}
-.jc-safe-model-card.is-empty p { margin: 0; font-size: 12px; color: #64748b; line-height: 1.5; }
-.jc-safe-model-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-bottom: 6px; }
-.jc-safe-model-name { font-size: 13px; color: #5b21b6; }
-.jc-safe-model-pick {
-  font-size: 12px; font-weight: 800; color: #1d4ed8; background: #eff6ff;
-  padding: 2px 8px; border-radius: 999px; border: 1px solid #bfdbfe;
-}
-.jc-safe-model-pick.is-muted { color: #64748b; background: #f1f5f9; border-color: #e2e8f0; }
-.jc-safe-model-conf { font-size: 11px; color: #64748b; }
-.jc-safe-model-sum { margin: 0; font-size: 12px; line-height: 1.55; color: #334155; }
-.jc-safe-model-sum.is-muted { color: #94a3b8; }
-.jc-safe-meta-row { display: flex; justify-content: center; gap: 8px; padding: 0 14px 8px; }
-.jc-safe-meta-chip { font-size: 11px; color: #64748b; background: #f1f5f9; padding: 3px 10px; border-radius: 999px; }
-.jc-safe-foot {
-  padding: 10px 14px 14px; text-align: center; font-size: 10px; color: #94a3b8; line-height: 1.45;
-  border-top: 1px dashed #e2e8f0; margin-top: 4px;
-}
-.export-poster-safe { display: none; }
-"""
+AI_SUMMARY_POSTER_CSS = poster_css()
+POSTER_BATCH_PAGE_CSS = poster_batch_page_css()
 
 
 def html_ai_summary_panel(ctx: dict[str, Any], *, slug: str = "ai-summary") -> str:
@@ -1031,99 +850,7 @@ def html_share_match(ctx: dict[str, Any]) -> str:
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700;900&display=swap" rel="stylesheet"/>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
-* {{ box-sizing: border-box; margin: 0; padding: 0; }}
-body {{
-  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
-  background: #1a1a1a; min-height: 100vh; padding: 16px;
-  display: flex; flex-direction: column; align-items: center; gap: 16px;
-}}
-.toolbar {{
-  width: min(750px, 100%); display: flex; gap: 10px; flex-wrap: wrap;
-}}
-.toolbar a, .toolbar button {{
-  padding: 10px 18px; border-radius: 8px; border: none; cursor: pointer;
-  font-size: 14px; text-decoration: none; display: inline-block;
-}}
-.btn-save {{ background: #dc2626; color: #fff; font-weight: 700; }}
-.btn-back {{ background: #fff; color: #333; }}
-#share-wrap {{
-  width: min(750px, 100%);
-  background: linear-gradient(160deg, #9b1c1c 0%, #6b0f0f 45%, #8b1515 100%);
-  border-radius: 12px; padding: 28px 20px 24px;
-  position: relative; overflow: hidden;
-}}
-#share-wrap::before {{
-  content: ""; position: absolute; inset: 0; opacity: 0.08;
-  background: radial-gradient(circle at 20% 30%, #fff 0%, transparent 50%),
-              radial-gradient(circle at 80% 70%, #ffd700 0%, transparent 40%);
-  pointer-events: none;
-}}
-.side-left, .side-right {{
-  position: absolute; top: 50%; transform: translateY(-50%);
-  writing-mode: vertical-rl; font-size: 22px; font-weight: 900;
-  color: rgba(255,215,0,0.85); letter-spacing: 6px; z-index: 2;
-}}
-.side-left {{ left: 6px; }}
-.side-right {{ right: 6px; }}
-.scroll {{
-  position: relative; z-index: 3; margin: 0 36px;
-  background: linear-gradient(180deg, #fffef8 0%, #f5ecd8 100%);
-  border: 3px solid #c9a227; border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0,0,0,.35), inset 0 0 0 1px #fff;
-  padding: 28px 22px 20px; text-align: center;
-}}
-.teams {{
-  font-size: clamp(28px, 6vw, 40px); font-weight: 900; color: #1a1a1a;
-  line-height: 1.2; margin-bottom: 8px;
-}}
-.vs {{ color: #b91c1c; margin: 0 6px; font-size: 0.85em; }}
-.sub {{ font-size: 15px; color: #666; margin-bottom: 14px; }}
-.deadline {{
-  display: inline-block; background: #16a34a; color: #fff;
-  font-size: 14px; font-weight: 700; padding: 6px 14px; border-radius: 4px;
-  margin-bottom: 18px;
-}}
-.sp-row {{
-  font-size: clamp(22px, 5vw, 30px); font-weight: 900; color: #111;
-  padding: 10px 8px; margin: 6px 0; border-radius: 6px;
-  position: relative;
-}}
-.sp-row.highlight {{
-  background: linear-gradient(90deg, #fef3c7, #fde68a);
-  border: 2px solid #d97706;
-  color: #92400e;
-}}
-.sp-row.muted {{ font-size: 16px; font-weight: 400; color: #888; }}
-.rec-tag {{
-  display: inline-block; background: #dc2626; color: #fff;
-  font-size: 12px; padding: 2px 8px; border-radius: 4px;
-  margin-right: 8px; vertical-align: middle; font-weight: 700;
-}}
-.ai-box {{
-  margin-top: 16px; padding-top: 14px; border-top: 1px dashed #d4c4a8;
-  text-align: left;
-}}
-.ai-title {{ font-size: 13px; color: #888; margin-bottom: 8px; }}
-.ai-chip {{
-  display: inline-block; background: #7c3aed; color: #fff;
-  font-size: 13px; padding: 4px 10px; border-radius: 999px; margin: 0 6px 6px 0;
-}}
-.ai-main {{
-  font-size: 18px; font-weight: 900; color: #b91c1c; margin-top: 8px;
-}}
-.ai-meta {{ font-size: 13px; color: #555; margin-top: 6px; line-height: 1.5; }}
-.footer {{
-  margin-top: 16px; font-size: 12px; color: rgba(255,255,255,.75);
-  text-align: center; position: relative; z-index: 3;
-}}
-.hint {{ color: #aaa; font-size: 13px; text-align: center; max-width: 750px; }}
-@media (max-width: 520px) {{
-  body {{ padding: 10px; }}
-  .side-left, .side-right {{ display: none; }}
-  .scroll {{ margin: 0; padding: 22px 16px 18px; }}
-  .toolbar {{ flex-direction: column; }}
-  .toolbar a, .toolbar button {{ width: 100%; text-align: center; }}
-}}
+{share_match_page_css()}
 </style>
 </head><body>
 <div class="toolbar">
@@ -1246,6 +973,12 @@ function _restorePosterSwap(state) {{
     safe.style.display = state.safeDisplay;
   }}
 }}
+function _exportBgColor(el) {{
+  const root = (el && el.closest) ? el.closest('[data-export-bg]') : null;
+  const byId = document.getElementById('{_e(root_id)}');
+  const node = root || byId;
+  return (node && node.dataset.exportBg) || '#0a0c18';
+}}
 function _exportBaseName() {{
   const root = document.getElementById('{_e(root_id)}');
   return (root && root.dataset.exportBase) || '{_e(safe_fname)}';
@@ -1278,7 +1011,7 @@ async function saveModuleImage(btn) {{
     const canvas = await html2canvas(target, {{
       scale: Math.min(2, window.devicePixelRatio || 1.5),
       useCORS: true,
-      backgroundColor: '#ffffff',
+      backgroundColor: _exportBgColor(target),
       logging: false,
       scrollY: -window.scrollY,
       scrollX: 0,
@@ -1322,7 +1055,7 @@ async function savePageLongImage(btn) {{
     const canvas = await html2canvas(root, {{
       scale: Math.min(2, window.devicePixelRatio || 1.5),
       useCORS: true,
-      backgroundColor: '#f8fafc',
+      backgroundColor: _exportBgColor(root),
       logging: false,
       scrollY: 0,
       scrollX: 0,
@@ -1364,23 +1097,6 @@ async function saveAllPosterImages(btn) {{
 </script>"""
 
 
-POSTER_BATCH_PAGE_CSS = """
-body.poster-batch-page { background: #e2e8f0; }
-.poster-batch-toolbar {
-  position: sticky; top: 0; z-index: 20; background: rgba(248,250,252,.96);
-  backdrop-filter: blur(8px); border-bottom: 1px solid #cbd5e1;
-  padding: 12px clamp(12px, 3vw, 24px); margin: 0 0 16px;
-  display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
-}
-.poster-batch-toolbar .btn { margin: 0; }
-.poster-batch-list { max-width: 460px; margin: 0 auto; padding: 0 12px 32px; }
-.poster-batch-item { margin-bottom: 28px; }
-.poster-batch-item h2 {
-  font-size: 15px; margin: 0 0 10px; color: #334155; font-weight: 700;
-}
-.poster-batch-item h2 a { color: #1e40af; text-decoration: none; }
-.poster-batch-meta { color: #64748b; font-size: 13px; margin: 0 0 16px; line-height: 1.5; }
-"""
 
 
 def html_share_posters_batch(items: list[dict[str, Any]]) -> str:
@@ -1415,8 +1131,10 @@ def html_share_posters_batch(items: list[dict[str, Any]]) -> str:
 {POSTER_BATCH_PAGE_CSS}
 {AI_SUMMARY_POSTER_CSS}
 .btn {{
-  display: inline-block; padding: 8px 16px; background: #2563eb; color: #fff !important;
-  border: none; border-radius: 6px; cursor: pointer; font-size: 14px; text-decoration: none;
+  display: inline-block; padding: 9px 18px; color: #fff !important;
+  border: none; border-radius: 999px; cursor: pointer; font-size: 14px;
+  font-weight: 700; text-decoration: none;
+  background: linear-gradient(90deg, #ff4b8b 0%, #ff6b4a 100%);
 }}
 .btn:disabled {{ opacity: 0.6; cursor: wait; }}
 </style>

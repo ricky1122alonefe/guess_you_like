@@ -19,6 +19,7 @@ from share_card import (
     long_image_export_script,
 )
 from time_utils import beijing_date, chart_time_label, format_beijing, format_ts, now_beijing_str
+from ui_theme import app_theme_css
 
 
 def _e(s) -> str:
@@ -514,161 +515,13 @@ function analyzeListParlayAi() {
 }
 """
 
-_TOAST_CSS = """
-.toast {{
-  display: none; position: fixed; bottom: 24px; right: 24px; z-index: 9999;
-  background: #059669; color: #fff; padding: 12px 20px; border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0,0,0,.15); font-size: 14px; max-width: 360px;
-}}
-.toast-err {{ background: #dc2626; }}
-"""
 
-_BTN_CSS = """
-.btn {{ display: inline-block; padding: 8px 16px; background: #2563eb; color: #fff !important;
-        border-radius: 6px; border: none; cursor: pointer; font-size: 14px; text-decoration: none; }}
-.btn-sm {{ padding: 4px 10px; font-size: 12px; }}
-.btn:disabled {{ opacity: 0.6; cursor: wait; }}
-.btn-ai {{ background: #7c3aed; }}
-.btn-deep {{ background: #0d9488; }}
-.btn-deep:disabled {{ background: #94a3b8; opacity: 0.7; cursor: not-allowed; }}
-.deep-card {{ border-left: 4px solid #0d9488; }}
-.deep-headline {{ font-size: 1.2rem; font-weight: 600; color: #0f766e; margin: 0 0 8px; }}
-.deep-section {{ margin: 10px 0; }}
-.deep-section h4 {{ margin: 0 0 4px; font-size: 13px; color: #475569; }}
-.deep-list {{ margin: 4px 0 0 16px; padding: 0; }}
-.deep-list li {{ margin: 2px 0; font-size: 13px; color: #334155; }}
-"""
 
-_FOLD_CSS = """
-details.fold {{
-  background: #fff; border-radius: 10px; margin-bottom: 10px;
-  border: 1px solid #e2e8f0; box-shadow: 0 1px 3px rgba(0,0,0,.04);
-}}
-details.fold > summary {{
-  padding: 14px 18px; cursor: pointer; font-weight: 600; font-size: 14px;
-  color: #334155; list-style: none; user-select: none;
-}}
-details.fold > summary::-webkit-details-marker {{ display: none; }}
-details.fold > summary::before {{
-  content: '▸'; display: inline-block; margin-right: 8px; color: #94a3b8;
-  transition: transform .15s;
-}}
-details.fold[open] > summary::before {{ transform: rotate(90deg); }}
-details.fold-muted > summary {{ font-weight: 500; color: #64748b; }}
-details.fold-open {{ border-color: #bfdbfe; }}
-details.fold-open > summary {{ color: #1e40af; }}
-.fold-body {{ padding: 0 16px 16px; }}
-.fold-body > .card:first-child {{ margin-top: 0; }}
-.fold-body .card {{ box-shadow: none; border: 1px solid #eef2f6; margin-bottom: 10px; }}
-.fold-stack {{ display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }}
-.fold-summary-line {{ display: flex; align-items: center; gap: 8px; width: 100%; }}
-.fold-summary-line > span:first-child {{ flex: 1; min-width: 0; }}
-.export-module {{ position: relative; background: #fff; }}
-.export-module:not(details) {{ border: 1px solid #e2e8f0; border-radius: 10px; margin-bottom: 12px; }}
-.export-module-toolbar {{ position: absolute; top: 8px; right: 8px; z-index: 5; }}
-.export-module-inner {{ padding-top: 2px; }}
-.export-module:not(details) .export-module-inner {{ padding: 36px 12px 12px; }}
-.export-module:not(details) .export-module-inner > .card:first-child {{ margin-top: 0; margin-bottom: 0; }}
-.btn-export-mod {{ font-size: 11px; padding: 3px 10px; border-radius: 6px; border: 1px solid #cbd5e1;
-  background: #fff; color: #475569; cursor: pointer; white-space: nowrap; line-height: 1.4; }}
-.btn-export-mod:hover {{ background: #f1f5f9; border-color: #94a3b8; }}
-.btn-export-mod:disabled {{ opacity: 0.6; cursor: wait; }}
-"""
-
-_LAYOUT_CSS = """
-*, *::before, *::after {{ box-sizing: border-box; }}
-html {{ -webkit-text-size-adjust: 100%; }}
-body {{ font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-       margin: 0 auto; padding: 16px clamp(12px, 3vw, 24px) 32px; background: #f0f2f5; color: #1a1a1a;
-       max-width: min(1200px, 100%); width: 100%; min-height: 100vh; overflow-x: clip; }}
-.card {{ background: #fff; border-radius: 10px; padding: 18px clamp(14px, 3vw, 22px); margin-bottom: 16px;
-         box-shadow: 0 1px 4px rgba(0,0,0,.06); max-width: 100%; }}
-h1 {{ margin: 0 0 10px; font-size: clamp(1.15rem, 4vw, 1.35rem); line-height: 1.3; }}
-h2 {{ margin: 0 0 12px; font-size: clamp(1rem, 3.2vw, 1.08rem); line-height: 1.35; }}
-h3 {{ margin: 0 0 12px; font-size: clamp(.95rem, 3vw, 1rem); color: #334155; line-height: 1.35; }}
-.back {{ margin-bottom: 12px; }}
-.back a {{ color: #2563eb; text-decoration: none; }}
-.meta {{ color: #64748b; font-size: 13px; line-height: 1.55; }}
-table {{ border-collapse: collapse; width: 100%; }}
-th, td {{ border-bottom: 1px solid #eee; padding: 10px 8px; text-align: left; font-size: 14px; vertical-align: top; }}
-th {{ background: #fafafa; font-weight: 600; white-space: nowrap; }}
-a {{ color: #2563eb; text-decoration: none; word-break: break-word; }}
-.tag {{ display: inline-block; background: #eff6ff; color: #1d4ed8; padding: 2px 8px;
-        border-radius: 4px; font-size: 12px; margin: 2px 4px 2px 0; max-width: 100%; }}
-.tag-live {{ background: #fef3c7; color: #b45309; }}
-.tag-qual-div {{ background: #fff7ed; color: #c2410c; border: 1px solid #fdba74; font-weight: 700; }}
-.tag-buy-tier-a {{ background: #ecfdf5; color: #047857; border: 1px solid #6ee7b7; font-weight: 700; }}
-.tag-buy-tier-b {{ background: #eff6ff; color: #1d4ed8; border: 1px solid #93c5fd; font-weight: 700; }}
-.tag-buy-tier-c {{ background: #f3f4f6; color: #6b7280; border: 1px solid #d1d5db; font-weight: 600; }}
-.tag-acc-sweet {{ background: #fff7ed; color: #c2410c; border: 1px solid #fdba74; font-weight: 700; }}
-.tag-acc-solid {{ background: #ecfdf5; color: #047857; border: 1px solid #6ee7b7; font-weight: 700; }}
-.tag-acc-ok {{ background: #eff6ff; color: #1d4ed8; border: 1px solid #93c5fd; }}
-.tag-acc-warn {{ background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }}
-.sweet-teaser {{ background: linear-gradient(135deg,#fff7ed,#ffedd5); border: 1px solid #fdba74;
-  border-radius: 12px; padding: 12px 16px; margin: 0 0 14px; }}
-.sweet-teaser h3 {{ margin: 0 0 8px; font-size: 15px; color: #c2410c; }}
-.sweet-teaser ul {{ margin: 0; padding-left: 18px; line-height: 1.55; }}
-.meta.warn {{ color: #b45309; font-weight: 600; }}
-.qual-div-banner {{ background: linear-gradient(135deg,#fff7ed,#ffedd5); border: 1px solid #fdba74;
-  border-radius: 12px; padding: 14px 16px; margin: 12px 0 16px; }}
-.qual-div-banner p {{ margin: 8px 0 0; font-size: 14px; line-height: 1.55; }}
-.buy-tier-banner {{ border-radius: 10px; padding: 12px 16px; margin: 12px 0; border: 1px solid #e5e7eb; }}
-.buy-tier-banner h3 {{ margin: 0 0 6px; font-size: 16px; }}
-.buy-tier-banner p {{ margin: 0; font-size: 14px; line-height: 1.5; color: #374151; }}
-.buy-tier-tier-a {{ background: linear-gradient(135deg,#ecfdf5,#d1fae5); border-color: #6ee7b7; }}
-.buy-tier-tier-a h3 {{ color: #047857; }}
-.buy-tier-tier-b {{ background: linear-gradient(135deg,#eff6ff,#dbeafe); border-color: #93c5fd; }}
-.buy-tier-tier-b h3 {{ color: #1d4ed8; }}
-.buy-tier-tier-c {{ background: linear-gradient(135deg,#f9fafb,#f3f4f6); border-color: #d1d5db; }}
-.buy-tier-tier-c h3 {{ color: #6b7280; }}
-.tag-ok {{ background: #ecfdf5; color: #047857; }}
-.tag-miss {{ background: #fef2f2; color: #b91c1c; }}
-.tag-active {{ background: #1d4ed8; color: #fff; }}
-code {{ word-break: break-word; }}
-canvas {{ max-width: 100% !important; height: auto !important; }}
-img {{ max-width: 100%; height: auto; }}
-"""
-
-_RESPONSIVE_CSS = """
-.page-nav, .back { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; line-height: 1.65; }
-.page-nav a, .back a { white-space: nowrap; }
-.action-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
-.card:has(> table), .fold-body:has(> table), .similar-block {
-  overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%;
-}
-.card > table:not(.mini), .fold-body > table:not(.mini) { min-width: 560px; }
-.card > table.dashboard-table { min-width: 680px; }
-table.mini { width: 100%; min-width: 0; }
-.stat-grid {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 118px), 1fr));
-  gap: 10px; margin-bottom: 12px;
-}
-.stat {
-  background: #f8fafc; border-radius: 8px; padding: 10px 12px; border: 1px solid #e2e8f0;
-  text-align: center; min-width: 0;
-}
-.stat-val { font-size: clamp(1.05rem, 3.5vw, 1.35rem); font-weight: 700; line-height: 1.25; word-break: break-word; }
-.stat-lbl { font-size: 11px; color: #64748b; margin-top: 4px; line-height: 1.35; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 12px; }
-.match-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 8px 16px; align-items: start; }
-.match-side { justify-self: end; text-align: right; font-size: 12px; color: #475569; line-height: 1.65; min-width: 0; }
-.hero-card { max-width: 100%; }
-@media (max-width: 900px) {
-  .strategy-grid, .path-grid, .rec-grid, .quant-score-grid, .kelly-grid, .gs-grid, .conc-grid,
-  .watch-grid, .ai-watch-cols, .ai-match-grid, .match-ai-grid, .watch-stats {
-    grid-template-columns: 1fr !important;
-  }
-  .match-row { grid-template-columns: 1fr !important; }
-  .match-side { justify-self: stretch !important; text-align: left !important; }
-}
+def _shared_css(*extra: str) -> str:
+    return app_theme_css(
+        """
+.parlay-toolbar { flex-direction: row; }
 @media (max-width: 640px) {
-  body { padding: 12px 10px 24px; }
-  .card { padding: 14px 12px; margin-bottom: 12px; border-radius: 8px; }
-  th, td { padding: 8px 6px; font-size: 13px; }
-  .btn { padding: 8px 12px; font-size: 13px; }
-  .toast { left: 10px; right: 10px; bottom: 10px; max-width: none; }
-  details.fold > summary { padding: 12px 14px; font-size: 13px; }
-  .fold-body { padding: 0 12px 12px; }
   .parlay-toolbar { flex-direction: column; align-items: stretch; }
   .parlay-toolbar .btn, .parlay-toolbar select, .parlay-toolbar .ai-chat-provider { width: 100%; max-width: 100%; }
   .ai-chat-toolbar { flex-direction: column; align-items: stretch; }
@@ -676,21 +529,10 @@ table.mini { width: 100%; min-width: 0; }
   .toolbar { flex-direction: column; align-items: stretch; }
   .toolbar .btn { width: 100%; text-align: center; }
 }
-"""
-
-
-def _shared_css(*extra: str) -> str:
-    chat_css = """
-.ai-chat-card { border-left: 4px solid #7c3aed; }
-.ai-chat-toolbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:8px 0; }
-.ai-chat-provider { padding:7px 10px; border:1px solid #cbd5e1; border-radius:8px; }
-.ai-chat-quick { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; }
-.ai-chat-input { width:100%; box-sizing:border-box; border:1px solid #cbd5e1; border-radius:8px; padding:10px; font-size:14px; }
-.ai-chat-output { min-height:90px; max-height:360px; overflow:auto; white-space:pre-wrap; background:#0f172a; color:#e2e8f0;
-                  border-radius:8px; padding:12px; line-height:1.55; font-size:13px; }
-"""
-    raw = _LAYOUT_CSS + _RESPONSIVE_CSS + _FOLD_CSS + _TOAST_CSS + _BTN_CSS + chat_css + "".join(extra)
-    return raw.replace("{{", "{").replace("}}", "}")
+.meta.warn { color: #fcd34d; font-weight: 600; }
+""",
+        *extra,
+    )
 
 
 def _export_module_btn() -> str:
@@ -1307,7 +1149,7 @@ def html_dashboard(
 </style>
 <script>{_AI_BTN_JS}{_AI_CHAT_JS}{_DASH_FILTER_JS}{_PARLAY_JS}</script>
 </head><body>
-<h1>⚽ 盘口分析</h1>
+<h1 class="text-gradient">⚽ 盘口分析</h1>
 <nav class="page-nav meta" style="margin-bottom:14px">
   <a href="/daily">📋 当日 2串1</a> · <a href="/worldcup">🏆 开盘套路</a>
   · <a href="/worldcup/groups">⚔️ 小组战意</a>
@@ -2728,7 +2570,7 @@ function analyzeWorldcupMatch(fid, btn) {{
 
 <div id="worldcup-export-root">
   <div class="export-hero">
-    <h1>🏆 本届世界杯 · 开盘套路</h1>
+    <h1 class="text-gradient">🏆 本届世界杯 · 开盘套路</h1>
     <p class="meta">结论由完场赛果 + 初/终盘自动归纳 · 更新 {_e(updated)}</p>
     <p><a class="btn" href="/worldcup/groups">⚔️ 小组战意 · 默契球/拼命球</a></p>
   </div>
@@ -3140,7 +2982,7 @@ def _group_standings_table(table: list[dict]) -> str:
             f"<td>{r.get('gf')}-{r.get('ga')}</td><td>{r.get('gd'):+d}</td>"
             f"<td><strong>{r.get('points')}</strong></td></tr>\n"
         )
-    return f"""<table class="mini">
+    return f"""<table class="mini standings-table">
 <tr><th>#</th><th>球队</th><th>赛</th><th>胜/平/负</th><th>进失</th><th>净</th><th>分</th></tr>
 {rows}</table>"""
 
@@ -3230,7 +3072,7 @@ def html_group_stage(report: dict) -> str:
 <p class="back page-nav"><a href="/">← 返回首页</a> · <a href="/worldcup">开盘套路</a> · <a href="/handicap">亚盘赢盘</a> · <a href="/quant">量化回测</a> · <a href="/kelly">Kelly</a></p>
 
 <div class="card hero-gs">
-  <h1>⚔️ 小组战意分析 · 48队赛制</h1>
+  <h1 class="text-gradient">⚔️ 小组战意分析 · 48队赛制</h1>
   <p class="meta">{_e(rs.get('stage_label'))} · 更新 {_e(updated)}</p>
   <p>{_e(report.get('advance_rule_cn') or '')}</p>
   <p class="meta">最佳8小组第三参考线：≥ <strong>{cutoff.get('points', '—')}</strong> 分 · 净胜球 ≥ <strong>{cutoff.get('gd', '—')}</strong></p>
@@ -3253,7 +3095,170 @@ def html_group_stage(report: dict) -> str:
 </div>
 
 <p class="meta" style="margin-top:20px">战意模型已接入规则引擎推荐与 AI 分析上下文 · 仅供参考</p>
-<p><a class="btn" href="/worldcup/groups/final">📋 末轮出线形势文案（按小组 · 基于 AI）</a></p>
+<p><a class="btn" href="/worldcup/groups/outlook">🎯 出线签位 outlook · 32强路径</a>
+<a class="btn" href="/worldcup/groups/final">📋 末轮出线形势文案（按小组 · 基于 AI）</a></p>
+</body></html>"""
+
+
+def _outlook_team_row(t: dict) -> str:
+    locked = t.get("qualification_locked")
+    lock_badge = ' <span class="tag tag-acc-sweet">已锁出线</span>' if locked else ""
+    scenarios = t.get("rank_scenarios") or []
+    sc_html = ""
+    if len(scenarios) > 1:
+        sc_lines = "".join(
+            f"<li>若第{sc.get('rank')}：{_e(sc.get('r32_summary') or '—')}</li>"
+            for sc in scenarios
+        )
+        sc_html = f"<ul class='outlook-sc'>{sc_lines}</ul>"
+    primary = (t.get("primary_r32") or {}).get("summary") or "—"
+    note = t.get("qualification_note") or t.get("note") or ""
+    return f"""<div class="outlook-team">
+  <div class="outlook-team-head">
+    <strong class="outlook-team-name">{_e(t.get('team'))}</strong>
+    <span class="outlook-team-rank">第{t.get('rank')} · {t.get('points')}分</span>
+    <span class="outlook-team-status">{_e(t.get('status_cn') or '')}{lock_badge}</span>
+  </div>
+  <p class="outlook-r32"><span class="outlook-r32-label">32强路径</span> {_e(primary)}</p>
+  {f'<p class="outlook-note">{_e(note)}</p>' if note else ''}
+  {sc_html}
+</div>"""
+
+
+def html_group_knockout_outlook(report: dict) -> str:
+    if not report.get("ok"):
+        err = report.get("error") or "无法加载 outlook"
+        return f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>出线签位 outlook</title></head><body>
+<p class="back page-nav"><a href="/">← 返回</a> · <a href="/worldcup/groups">小组战意</a></p>
+<p>加载失败：{_e(err)}</p></body></html>"""
+
+    updated = report.get("updated_at") or now_beijing_str()
+    completed = report.get("groups_completed") or []
+    pending = report.get("groups_pending") or []
+    best = report.get("best_third_live") or {}
+    highlights = report.get("highlights") or {}
+
+    third_rows = ""
+    for t in best.get("rows") or []:
+        zone = "✓" if t.get("in_best8_zone") else "—"
+        third_rows += (
+            f"<tr><td>{t.get('third_rank')}</td><td>{_e(t.get('group'))}组</td>"
+            f"<td>{_e(t.get('team'))}</td><td>{t.get('points')}</td>"
+            f"<td>{t.get('gd'):+d}</td><td>{t.get('gf')}</td>"
+            f"<td>{_e(t.get('status_cn'))}</td><td>{zone}</td></tr>\n"
+        )
+
+    locked_html = ""
+    for t in highlights.get("locked_qualification") or []:
+        locked_html += (
+            f"<li>{_e(t.get('group'))}组 · {_e(t.get('team'))} · {_e(t.get('status_cn') or '')}</li>"
+        )
+    must_html = ""
+    for t in highlights.get("must_win") or []:
+        must_html += f"<li>{_e(t.get('group'))}组 · {_e(t.get('team'))} · {_e(t.get('note') or '必须抢分')}</li>"
+
+    groups_html = ""
+    for g in report.get("groups") or []:
+        badge = (
+            '<span class="tag tag-acc-sweet">已完赛</span>'
+            if g.get("group_complete") else
+            f'<span class="tag tag-warn">末轮剩{g.get("remaining_r3", 0)}场</span>'
+        )
+        teams_block = "".join(_outlook_team_row(t) for t in (g.get("teams") or []))
+        grp = g.get("group") or "?"
+        groups_html += f"""
+<div class="export-module" data-export-slug="outlook-{_e(grp)}">
+  <div class="export-module-toolbar export-hide">{_export_module_btn()}</div>
+  <div class="export-module-inner">
+  <div class="card gs-group-card outlook-group-card">
+  <h3><span class="outlook-grp-letter">{_e(grp)}</span> 组 {badge}</h3>
+  {_group_standings_table(g.get('table') or g.get('standings') or [])}
+  <h4>出线状态 · 32强签位推演</h4>
+  {teams_block or '<p class="outlook-empty">暂无</p>'}
+</div></div></div>"""
+
+    outlook_export = long_image_export_script(root_id="outlook-export-root", filename="wc-outlook")
+    css = _shared_css("""
+.gs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 14px; }
+.standings-table td, .standings-table th { font-size: 14px; }
+.standings-table td { color: #e2e8f0; }
+.standings-table td strong { color: #fff; font-weight: 800; }
+.standings-table th { color: #cbd5e1; }
+.outlook-group-card h3 { font-size: 17px; color: #fff; margin-bottom: 10px; }
+.outlook-grp-letter {
+  display:inline-block; min-width:1.6em; text-align:center;
+  background: linear-gradient(90deg, #ff4b8b, #ffd34e);
+  -webkit-background-clip: text; background-clip: text; color: transparent; font-weight: 900;
+}
+.outlook-group-card h4 { margin: 14px 0 8px; font-size: 13px; font-weight: 800; color: #ff9ec8; letter-spacing: .04em; }
+.outlook-team { border-top: 1px solid rgba(255,255,255,0.08); padding: 12px 0; }
+.outlook-team-head { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; margin-bottom:6px; }
+.outlook-team-name { font-size: 15px; font-weight: 800; color: #fff; }
+.outlook-team-rank { font-size: 13px; font-weight: 700; color: #fde68a; }
+.outlook-team-status { font-size: 13px; color: #cbd5e1; }
+.outlook-r32 { margin: 0 0 6px; font-size: 14px; line-height: 1.65; color: #e2e8f0; }
+.outlook-r32-label { color: #cbd5e1; font-size: 12px; font-weight: 800; margin-right: 6px; }
+.outlook-note { margin: 0 0 4px; font-size: 13px; line-height: 1.6; color: #fcd34d; }
+.outlook-sc { margin: 6px 0 0; padding-left: 18px; color: #cbd5e1; font-size: 13px; line-height: 1.6; }
+.outlook-sc li { margin: 3px 0; }
+.outlook-empty { color: #94a3b8; font-size: 13px; }
+.hl-list { margin: 8px 0 0 18px; line-height: 1.65; color: #cbd5e1; }
+.hl-list li { margin: 4px 0; }
+""")
+
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>世界杯 · 出线签位 outlook</title>
+<style>{css}</style>
+{outlook_export}
+</head><body>
+<p class="back page-nav"><a href="/">← 返回首页</a> · <a href="/worldcup/groups">⚔️ 小组战意</a> · <a href="/worldcup">开盘套路</a></p>
+
+<div id="outlook-export-root" data-export-base="wc-outlook" data-export-bg="#0a0c18">
+<div class="card hero-outlook">
+  <h1 class="text-gradient">🎯 出线与 32 强签位 outlook</h1>
+  <p class="meta">更新 {_e(updated)} · 已完赛 <strong>{report.get('completed_count', 0)}</strong> 组
+  · 待定 <strong>{report.get('pending_count', 0)}</strong> 组</p>
+  <p>{_e(report.get('advance_rule_cn') or '')}</p>
+  <p class="meta">已完赛组：{_e(', '.join(completed) or '—')} · 待定组：{_e(', '.join(pending) or '—')}</p>
+  <p class="meta">最佳8第三参考线：≥ <strong>{best.get('cutoff_points', '—')}</strong> 分
+  · 净胜球 ≥ <strong>{best.get('cutoff_gd', '—')}</strong></p>
+  <div class="gfc-toolbar">
+    <button class="btn" onclick="location.href='/worldcup/groups/outlook?refresh=1'">刷新积分榜</button>
+    <button type="button" class="btn btn-share export-hide" onclick="savePageLongImage(this)">📷 保存整页截图</button>
+    <a class="btn btn-sm" style="opacity:.85" href="/api/worldcup/groups/outlook" target="_blank">JSON API</a>
+  </div>
+</div>
+
+<div class="card">
+  <h2>12 组第三名实时排名（争 8 席）</h2>
+  <table class="mini standings-table">
+    <tr><th>#</th><th>组</th><th>球队</th><th>分</th><th>净</th><th>进</th><th>状态</th><th>区</th></tr>
+    {third_rows}
+  </table>
+</div>
+
+<div class="gs-grid">
+  <div class="card"><h3>已锁定出线（末轮输赢与出线无关）</h3>
+  <ul class="hl-list">{locked_html or '<li class="meta">暂无</li>'}</ul></div>
+  <div class="card"><h3>必须抢分</h3>
+  <ul class="hl-list">{must_html or '<li class="meta">暂无</li>'}</ul></div>
+</div>
+
+<div class="gs-grid">
+{groups_html}
+</div>
+
+<p class="meta" style="margin-top:20px">
+  32 强固定对阵见 M73–M88；8 个最佳第三具体落位在全部 72 场小组赛后按 FIFA Annex C 锁定。
+  本页第三对位展示签位池级预测，非最终对阵表。每组卡片右上角可「存图」单组截图。
+</p>
+<p><a class="btn" href="/worldcup/groups/final">📋 末轮出线文案 · 定稿比对</a></p>
+</div>
 </body></html>"""
 
 
@@ -3269,7 +3274,8 @@ def _group_picker_chip(g: dict, *, checked: bool = False) -> str:
     return (
         f'<label class="gfc-pick{" is-off" if not m_n else ""}">'
         f'<input type="checkbox" class="gfc-group-cb" value="{_e(group)}"{chk}{disabled}/> '
-        f'<strong>{_e(group)}组</strong> <span class="meta">{meta}</span>{ok}{warn}</label>'
+        f'<span class="gfc-pick-body"><strong>{_e(group)}组</strong>'
+        f'<span class="gfc-pick-meta">{_e(meta)}</span></span>{ok}{warn}</label>'
     )
 
 
@@ -3408,13 +3414,16 @@ def _group_final_copy_block(g: dict) -> str:
 </div>"""
 
     return f"""
+<div class="export-module" data-export-slug="group-{_e(group)}">
+  <div class="export-module-toolbar export-hide">{_export_module_btn()}</div>
+  <div class="export-module-inner">
 <div class="card gfc-group" id="group-{_e(group)}">
   <div class="gfc-head">
     <h3>{_e(group)} 组 · 数据复盘</h3>
     <span class="tag {chaos_cls}">{_e(chaos.get('chaos_level_cn') or '—')}</span>
-    <span class="meta">末轮 {m_n} 场 · 你的 AI {u_n}/{m_n}</span>
+    <span class="gfc-head-meta">末轮 {m_n} 场 · 你的 AI {u_n}/{m_n}</span>
   </div>
-  <ul class="gfc-matches meta">{match_bits or '<li>暂无末轮场次</li>'}</ul>
+  <ul class="gfc-matches">{match_bits or '<li>暂无末轮场次</li>'}</ul>
   <div class="gfc-rule-box">
     <div class="gfc-copy-hd">👨‍💻 数据研发工程师 · 抖音发文版（已隐藏 SP/赔率）</div>
     <pre class="gfc-copy" id="gfc-rule-{_e(group)}">{_e(narrative)}</pre>
@@ -3425,7 +3434,7 @@ def _group_final_copy_block(g: dict) -> str:
     </div>
   </div>
   {ai_block}
-</div>"""
+</div></div></div>"""
 
 
 def html_group_final_copy(report: dict) -> str:
@@ -3459,53 +3468,62 @@ def html_group_final_copy(report: dict) -> str:
   <p class="meta">只会汇总你在列表/详情页点过「AI推荐」的场次；未 AI 的末轮场不会写入文案。</p>
 </div>"""
 
+    gfc_export = long_image_export_script(root_id="gfc-export-root", filename="wc-final-copy")
     gfc_css = _shared_css("""
-.gfc-pick-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px; margin:12px 0; }
+.gfc-pick-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(168px,1fr)); gap:10px; margin:12px 0; }
 .gfc-pick {
-  display:flex; align-items:flex-start; gap:8px; padding:10px 12px; border:1px solid #e2e8f0;
-  border-radius:10px; background:#fff; cursor:pointer;
+  display:flex; align-items:flex-start; gap:10px; padding:12px 14px;
+  border:1px solid rgba(255,255,255,0.14); border-radius:14px;
+  background:rgba(255,255,255,0.07); cursor:pointer; color:#f1f5f9;
+  transition: border-color .15s, background .15s;
 }
-.gfc-pick.is-off { opacity:.55; cursor:not-allowed; }
-.gfc-pick input { margin-top:3px; }
-.gfc-pick strong { min-width:2em; }
+.gfc-pick:hover { border-color:rgba(255,158,200,0.35); background:rgba(255,255,255,0.1); }
+.gfc-pick:has(input:checked) { border-color:rgba(255,75,139,0.55); background:rgba(255,75,139,0.12); }
+.gfc-pick.is-off { opacity:.45; cursor:not-allowed; }
+.gfc-pick input { margin-top:4px; width:16px; height:16px; flex-shrink:0; }
+.gfc-pick-body { display:flex; flex-direction:column; gap:4px; min-width:0; }
+.gfc-pick strong { font-size:17px; font-weight:900; color:#fff; letter-spacing:.02em; }
+.gfc-pick-meta { font-size:14px; line-height:1.5; color:#e2e8f0; font-weight:500; }
+.gfc-pick .tag { margin-top:2px; }
 .gfc-toolbar { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:12px; }
 .gfc-head { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px; }
-.gfc-head h3 { margin:0; flex:1; min-width:160px; }
-.gfc-matches { margin:0 0 12px; padding-left:18px; line-height:1.6; }
-.gfc-copy-hd, .gfc-ai-hd { font-size:13px; font-weight:700; color:#475569; margin-bottom:6px; }
+.gfc-head h3 { margin:0; flex:1; min-width:160px; color:#fff; font-size:16px; }
+.gfc-head-meta { font-size:13px; color:#94a3b8; }
+.gfc-matches { margin:0 0 12px; padding-left:18px; line-height:1.65; color:#cbd5e1; font-size:13px; }
+.gfc-copy-hd, .gfc-ai-hd { font-size:13px; font-weight:700; color:#ff9ec8; margin-bottom:6px; }
 .gfc-copy {
   white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 13px; line-height: 1.65;
-  background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; margin: 0 0 10px;
-  max-height: 420px; overflow: auto;
+  background: rgba(0,0,0,0.28); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;
+  padding: 14px; margin: 0 0 10px; max-height: 420px; overflow: auto; color: #e2e8f0;
 }
-.gfc-ai-box { margin-top: 14px; padding-top: 14px; border-top: 1px dashed #e2e8f0; }
-.gfc-ai-copy { background: #faf5ff; border-color: #ddd6fe; }
+.gfc-ai-box { margin-top: 14px; padding-top: 14px; border-top: 1px dashed rgba(255,255,255,0.1); }
+.gfc-ai-copy { background: rgba(168,85,247,0.1); border-color: rgba(168,85,247,0.25); }
 .gfc-actions { display:flex; gap:8px; flex-wrap:wrap; }
-.hero-gfc { background: linear-gradient(135deg, #eff6ff 0%, #fff 55%); border: 1px solid #bfdbfe; }
-.gfc-empty { text-align:center; color:#64748b; }
+.gfc-empty { text-align:center; color:#94a3b8; }
 .gfc-prompt-pre { max-height: 360px; font-size: 12px; }
-.gfc-prompt-fold > summary { cursor:pointer; font-weight:600; padding:4px 0; }
+.gfc-prompt-fold > summary { cursor:pointer; font-weight:600; padding:4px 0; color:#e2e8f0; }
 .gsc-grid { display:grid; gap:12px; margin-top:12px; }
-.gsc-match { border:1px solid #e2e8f0; border-radius:10px; padding:12px; background:#fff; }
-.gsc-match-hd { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px; font-size:13px; }
+.gsc-match { border:1px solid rgba(255,255,255,0.1); border-radius:12px; padding:12px; background:rgba(255,255,255,0.04); }
+.gsc-match-hd { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px; font-size:13px; color:#e2e8f0; }
 .gsc-pick-row { display:flex; gap:12px; flex-wrap:wrap; }
 .gsc-pick-opt {
   display:inline-flex; align-items:center; gap:6px; padding:8px 12px;
-  border:1px solid #cbd5e1; border-radius:999px; background:#fff; cursor:pointer; font-size:13px;
+  border:1px solid rgba(255,255,255,0.12); border-radius:999px;
+  background:rgba(255,255,255,0.05); cursor:pointer; font-size:13px; color:#e2e8f0;
 }
-.gsc-pick-opt:has(input:checked) { border-color:#059669; background:#ecfdf5; font-weight:700; }
-.gsc-match.gsc-locked { background:#f8fafc; border-color:#cbd5e1; }
-.gsc-score-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.gsc-pick-opt:has(input:checked) { border-color:rgba(52,211,153,0.5); background:rgba(52,211,153,0.12); font-weight:700; color:#6ee7b7; }
+.gsc-match.gsc-locked { background:rgba(255,255,255,0.03); border-color:rgba(255,255,255,0.08); }
 .gsc-result { margin-top:16px; }
 .gsc-table { width:100%; border-collapse:collapse; font-size:13px; margin:10px 0; }
-.gsc-table th, .gsc-table td { border-bottom:1px solid #e2e8f0; padding:8px 6px; text-align:left; vertical-align:top; }
-.gsc-yes { color:#15803d; font-weight:600; }
-.gsc-no { color:#b91c1c; font-weight:600; }
-.gsc-na { color:#64748b; }
-.gsc-changes { margin:8px 0 0; padding-left:18px; }
-.gsc-fold > summary { cursor:pointer; font-weight:600; margin-top:8px; }
+.gsc-table th, .gsc-table td { border-bottom:1px solid rgba(255,255,255,0.06); padding:8px 6px; text-align:left; vertical-align:top; }
+.gsc-yes { color:#6ee7b7; font-weight:600; }
+.gsc-no { color:#fca5a5; font-weight:600; }
+.gsc-na { color:#94a3b8; }
+.gsc-changes { margin:8px 0 0; padding-left:18px; color:#cbd5e1; }
+.gsc-fold > summary { cursor:pointer; font-weight:600; margin-top:8px; color:#e2e8f0; }
 .gsc-narrative { max-height:280px; }
-.hero-gsc { background: linear-gradient(135deg, #f0fdf4 0%, #fff 60%); border:1px solid #bbf7d0; margin-top:16px; }
+.hero-gsc { margin-top:16px; }
+.gfc-section-title { margin:16px 0 0; font-size:15px; font-weight:800; color:#fff; }
 """)
 
     js = """
@@ -3702,26 +3720,29 @@ function finalizeUserPicks(btn) {
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>末轮出线形势文案 · 按小组</title>
 <style>{gfc_css}</style>
+{gfc_export}
 <script>{js}</script>
 </head><body>
 <p class="back page-nav">
   <a href="/">← 返回首页</a> · <a href="/worldcup/groups">⚔️ 小组战意</a> · <a href="/worldcup">🏆 开盘套路</a>
 </p>
 
+<div id="gfc-export-root" data-export-base="wc-final-copy" data-export-bg="#0a0c18">
 <div class="card hero-gfc">
-  <h1>👨‍💻 数据研发 · 抖音出线文案</h1>
+  <h1 class="text-gradient">👨‍💻 数据研发 · 抖音出线文案</h1>
   <p class="meta">{_e(rs.get('stage_label'))} · 更新 {_e(updated)}</p>
   <p>{_e(report.get('advance_rule_cn') or '')}</p>
   <p class="meta">全库末轮 {stats.get('match_count', 0)} 场 · 你已跑模型 {stats.get('user_ai_match_count', 0)} 场</p>
   <p class="meta"><strong>人设：数据研发工程师</strong> — 用「积分榜引擎 + 战意规则 + 多模型 AI」的口吻写抖音，自动去掉 SP/赔率等敏感词，文末带话题标签。</p>
 
-  <h3 style="margin:16px 0 0;font-size:15px">1. 选择小组</h3>
+  <h3 class="gfc-section-title">1. 选择小组</h3>
   <div class="gfc-pick-grid">{picker}</div>
   <div class="gfc-toolbar">
-    <button type="button" class="btn" style="background:#dc2626" onclick="generateGroupCopy()">生成出线文案</button>
+    <button type="button" class="btn" onclick="generateGroupCopy()">生成出线文案</button>
     <button class="btn" onclick="location.href='/worldcup/groups/final'">重新选择</button>
     <button class="btn" onclick="location.reload()">刷新 AI 状态</button>
     <button type="button" class="btn btn-ai" onclick="aiAllGroupCopy(this)"{ai_btn_disabled}>✨ 工程师口吻润色已选组</button>
+    <button type="button" class="btn btn-share export-hide" onclick="savePageLongImage(this)">📷 保存整页截图</button>
   </div>
 </div>
 
@@ -3732,7 +3753,8 @@ function finalizeUserPicks(btn) {
 {empty_hint}
 {blocks}
 
-  <p class="meta">流程：跑模型 → 勾选小组 → 生成文案 → 选定胜平负并定稿 → 赛后复盘 · 定稿后不可修改</p>
+  <p class="meta">流程：跑模型 → 勾选小组 → 生成文案 → 选定胜平负并定稿 → 战后复盘 · 定稿后不可修改 · 每组文案卡片右上角可单独存图</p>
+</div>
 </body></html>"""
 
 
@@ -5206,7 +5228,7 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
     export_hero = _wrap_export_module(
         "header",
         f"""<div class="export-hero">
-    <h1>{_e(name)}</h1>
+    <h1 class="text-gradient">{_e(name)}</h1>
     {freshness}
   </div>""",
     )

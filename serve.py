@@ -40,7 +40,7 @@ from share_card import (
     html_share_parlay,
     html_share_posters_batch,
 )
-from web_ui import html_ah_analytics, html_ai_settings, html_daily_picks, html_dashboard, html_eu_ah_divergence, html_group_final_copy, html_group_stage, html_kelly_calculator, html_match_detail, html_quant_analytics, html_recommendation_review, html_worldcup_ledger
+from web_ui import html_ah_analytics, html_ai_settings, html_daily_picks, html_dashboard, html_eu_ah_divergence, html_group_final_copy, html_group_knockout_outlook, html_group_stage, html_kelly_calculator, html_match_detail, html_quant_analytics, html_recommendation_review, html_worldcup_ledger
 
 
 def _error_html(body: str) -> str:
@@ -790,6 +790,18 @@ class Handler(BaseHTTPRequestHandler):
             qs = parse_qs(urlparse(self.path).query)
             force = qs.get("refresh", ["0"])[0] in ("1", "true", "yes")
             self._send_json(build_group_stage_report(force_refresh=force))
+            return
+        if path == "/worldcup/groups/outlook":
+            from analysis.tournament.group_knockout_outlook import build_group_knockout_outlook_report
+            qs = parse_qs(urlparse(self.path).query)
+            force = qs.get("refresh", ["0"])[0] in ("1", "true", "yes")
+            self._send_html(html_group_knockout_outlook(build_group_knockout_outlook_report(force_refresh=force)))
+            return
+        if path == "/api/worldcup/groups/outlook":
+            from analysis.tournament.group_knockout_outlook import build_group_knockout_outlook_report
+            qs = parse_qs(urlparse(self.path).query)
+            force = qs.get("refresh", ["0"])[0] in ("1", "true", "yes")
+            self._send_json(build_group_knockout_outlook_report(force_refresh=force))
             return
         if path == "/worldcup":
             from worldcup_analytics import build_tournament_ledger

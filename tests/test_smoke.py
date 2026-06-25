@@ -502,13 +502,13 @@ def test_ai_summary_card_helpers():
     assert "保存推荐图" in panel
     assert "saveModuleImage" in panel
     assert "export-poster-safe" in panel
-    assert "AI 赛事分析" in panel
+    assert "AI 分析" in panel or "FIFA WORLD CUP" in panel
 
     safe = html_ai_summary_card_safe(ctx)
     assert "竞彩" not in safe
     assert "SP" not in safe
     assert "公益体彩" not in safe
-    assert "模型倾向" in safe
+    assert "jc-hero-score" in safe
     assert "jc-poster-safe" in safe
 
     ctx_watch = build_ai_summary_context(
@@ -1186,6 +1186,43 @@ def test_analysis_p1_modules():
     assert div is not None
     ctx = build_match_knockout_context("墨西哥 vs 南非")
     assert ctx is None or isinstance(ctx, dict)
+
+
+def test_group_knockout_outlook_report():
+    from analysis.tournament.group_knockout_outlook import (
+        build_best_third_board,
+        build_group_knockout_outlook_report,
+        compose_outlook_narrative,
+        outlook_for_match,
+    )
+    from analysis.tournament.group_stage import team_group_from_name
+    from analysis.tournament.wc2026_tournament_rules import (
+        tournament_rules_document,
+        tournament_rules_system_prompt,
+    )
+
+    assert team_group_from_name("墨西哥 vs 南非") == "A"
+    doc = tournament_rules_document()
+    assert doc.get("r32_fixtures")
+    assert "32 强" in tournament_rules_system_prompt(compact=True)
+
+    report = build_group_knockout_outlook_report()
+    if not report.get("ok"):
+        pytest = __import__("pytest")
+        pytest.skip(report.get("error") or "积分榜不可用")
+    assert "groups" in report
+    assert "best_third_live" in report
+    assert isinstance(report.get("completed_count"), int)
+    board = report.get("best_third_live") or {}
+    assert "rows" in board
+
+    grp = (report.get("groups") or [None])[0]
+    if grp:
+        text = compose_outlook_narrative(grp)
+        assert grp.get("group", "?") in text
+
+    om = outlook_for_match("墨西哥 vs 南非")
+    assert om.get("ok") is True or om.get("error")
 
 
 def test_api_app():

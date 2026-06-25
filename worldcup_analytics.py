@@ -681,6 +681,8 @@ def build_upcoming_match_ai_watch(
 
 动态战意重点：如果 match.group_state_context.played_matches > 0，必须结合本组已赛结果、当前积分/净胜球、上一轮输赢和48队最佳小组第三规则判断战意。不要只按赛前强弱档位分析；已拿3分的球队、0分球队、净胜球落后的球队，策略完全不同。
 
+淘汰赛签位重点：用户会提供 knockout_outlook / tournament_rules，含各队 achievable_ranks、32强固定路径（M73–M88）、最佳第三实时排名。已锁定出线球队须写清「输赢与出线无关，仅影响签位/轮换」；小组第三须结合 best_third_live 说明是否在进32强区；不得编造 Annex C 精确第三对位，只能说签位池与赛后锁定。
+
 次要因素（权重低）：tournament_format_context.secondary_strategy_notes 与 group_state_context.secondary_signals 涉及挑对手、默契球/控节奏。仅在末轮同分对话、提前出线或盘口异常降热时顺带提及，不可压过盘口套路、真实战意和历史相似样本。
 
 输出 JSON：
@@ -693,9 +695,17 @@ def build_upcoming_match_ai_watch(
   "watch_points": ["赛前继续观察点"],
   "stake_advice": "仓位建议"
 }"""
+        from analysis.tournament.group_knockout_outlook import outlook_for_match
+        from analysis.tournament.wc2026_tournament_rules import tournament_rules_system_prompt
+
+        match_name = match.get("match") or ""
+        knockout_outlook = outlook_for_match(match_name) if match_name else {"ok": False}
+        rules_prompt = tournament_rules_system_prompt(compact=True)
         payload = {
             "generated_at": now_beijing_str(),
             "tournament_format_context": _load_tournament_format_context(),
+            "tournament_rules_prompt": rules_prompt,
+            "knockout_outlook": knockout_outlook if knockout_outlook.get("ok") else None,
             "match": match,
             "tournament_opening": {
                 "sample_size": opening_patterns.get("sample_size"),
@@ -704,7 +714,7 @@ def build_upcoming_match_ai_watch(
                 "stats": opening_patterns.get("stats") or {},
             },
             "finished_matches_recent": _compact_finished_for_ai(records, limit=12),
-            "instruction": "请只分析这一场，必须先检查match.group_state_context：若本组已有赛果，要结合当前积分、净胜球和上一轮结果判断战意；再结合48队赛制和group_archetype田忌赛马博弈，判断是否属于强队抢净胜球、两强保平、弱队守1分、热门赢球不穿、诱盘/不追让球或观望。secondary_signals（挑对手/默契球）仅作低权重补充，有则一句带过，不可作为主结论。",
+            "instruction": "请只分析这一场，必须先检查match.group_state_context与knockout_outlook：若本组已有赛果，要结合当前积分、净胜球、上一轮结果、32强签位路径和最佳第三排名判断战意；再结合48队赛制和group_archetype田忌赛马博弈，判断是否属于强队抢净胜球、两强保平、弱队守1分、热门赢球不穿、诱盘/不追让球或观望。已锁定出线队须说明输赢与出线无关仅影响签位。secondary_signals（挑对手/默契球）仅作低权重补充，有则一句带过，不可作为主结论。",
         }
         text = chat(
             [

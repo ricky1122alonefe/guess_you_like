@@ -9,6 +9,7 @@ from analysis.tournament.group_stage import (
     fetch_live_snapshot,
     invalidate_cache,
     rank_best_third_places,
+    team_group_from_name,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "fetch_live_snapshot",
     "invalidate_cache",
     "rank_best_third_places",
+    "team_group_from_name",
 ]

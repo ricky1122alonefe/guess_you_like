@@ -369,6 +369,24 @@ def attach_tournament_context(ctx: dict, output_root: str | Path) -> dict:
             }
     except Exception:
         ctx.setdefault("tournament_opening", {"sample_size": 0, "traits": []})
+    try:
+        from analysis.tournament.group_knockout_outlook import build_group_knockout_outlook_report
+        from analysis.tournament.wc2026_tournament_rules import tournament_rules_system_prompt
+
+        outlook = build_group_knockout_outlook_report()
+        if outlook.get("ok"):
+            ctx["group_knockout_outlook"] = {
+                "updated_at": outlook.get("updated_at"),
+                "completed_count": outlook.get("completed_count"),
+                "groups_completed": outlook.get("groups_completed"),
+                "groups_pending": outlook.get("groups_pending"),
+                "best_third_live": outlook.get("best_third_live"),
+                "highlights": outlook.get("highlights"),
+            }
+            ctx.setdefault("tournament_rules_prompt", outlook.get("rules_prompt"))
+    except Exception:
+        pass
+
     match_name = ctx.get("match_name")
     if match_name:
         try:
@@ -376,6 +394,28 @@ def attach_tournament_context(ctx: dict, output_root: str | Path) -> dict:
             ma = analyze_match_from_name(match_name)
             if ma:
                 ctx["group_stage_match"] = ma
+        except Exception:
+            pass
+        try:
+            from analysis.tournament.group_knockout_outlook import outlook_for_match
+            from analysis.tournament.wc2026_tournament_rules import (
+                tournament_rules_for_match_context,
+                tournament_rules_system_prompt,
+            )
+
+            om = outlook_for_match(match_name)
+            if om.get("ok"):
+                ctx["knockout_outlook"] = om
+                ctx["tournament_rules_prompt"] = (
+                    om.get("rules_prompt_compact") or tournament_rules_system_prompt(compact=True)
+                )
+                ctx["tournament_rules"] = tournament_rules_for_match_context(
+                    group=om.get("group"),
+                    outlook={
+                        "groups": [om.get("group_outlook")],
+                        "best_third_live": om.get("best_third_live"),
+                    },
+                )
         except Exception:
             pass
     return ctx

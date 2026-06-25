@@ -511,6 +511,28 @@ def test_ai_summary_card_helpers():
     assert "模型倾向" in safe
     assert "jc-poster-safe" in safe
 
+    ctx_watch = build_ai_summary_context(
+        "456",
+        match_name="摩洛哥VS海地",
+        prediction={
+            "predict_row": {"竞彩推荐": "观望", "置信度": "中"},
+            "buy_tier_cn": "仅参考",
+            "buy_tier_reason": "AI不足，建议观望",
+            "jingcai_pick_info": {"jingcai_pick": "skip"},
+            "ai_analyses": {
+                "ds": {"ai_provider_label": "DeepSeek", "predict_row": {"竞彩推荐": "客胜", "置信度": "中"}},
+                "cc": {"ai_provider_label": "Composer", "predict_row": {"竞彩推荐": "平局", "置信度": "中"}},
+            },
+        },
+    )
+    from share_card import _resolve_export_trend
+
+    trend, key = _resolve_export_trend(ctx_watch)
+    assert trend in ("主队", "客队", "均衡")
+    assert key in ("home", "draw", "away")
+    safe_watch = html_ai_summary_card_safe(ctx_watch)
+    assert "待定" not in safe_watch
+
     batch = html_share_posters_batch([{"fixture_id": "123", "match_name": "葡萄牙VS乌兹别克斯坦", "ctx": ctx}])
     assert "批量推荐图" in batch
     assert "saveAllPosterImages" in batch

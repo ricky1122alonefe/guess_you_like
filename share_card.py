@@ -9,6 +9,7 @@ from typing import Any
 
 from daily_picks import load_kickoff_map
 from jingcai_pick import (
+    KEY_FROM_SP_CN,
     NO_JINGCAI,
     final_pick_key,
     final_recommendation_cn,
@@ -208,15 +209,79 @@ def _pick_to_trend_cn(pick: str) -> str:
     if pick in ("平局", "平") or pick.endswith(" 平"):
         return "均衡"
     if pick in ("—", "", NO_JINGCAI, "观望"):
-        return "待定"
-    return _sanitize_export_text(pick) or "待定"
+        return "观望"
+    return _sanitize_export_text(pick) or "观望"
+
+
+def _is_no_pick(pick: str) -> bool:
+    return (pick or "").strip() in ("—", "", NO_JINGCAI, "观望", "待定", "skip")
+
+
+def _pick_row_key_extended(pick: str) -> str | None:
+    key = _pick_row_key(pick)
+    if key:
+        return key
+    p = (pick or "").strip()
+    if p in KEY_FROM_SP_CN and KEY_FROM_SP_CN[p] != "skip":
+        return KEY_FROM_SP_CN[p]
+    if "客" in p or p.endswith("负"):
+        return "away"
+    if "平" in p:
+        return "draw"
+    if "主" in p or p.endswith("胜"):
+        return "home"
+    return None
+
+
+def _resolve_export_trend(ctx: dict[str, Any]) -> tuple[str, str]:
+    """Headline trend for safe PNG — never leave a blank when models already picked."""
+    trend_map = {"home": "主队", "draw": "均衡", "away": "客队"}
+    exp_key = str(ctx.get("export_pick_key") or "").strip()
+    if exp_key in trend_map:
+        return trend_map[exp_key], exp_key
+
+    rec = ctx.get("recommend") or ""
+    if not _is_no_pick(rec):
+        key = _pick_row_key_extended(rec)
+        if key:
+            return _pick_to_trend_cn(rec), key
+
+    ref = ctx.get("reference") or ""
+    if not _is_no_pick(ref):
+        key = _pick_row_key_extended(ref)
+        if key:
+            return _pick_to_trend_cn(ref), key
+
+    votes: dict[str, int] = {}
+    order: list[str] = []
+    for m in ctx.get("ai_models") or []:
+        pick = m.get("pick") or ""
+        if _is_no_pick(pick):
+            continue
+        key = _pick_row_key_extended(pick)
+        if not key:
+            continue
+        votes[key] = votes.get(key, 0) + 1
+        if key not in order:
+            order.append(key)
+
+    if votes:
+        max_v = max(votes.values())
+        leaders = {k for k, v in votes.items() if v == max_v}
+        best = next((k for k in order if k in leaders), next(iter(leaders)))
+        return trend_map[best], best
+
+    key = _pick_row_key_extended(rec)
+    if key:
+        return _pick_to_trend_cn(rec), key
+    return "观望", ""
 
 
 def _tier_to_safe_cn(tier_cn: str) -> str:
     return {
         "可串": "一致性强",
         "可单关": "中等把握",
-        "仅参考": "观望",
+        "仅参考": "低把握",
     }.get((tier_cn or "").strip(), tier_cn or "")
 
 
@@ -430,6 +495,7 @@ def build_ai_summary_context(
         "models_agree": models_agree,
         "model_count": len(model_briefs),
         "has_pick": bool(recommend and recommend not in ("观望", "暂无竞彩", NO_JINGCAI, "—", "")),
+        "export_pick_key": pick_key if pick_key not in ("skip", "") else "",
         "parlay_eligible": parlay,
         "updated_at": (timeline or [])[-1].get("ts") if timeline else "",
     }
@@ -614,9 +680,7 @@ def html_ai_summary_card_safe(ctx: dict[str, Any]) -> str:
     kickoff_full = _e(ctx.get("kickoff_full") or "—")
     kickoff_line = _e(ctx.get("kickoff_line") or "—")
     num = _e(ctx.get("match_num") or "—")
-    rec = ctx.get("recommend") or NO_JINGCAI
-    trend = _pick_to_trend_cn(rec)
-    pick_key = _pick_row_key(rec) or ""
+    trend, pick_key = _resolve_export_trend(ctx)
 
     pills_html = ""
     for key, lbl, active_cls in (
@@ -630,7 +694,7 @@ def html_ai_summary_card_safe(ctx: dict[str, Any]) -> str:
     tier_cn = _tier_to_safe_cn(ctx.get("buy_tier_cn") or "")
     tier_html = ""
     if tier_cn:
-        tier_css = {"一致性强": "a", "中等把握": "b", "观望": "c"}.get(tier_cn, "c")
+        tier_css = {"一致性强": "a", "中等把握": "b", "低把握": "c", "观望": "c"}.get(tier_cn, "c")
         reason = _sanitize_export_text(ctx.get("buy_tier_reason") or "")
         tier_html = (
             f'<div class="jc-safe-tier jc-safe-tier-{tier_css}">'
@@ -647,7 +711,7 @@ def html_ai_summary_card_safe(ctx: dict[str, Any]) -> str:
             f'<div class="jc-safe-synth-hd">AI 综合总结</div>'
             f"<p>{_e(synth[:260])}</p></div>"
         )
-    elif ctx.get("has_pick"):
+    elif ctx.get("ai_models"):
         synth_html = (
             '<div class="jc-safe-synth is-muted">'
             '<div class="jc-safe-synth-hd">AI 综合总结</div>'
@@ -667,7 +731,7 @@ def html_ai_summary_card_safe(ctx: dict[str, Any]) -> str:
         pick = m.get("pick") or "—"
         trend_m = _pick_to_trend_cn(pick)
         pick_cls = "jc-safe-model-pick"
-        if trend_m == "待定":
+        if trend_m == "观望":
             pick_cls += " is-muted"
         conf = _confidence_to_safe_cn(m.get("confidence") or "")
         conf_tag = f'<span class="jc-safe-model-conf">{_e(conf)}</span>' if conf and conf != "—" else ""

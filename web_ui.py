@@ -333,11 +333,77 @@ function updateParlayToolbar() {
   const btn = document.getElementById('parlay-analyze-btn');
   const aiBtn = document.getElementById('parlay-ai-btn');
   const posterBtn = document.getElementById('poster-batch-btn');
+  const listExportBtn = document.getElementById('dash-list-export-btn');
   if (countEl) countEl.textContent = n + ' 场 · 串关需 2';
   const ready = n === 2;
   if (btn) btn.disabled = !ready;
   if (aiBtn) aiBtn.disabled = !ready;
   if (posterBtn) posterBtn.disabled = n === 0;
+  if (listExportBtn) listExportBtn.disabled = n === 0;
+}
+
+function dashExportItems() {
+  return [...document.querySelectorAll('.parlay-cb:checked')].map(cb => {
+    const tr = cb.closest('tr.dash-row');
+    if (!tr) return null;
+    return {
+      fid: cb.dataset.fid || tr.dataset.fid || '',
+      name: tr.dataset.name || cb.dataset.name || '—',
+      pick: tr.dataset.pick || '—',
+      sp: tr.dataset.sp || '—',
+      tier: tr.dataset.tierCn || '—',
+      scores: tr.dataset.scores || '—',
+      ah: tr.dataset.ah || '—',
+      conf: tr.dataset.conf || '—',
+      grade: tr.dataset.accGrade || '',
+      matchDate: tr.dataset.matchDate || cb.dataset.matchDate || '',
+    };
+  }).filter(Boolean);
+}
+
+function buildDashListExportHtml(items) {
+  const dates = [...new Set(items.map(i => i.matchDate).filter(Boolean))];
+  const dateLine = dates.length ? dates.join(' · ') : '—';
+  const ts = new Date().toLocaleString('zh-CN', { hour12: false });
+  const cards = items.map((it, idx) => {
+    const tierCls = it.tier === '可串' ? 'dep-tier-a'
+      : (it.tier === '可单关' ? 'dep-tier-b' : 'dep-tier-c');
+    const gradeTag = it.grade
+      ? '<span class="dep-tag dep-grade">' + escHtml(it.grade) + '</span>' : '';
+    return '<div class="dep-match">'
+      + '<div class="dep-match-hd">'
+      + '<span class="dep-num">' + (idx + 1) + '</span>'
+      + '<span class="dep-name">' + escHtml(it.name) + '</span>'
+      + '<span class="dep-tag ' + tierCls + '">' + escHtml(it.tier) + '</span>'
+      + gradeTag
+      + '</div>'
+      + '<div class="dep-pick-row">'
+      + '<span class="dep-pick">' + escHtml(it.pick) + '</span>'
+      + '<span class="dep-sp">SP ' + escHtml(it.sp) + '</span>'
+      + '</div>'
+      + '<div class="dep-meta">比分 ' + escHtml(it.scores)
+      + ' · 亚盘 ' + escHtml(it.ah)
+      + ' · 置信 ' + escHtml(it.conf) + '</div>'
+      + '</div>';
+  }).join('');
+  return '<div class="dep-card">'
+    + '<div class="dep-hero">'
+    + '<div class="dep-title">⚽ 精选场次</div>'
+    + '<div class="dep-sub">' + items.length + ' 场 · 比赛日 ' + escHtml(dateLine) + '</div>'
+    + '<div class="dep-sub dep-ts">生成 ' + escHtml(ts) + '</div>'
+    + '</div>'
+    + cards
+    + '<div class="dep-foot">数据研发 · 盘口分析 · 一键存图</div>'
+    + '</div>';
+}
+
+async function exportSelectedListImage(btn) {
+  const items = dashExportItems();
+  if (!items.length) { showToast('请先勾选场次', true); return; }
+  const root = document.getElementById('dash-list-export-root');
+  if (!root) { showToast('导出区域未就绪', true); return; }
+  root.innerHTML = buildDashListExportHtml(items);
+  await savePageLongImage(btn);
 }
 
 function openSelectedPosters() {
@@ -947,9 +1013,13 @@ def _dashboard_active_row(
         if fid else "—"
     )
     sp_cell = _e(sp_val) if sp_val else "—"
+    pick_plain = _format_dual_pick(m)
     return (
         f"<tr class='dash-row' data-sweet='{sweet_flag}' "
-        f"data-acc-grade='{_e(grade)}' data-tier='{_e(m.get('buy_tier') or '')}'>"
+        f"data-acc-grade='{_e(grade)}' data-tier='{_e(m.get('buy_tier') or '')}' "
+        f"data-fid='{_e(fid)}' data-name='{_e(name)}' data-pick='{_e(pick_plain)}' "
+        f"data-sp='{_e(sp_val)}' data-tier-cn='{_e(tier_cn)}' data-scores='{_e(scores)}' "
+        f"data-ah='{_e(ah)}' data-conf='{_e(conf)}' data-match-date='{_e(match_day)}'>"
         f"<td class='parlay-pick'>{cb}</td>"
         f"<td><a href=\"/match/{_e(fid)}\">{_e(name)}</a>{phase_tag}{tier_tag}{acc_tag}{alert_tag}</td>"
         f"<td>{_e(tier_cn)}</td>"
@@ -1136,7 +1206,36 @@ def html_dashboard(
         ".parlay-option { border:1px solid #e2e8f0; border-radius:10px; padding:12px; margin:12px 0; background:#fff; }"
         ".cmp-ok { color: #047857; font-weight: 700; }"
         ".cmp-bad { color: #b91c1c; font-weight: 700; }"
+        "#dash-list-export-root { position: fixed; left: -9999px; top: 0; width: 420px; z-index: -1; pointer-events: none; }"
+        ".dep-card { background: linear-gradient(165deg, #0a0c18 0%, #121528 45%, #1a1530 100%); "
+        "border: 1px solid rgba(255,255,255,0.12); border-radius: 18px; padding: 18px 16px 14px; "
+        "color: #f1f5f9; font-family: Inter, system-ui, 'PingFang SC', sans-serif; }"
+        ".dep-hero { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.1); }"
+        ".dep-title { font-size: 20px; font-weight: 900; "
+        "background: linear-gradient(90deg, #ff4b8b, #ffd34e); -webkit-background-clip: text; "
+        "background-clip: text; color: transparent; margin-bottom: 6px; }"
+        ".dep-sub { font-size: 13px; color: #94a3b8; line-height: 1.5; }"
+        ".dep-ts { font-size: 11px; margin-top: 2px; }"
+        ".dep-match { padding: 12px 0; border-top: 1px solid rgba(255,255,255,0.08); }"
+        ".dep-match-hd { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; margin-bottom: 8px; }"
+        ".dep-num { display: inline-flex; align-items: center; justify-content: center; "
+        "width: 22px; height: 22px; border-radius: 999px; background: rgba(255,75,139,0.2); "
+        "color: #ff9ec8; font-size: 12px; font-weight: 800; flex-shrink: 0; }"
+        ".dep-name { font-size: 16px; font-weight: 800; color: #fff; flex: 1; min-width: 120px; }"
+        ".dep-tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }"
+        ".dep-tier-a { background: rgba(52,211,153,0.15); color: #6ee7b7; border: 1px solid rgba(52,211,153,0.35); }"
+        ".dep-tier-b { background: rgba(96,165,250,0.15); color: #93c5fd; border: 1px solid rgba(96,165,250,0.35); }"
+        ".dep-tier-c { background: rgba(255,255,255,0.08); color: #cbd5e1; border: 1px solid rgba(255,255,255,0.15); }"
+        ".dep-grade { background: rgba(251,146,60,0.12); color: #fdba74; border: 1px solid rgba(251,146,60,0.35); }"
+        ".dep-pick-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: baseline; margin-bottom: 6px; }"
+        ".dep-pick { font-size: 15px; font-weight: 800; color: #fde68a; }"
+        ".dep-sp { font-size: 14px; font-weight: 700; color: #ff9ec8; }"
+        ".dep-meta { font-size: 12px; line-height: 1.55; color: #94a3b8; }"
+        ".dep-foot { margin-top: 12px; padding-top: 10px; border-top: 1px dashed rgba(255,255,255,0.12); "
+        "text-align: center; font-size: 11px; color: #64748b; }"
     )
+
+    dash_export = long_image_export_script(root_id="dash-list-export-root", filename="dash-picks")
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head>
@@ -1147,6 +1246,7 @@ def html_dashboard(
 <style>
 {dash_css}
 </style>
+{dash_export}
 <script>{_AI_BTN_JS}{_AI_CHAT_JS}{_DASH_FILTER_JS}{_PARLAY_JS}</script>
 </head><body>
 <h1 class="text-gradient">⚽ 盘口分析</h1>
@@ -1172,8 +1272,10 @@ def html_dashboard(
   <h2>{_e(active_title)}</h2>
   <div class="parlay-toolbar">
     <span class="meta">已选 <strong id="parlay-count">0 场 · 串关需 2</strong></span>
-    <button type="button" class="btn btn-sm" style="background:#dc2626" id="poster-batch-btn" disabled
-            onclick="openSelectedPosters()">📷 批量推荐图</button>
+    <button type="button" class="btn btn-share" id="dash-list-export-btn" disabled
+            onclick="exportSelectedListImage(this)">📷 生成选中图片</button>
+    <button type="button" class="btn btn-sm" id="poster-batch-btn" disabled
+            onclick="openSelectedPosters()">📷 单场 AI 推荐图</button>
     <button type="button" class="btn btn-sm" id="parlay-analyze-btn" disabled
             onclick="analyzeParlay(false)">2串1 分析</button>
     <button type="button" class="btn btn-sm btn-ai" id="parlay-ai-btn" disabled
@@ -1183,7 +1285,7 @@ def html_dashboard(
     </select>
     <button type="button" class="btn btn-sm btn-ai" id="list-parlay-ai-btn"
             onclick="analyzeListParlayAi()">AI自动选2串1</button>
-    <span class="meta">勾选后可「批量推荐图」（每场一张 PNG，可跨天）；2串1 须恰好选 2 场且同一比赛日</span>
+    <span class="meta">勾选后点「生成选中图片」直接下载 PNG（一张汇总）；「单场 AI 推荐图」每场一张详细海报</span>
   </div>
   <div class="card parlay-result" id="parlay-result"></div>
   <p class="meta" style="margin-bottom:8px">
@@ -1200,6 +1302,7 @@ def html_dashboard(
 {finished_fold}
 {_fold("服务状态 · 任务日志", service_body, muted=True)}
 </div>
+<div id="dash-list-export-root" data-export-base="dash-picks" data-export-bg="#0a0c18"></div>
 </body></html>"""
 
 

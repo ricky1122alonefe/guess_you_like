@@ -12,6 +12,7 @@ SP_CN = {"home": "主胜", "draw": "平局", "away": "客胜", "skip": "观望"}
 KEY_FROM_RQ_CN = {"胜": "home", "平": "draw", "负": "away", "观望": "skip"}
 KEY_FROM_SP_CN = {"主胜": "home", "平局": "draw", "客胜": "away", "观望": "skip"}
 NO_JINGCAI = "暂无竞彩"
+RQSP_LARGE_HANDICAP_ABS = 2
 
 
 def jingcai_market_mode(jc: dict | None) -> str:
@@ -199,6 +200,13 @@ def infer_rq_pick_from_foreign_odds(pred: dict, handicap: int) -> tuple[str, str
     sign = f"+{handicap}" if handicap > 0 else str(handicap)
     meta: dict[str, Any] = {"handicap": handicap, "source": None, "probs_pct": {}}
 
+    if abs(handicap) >= RQSP_LARGE_HANDICAP_ABS:
+        return (
+            "skip",
+            f"让球({sign})属于大让球，净胜球弹性过大；规则引擎默认观望，需 AI/人工单独确认",
+            meta,
+        )
+
     sim_probs, sim_n, sim_title = _rq_prob_pct_from_similar_samples(pred, handicap)
     eu_probs = _rq_prob_pct_from_eu_odds(pred, handicap)
 
@@ -310,8 +318,8 @@ def compute_jingcai_pick(pred: dict, jc: dict | None) -> dict[str, Any]:
     pick_key = "skip"
     reason = ""
 
-    ai_rq = pred.get("jingcai_rq_pick") or pred.get("jingcai_pick")
-    ai_rq_cn = pred.get("jingcai_rq_pick_cn") or pred.get("jingcai_pick_cn")
+    ai_rq = pred.get("jingcai_rq_pick")
+    ai_rq_cn = pred.get("jingcai_rq_pick_cn")
     if mode == "rqsp" and ai_rq in ("home", "draw", "away"):
         pick_key = ai_rq
         reason = pred.get("jingcai_rq_reason") or pred.get("jingcai_reason") or "AI 让球推荐（参考国外赔率）"

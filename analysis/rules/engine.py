@@ -644,10 +644,10 @@ def build_recommendation(payload: dict) -> Recommendation:
         conf_reason = f"{conf_reason}；竞彩SP结构需对照" if conf_reason else "竞彩SP结构需对照"
 
     ah_line = cur.get("ah_line")
-    if ah_pick == "home":
-        ah_cn = f"上盘（主队 {ah_line}）"
-    elif ah_pick == "away":
-        ah_cn = f"下盘（客队 +{abs(ah_line or 0)}）"
+    if ah_pick in ("home", "away") and ah_line is not None:
+        from ah import format_ah_pick_cn
+
+        ah_cn = format_ah_pick_cn(ah_pick, float(ah_line))
     else:
         ah_cn = AH_CN["skip"]
 

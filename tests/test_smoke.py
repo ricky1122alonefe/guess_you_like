@@ -813,6 +813,23 @@ def test_jingcai_rqsp_from_foreign_odds():
     assert info["jingcai_pick"] in ("home", "draw", "away")
     assert pred.get("predict_row", {}).get("让球参考胜率")
 
+    large = {
+        **pred,
+        "jingcai_pick": "draw",
+        "jingcai_pick_cn": "平",
+        "jingcai_reason": "旧比分模板字段不应污染让球推荐",
+        "jingcai_pick_info": {},
+        "predict_row": {},
+    }
+    attach_jingcai_recommendation(
+        large,
+        {"has_sp": False, "has_rqsp": True, "handicap": -2, "rqsp_home": 2.1, "rqsp_draw": 3.6, "rqsp_away": 2.7},
+    )
+    large_info = large["jingcai_pick_info"]
+    assert large_info["jingcai_market"] == "rqsp"
+    assert large_info["jingcai_pick"] == "skip"
+    assert "大让球" in large_info["jingcai_reason"]
+
 
 def test_score_model_from_odds():
     from score_models import build_score_model

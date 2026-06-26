@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ah import ah_settle
+from ah import format_ah_pick_cn
 from time_utils import now_beijing_str
 
 log = logging.getLogger(__name__)
@@ -74,7 +75,7 @@ def evaluate_ah_pick(
 
     settlement = ah_settle(home_score, away_score, line_f, pick)
     out["ah_settlement"] = settlement
-    out["pick_ah_cn"] = "上盘" if pick == "home" else "下盘"
+    out["pick_ah_cn"] = format_ah_pick_cn(pick, line_f)
     if settlement > 0:
         out["hit_ah"] = True
     elif settlement < 0:
@@ -122,8 +123,15 @@ def enrich_record_with_ah(record: dict) -> dict:
         hs, gs = score
         home_settle = ah_settle(hs, gs, line, "home")
         away_settle = ah_settle(hs, gs, line, "away")
-        rec["actual_upper_settlement"] = home_settle
-        rec["actual_lower_settlement"] = away_settle
+        if line < 0:
+            rec["actual_upper_settlement"] = home_settle
+            rec["actual_lower_settlement"] = away_settle
+        elif line > 0:
+            rec["actual_upper_settlement"] = away_settle
+            rec["actual_lower_settlement"] = home_settle
+        else:
+            rec["actual_upper_settlement"] = home_settle
+            rec["actual_lower_settlement"] = away_settle
         rec["closing_ah_line"] = line
 
     pick = rec.get("asian_handicap_pick")
@@ -132,7 +140,7 @@ def enrich_record_with_ah(record: dict) -> dict:
         ah_eval = evaluate_ah_pick(pick, home_score=hs, away_score=gs, line=line)
         rec.update(ah_eval)
         if not rec.get("asian_handicap_cn"):
-            rec["asian_handicap_cn"] = "上盘" if pick == "home" else "下盘"
+            rec["asian_handicap_cn"] = format_ah_pick_cn(pick, line)
     return rec
 
 
@@ -187,13 +195,13 @@ def compute_ah_accuracy_report(records: list[dict]) -> dict[str, Any]:
 def _line_bucket(line: float) -> str:
     if line == 0:
         return "平手"
-    if 0 < line <= 0.5:
-        return "主让 0~0.5"
-    if 0.5 < line <= 1.0:
-        return "主让 0.75~1"
-    if line > 1.0:
-        return "主让 1+"
     if -0.5 <= line < 0:
+        return "主让 0~0.5"
+    if -1.0 <= line < -0.5:
+        return "主让 0.75~1"
+    if line < -1.0:
+        return "主让 1+"
+    if 0 < line <= 0.5:
         return "主受让 0~0.5"
     return "主受让 0.75+"
 
@@ -222,28 +230,34 @@ def compute_ah_pattern_stats(records: list[dict]) -> dict[str, Any]:
         hs, gs = score
         home_settle = ah_settle(hs, gs, line, "home")
         away_settle = ah_settle(hs, gs, line, "away")
+        if line < 0:
+            upper_settle, lower_settle = home_settle, away_settle
+        elif line > 0:
+            upper_settle, lower_settle = away_settle, home_settle
+        else:
+            upper_settle, lower_settle = home_settle, away_settle
 
         bk = _line_bucket(line)
         bucket[bk]["total"] += 1
-        if home_settle > 0:
+        if upper_settle > 0:
             bucket[bk]["upper_win"] += 1
-        if away_settle > 0:
+        if lower_settle > 0:
             bucket[bk]["lower_win"] += 1
-        if home_settle == 0 and away_settle == 0:
+        if upper_settle == 0 and lower_settle == 0:
             bucket[bk]["push"] += 1
 
         mv = _line_move_label(r.get("line_move"))
         move_grp[mv]["total"] += 1
-        if home_settle > 0:
+        if upper_settle > 0:
             move_grp[mv]["upper_win"] += 1
-        if away_settle > 0:
+        if lower_settle > 0:
             move_grp[mv]["lower_win"] += 1
 
         cons = r.get("opening_consistency") or "unknown"
         consistency_grp[cons]["total"] += 1
-        if home_settle > 0:
+        if upper_settle > 0:
             consistency_grp[cons]["upper_win"] += 1
-        if away_settle > 0:
+        if lower_settle > 0:
             consistency_grp[cons]["lower_win"] += 1
 
     def _fmt(groups: dict) -> list[dict]:

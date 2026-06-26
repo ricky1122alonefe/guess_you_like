@@ -1342,10 +1342,24 @@ def test_buy_tier_purchase_win_rate():
 
 
 def test_recommendation_review_builder():
-    from recommendation_review import _compare_summary, build_recommendation_review
+    from recommendation_review import (
+        _compare_summary,
+        _review_pick_display,
+        _review_tier_display,
+        build_recommendation_review,
+    )
 
+    assert "预判" in _compare_summary(pick_cn="主胜", result_cn="主胜", hit=True)
+    assert "实际" in _compare_summary(pick_cn="主胜", result_cn="主胜", hit=True)
     assert "✓" in _compare_summary(pick_cn="主胜", result_cn="主胜", hit=True)
     assert "✗" in _compare_summary(pick_cn="平局", result_cn="主胜", hit=False)
+    assert "推" not in _compare_summary(pick_cn="主胜", result_cn="主胜", hit=True)
+    assert _review_tier_display("可串") == "重点场次"
+    assert _review_tier_display("可单关") == "重点场次"
+    assert _review_tier_display("仅参考") == "观察参考"
+    assert _review_pick_display("让球(+2) 胜") == "客队净胜 2 球+"
+    assert _review_pick_display("让球(-2) 负") == "客队净胜 2 球+"
+    assert "让球" not in _review_pick_display("让球(-2) 负")
 
     root = ROOT / "output" / "service"
     if not root.is_dir():
@@ -1404,6 +1418,10 @@ def test_review_agent_diagnosis_and_page_render():
     )
     assert "诊断智能体" in html
     assert "诊断 Prompt" in html
+    assert "Agent 推荐" in html
+    assert "重点场次" in html
+    assert "预判" in html
+    assert "竞彩推荐" not in html.split("<table class=\"review-table\">")[1][:3000]
 
 
 def test_match_agents_board_and_guardrail_render():

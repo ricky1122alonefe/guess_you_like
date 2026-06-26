@@ -3516,21 +3516,27 @@ def _source_table(by_source: dict) -> str:
 {rows}</table>"""
 
 
-def _buy_tier_table(by_tier: dict) -> str:
+def _buy_tier_table(by_tier: dict, *, safe_labels: bool = False) -> str:
     if not by_tier:
         return "<p class='meta'>暂无分档位统计（需 poll 后带「购买档位」再 settle）</p>"
     rows = ""
     css = {"A": "tier-a", "B": "tier-b", "C": "tier-c", "unknown": "tier-c"}
+    if safe_labels:
+        from recommendation_review import _review_tier_display
     for tier, v in by_tier.items():
         label = v.get("label_cn") or tier
+        if safe_labels:
+            label = _review_tier_display(label)
         cls = css.get(tier, "tier-c")
         rows += (
             f"<tr><td><span class='tag tag-buy-{cls}'>{_e(label)}</span></td>"
             f"<td>{v.get('total', 0)}</td><td>{v.get('hit', 0)}</td>"
             f"<td><strong>{_pct(v.get('rate_pct'))}</strong></td></tr>\n"
         )
+    head = "场次分级" if safe_labels else "购买档位"
+    rate_head = "准确率" if safe_labels else "胜率"
     return f"""<table class="mini buy-tier-stats">
-<tr><th>购买档位</th><th>场次</th><th>命中</th><th>胜率</th></tr>
+<tr><th>{head}</th><th>场次</th><th>命中</th><th>{rate_head}</th></tr>
 {rows}</table>"""
 
 
@@ -5308,12 +5314,19 @@ def _format_review_kickoff(kickoff_at: str | None) -> str:
 
 
 def _review_row(r: dict) -> str:
+    from recommendation_review import _review_pick_display, _review_tier_display
+
     fid = r.get("fixture_id") or ""
     name = r.get("match_name") or fid
     link = f'<a href="/match/{_e(fid)}">{_e(name)}</a>' if fid else _e(name)
     tier_cn = r.get("buy_tier_cn") or "—"
+    tier_display = _review_tier_display(tier_cn)
     tier_css = {"可串": "tier-a", "可单关": "tier-b", "仅参考": "tier-c"}.get(tier_cn, "tier-c")
-    tier_tag = f'<span class="tag tag-buy-{tier_css}">{_e(tier_cn)}</span>' if tier_cn != "—" else "—"
+    tier_tag = (
+        f'<span class="tag tag-buy-{tier_css}">{_e(tier_display)}</span>'
+        if tier_cn != "—" else "—"
+    )
+    pick_display = _review_pick_display(r.get("pick_jingcai_cn"))
     hit_1x2 = _hit_badge(r.get("hit_1x2"))
     hit_sc = _hit_badge(r.get("hit_score")) if _score_enabled() else "—"
     hit_ah = _hit_badge(r.get("hit_ah"))
@@ -5335,7 +5348,7 @@ def _review_row(r: dict) -> str:
         f" data-kickoff='{_e(ko_raw)}'>"
         f"<td>{_e(ko)}</td><td>{link}</td>"
         f"<td>{user_cell}</td>"
-        f"<td><strong>{_e(r.get('pick_jingcai_cn') or '—')}</strong></td>"
+        f"<td><strong>{_e(pick_display)}</strong></td>"
         f"<td><strong>{_e(r.get('score_text') or '—')}</strong> {_e(r.get('result_1x2_cn') or '—')}</td>"
         f"<td class='{cmp_cls}'>{_e(cmp_txt)}</td>"
         f"<td>{tier_tag}</td>"
@@ -5350,6 +5363,8 @@ def _review_row(r: dict) -> str:
 
 
 def _error_review_block(error_review: dict) -> str:
+    from recommendation_review import _review_pick_display, _review_tier_display
+
     items = error_review.get("items") or []
     if not items:
         return """
@@ -5371,6 +5386,8 @@ def _error_review_block(error_review: dict) -> str:
         actions = "".join(f"<li>{_e(x)}</li>" for x in (item.get("actions") or []))
         lead = item.get("lead_hours")
         lead_txt = f" · 快照提前 {lead:g}h" if lead is not None else ""
+        pick_txt = _review_pick_display(item.get("pick_jingcai_cn"))
+        tier_txt = _review_tier_display(item.get("buy_tier_cn"))
         cards += f"""
 <div class="error-review-item">
   <div class="error-review-head">
@@ -5378,9 +5395,9 @@ def _error_review_block(error_review: dict) -> str:
     <span class="tag tag-warn">{_e(item.get('category') or '失误')}</span>
   </div>
   <p class="error-review-line">
-    推 <strong>{_e(item.get('pick_jingcai_cn') or '—')}</strong>
-    → 开 <strong>{_e(item.get('score_text') or '—')} {_e(item.get('result_1x2_cn') or '')}</strong>
-    · {_e(item.get('buy_tier_cn') or '—')} · 置信 {_e(item.get('confidence_cn') or '—')}{lead_txt}
+    预判 <strong>{_e(pick_txt)}</strong>
+    → 实际 <strong>{_e(item.get('score_text') or '—')} {_e(item.get('result_1x2_cn') or '')}</strong>
+    · {_e(tier_txt)} · 置信 {_e(item.get('confidence_cn') or '—')}{lead_txt}
   </p>
   <div class="error-review-cols">
     <div><h4>问题点</h4><ul>{reasons or '<li>暂无</li>'}</ul></div>
@@ -5391,13 +5408,15 @@ def _error_review_block(error_review: dict) -> str:
     return f"""
 <div class="card error-review-card">
   <h2>错误复盘 <span class="tag tag-acc-warn">{error_review.get('count') or len(items)} 场</span></h2>
-  <p class="meta">只列已判定未命中的竞彩推荐，按最近场次展示。重点看“为什么不该进串/不该出手”。</p>
+  <p class="meta">只列已判定未命中的 Agent 预判，按最近场次展示。重点看模型在哪些场景判断偏差较大。</p>
   <div class="error-review-cats">{cat_tags}</div>
   <div class="error-review-grid">{cards}</div>
 </div>"""
 
 
 def _review_agent_block(agent: dict) -> str:
+    from recommendation_review import _review_pick_display
+
     if not agent or not agent.get("miss_count"):
         return """
 <div class="card review-agent-card">
@@ -5422,7 +5441,7 @@ def _review_agent_block(agent: dict) -> str:
         case_rows += f"""
 <tr>
   <td><a href="/match/{_e(c.get('fixture_id') or '')}">{_e(c.get('match_name') or '—')}</a></td>
-  <td>{_e(c.get('pick') or '—')}</td>
+  <td>{_e(_review_pick_display(c.get('pick')))}</td>
   <td>{_e(c.get('actual') or '—')}</td>
   <td>{tags}</td>
   <td class="meta">{_e(ev[:180])}</td>
@@ -5442,7 +5461,7 @@ def _review_agent_block(agent: dict) -> str:
   <h3>错单证据</h3>
   <div class="review-table-wrap">
   <table class="mini review-agent-cases">
-    <tr><th>比赛</th><th>推荐</th><th>实际</th><th>标签</th><th>证据</th></tr>
+    <tr><th>比赛</th><th>预判</th><th>实际</th><th>标签</th><th>证据</th></tr>
     {case_rows}
   </table>
   </div>
@@ -5465,13 +5484,13 @@ def html_recommendation_review(report: dict) -> str:
 
     stats = _stat_grid([
         ("已结算", str(report.get("total_settled") or 0)),
-        ("有竞彩推荐", str(report.get("with_recommendation") or 0)),
-        ("购买胜率", _pct(purchase.get("rate_pct") or acc.get("rate_1x2_pct"))),
-        ("A 可串", _pct((purchase.get("tier_a") or {}).get("rate_pct"))),
-        ("B 可单关", _pct((purchase.get("tier_b") or {}).get("rate_pct"))),
-        ("C 仅参考", _pct((purchase.get("tier_c") or {}).get("rate_pct"))),
+        ("有 Agent 预判", str(report.get("with_recommendation") or 0)),
+        ("预判准确率", _pct(purchase.get("rate_pct") or acc.get("rate_1x2_pct"))),
+        ("A 重点场次", _pct((purchase.get("tier_a") or {}).get("rate_pct"))),
+        ("B 重点场次", _pct((purchase.get("tier_b") or {}).get("rate_pct"))),
+        ("C 观察参考", _pct((purchase.get("tier_c") or {}).get("rate_pct"))),
     ])
-    tier_table = _buy_tier_table(acc.get("by_buy_tier") or {})
+    tier_table = _buy_tier_table(acc.get("by_buy_tier") or {}, safe_labels=True)
     rows = "".join(_review_row(r) for r in records) or "<tr><td colspan='16'>暂无已结算场次</td></tr>"
 
     user_acc = report.get("user_pick_accuracy") or {}
@@ -5589,7 +5608,7 @@ function sortReview(kind) {{
 
 <div class="card hero-card">
   <h1>📋 推荐复盘</h1>
-  <p class="meta">对照「开球前最后一次竞彩推荐」与「实际赛果」· 更新 {_e(updated)}</p>
+  <p class="meta">对照「开球前 Agent 预判」与「实际赛果」· 更新 {_e(updated)}</p>
   {stats}
 </div>
 
@@ -5600,23 +5619,23 @@ function sortReview(kind) {{
 {_error_review_block(error_review)}
 
 <div class="card">
-  <h2>购买档位胜率</h2>
+  <h2>重点场次准确率</h2>
   {tier_table}
 </div>
 
 <div class="card">
   <h2>常见失误模式</h2>
   <ul>{miss_li}</ul>
-  <p class="meta">格式：竞彩推荐→实际赛果；样本越多越有参考价值。</p>
+  <p class="meta">格式：预判→实际赛果；样本越多越有参考价值。</p>
 </div>
 
 <div class="card">
   <h2>逐场对照（{len(records)} 场）</h2>
   <div class="review-toolbar">
     <button type="button" class="active" data-filter="all" onclick="filterReview('all')">全部</button>
-    <button type="button" data-filter="A" onclick="filterReview('A')">A 可串</button>
-    <button type="button" data-filter="B" onclick="filterReview('B')">B 可单关</button>
-    <button type="button" data-filter="C" onclick="filterReview('C')">C 仅参考</button>
+    <button type="button" data-filter="A" onclick="filterReview('A')">A 重点场次</button>
+    <button type="button" data-filter="B" onclick="filterReview('B')">B 重点场次</button>
+    <button type="button" data-filter="C" onclick="filterReview('C')">C 观察参考</button>
     <button type="button" data-filter="hit" onclick="filterReview('hit')">只看命中</button>
     <button type="button" data-filter="miss" onclick="filterReview('miss')">只看失误</button>
     <span class="review-sort-label">排序</span>
@@ -5627,7 +5646,7 @@ function sortReview(kind) {{
   <table class="review-table">
     <thead>
       <tr>
-        <th>开球</th><th>比赛</th><th>我的定稿</th><th>竞彩推荐</th><th>实际</th><th>对照</th>
+        <th>开球</th><th>比赛</th><th>我的定稿</th><th>Agent 推荐</th><th>实际</th><th>对照</th>
         <th>档位</th><th>置信</th><th>参考研判</th><th>初盘</th><th>比分</th>
         <th>定稿</th><th>1X2</th><th>比分</th><th>亚盘</th><th>来源</th>
       </tr>
@@ -5637,7 +5656,7 @@ function sortReview(kind) {{
     </tbody>
   </table>
   </div>
-  <p class="meta">推荐取自 settle 时归档的开球前预测（runs/latest + payload）；点击比赛名可看盘口演变与 AI 记录。</p>
+  <p class="meta">预判取自 settle 时归档的开球前 Agent 分析；点击比赛名可看演变与 AI 记录。</p>
 </div>
 </body></html>"""
 

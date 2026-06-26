@@ -20,6 +20,56 @@ log = logging.getLogger(__name__)
 
 SKIP_PICKS = frozenset({"—", "观望", "", None, "暂无竞彩"})
 
+_RQ_PICK_RE = re.compile(r"让球\s*\(([+\-]?\d+)\)\s*(胜|平|负)")
+
+
+def _review_tier_display(tier_cn: str | None) -> str:
+    """Social-safe tier label for /review export."""
+    cn = str(tier_cn or "").strip()
+    if cn in ("可串", "可单关"):
+        return "重点场次"
+    if cn == "仅参考":
+        return "观察参考"
+    return cn or "—"
+
+
+def _review_pick_display(pick_cn: str | None) -> str:
+    """Convert handicap picks to natural goal-margin wording (no lottery terms)."""
+    raw = str(pick_cn or "").strip()
+    if not raw or raw in SKIP_PICKS:
+        return raw or "—"
+    m = _RQ_PICK_RE.search(raw)
+    if not m:
+        return raw
+    h = int(m.group(1))
+    side = m.group(2)
+    n = abs(h)
+    if side == "负":
+        return f"客队净胜 {n} 球+"
+    if side == "胜":
+        if h >= 0:
+            return f"客队净胜 {n} 球+"
+        return f"主队净胜 {n} 球+"
+    if side == "平":
+        if h < 0:
+            return f"主队净胜 {n} 球"
+        return "平局方向"
+    return raw
+
+
+def _compare_summary(*, pick_cn: str, result_cn: str, hit: bool | None) -> str:
+    pick = _review_pick_display(pick_cn)
+    actual = (result_cn or "").strip()
+    if not pick or pick in SKIP_PICKS:
+        return "—"
+    if hit is True:
+        return f"预判{pick} · 实际{actual} ✓"
+    if hit is False:
+        return f"预判{pick} → 实际{actual} ✗"
+    if actual:
+        return f"预判{pick} · 实际{actual}"
+    return f"预判{pick}"
+
 
 def _pick_market(pick_cn: str | None, row: dict | None = None) -> str:
     pick = str(pick_cn or "")
@@ -140,20 +190,6 @@ def _error_review_item(r: dict) -> dict[str, Any]:
         "reasons": dedup_reasons[:5],
         "actions": dedup_actions[:4],
     }
-
-
-def _compare_summary(*, pick_cn: str, result_cn: str, hit: bool | None) -> str:
-    pick = (pick_cn or "").strip()
-    actual = (result_cn or "").strip()
-    if not pick or pick in SKIP_PICKS:
-        return "—"
-    if hit is True:
-        return f"推{pick} · 开{actual} ✓"
-    if hit is False:
-        return f"推{pick} → 开{actual} ✗"
-    if actual:
-        return f"推{pick} · 开{actual}"
-    return f"推{pick}"
 
 
 def _external_fixture_id(settled: dict) -> str:
@@ -286,9 +322,9 @@ def build_recommendation_review(output_root: str | Path) -> dict[str, Any]:
     misses = [r for r in judged if r.get("hit_1x2") is False]
     miss_patterns: dict[str, int] = {}
     for r in misses:
-        pick = r.get("pick_jingcai_cn") or "?"
+        pick = _review_pick_display(r.get("pick_jingcai_cn")) or "?"
         actual = r.get("result_1x2_cn") or "?"
-        key = f"{pick}→{actual}"
+        key = f"预判{pick}→实际{actual}"
         miss_patterns[key] = miss_patterns.get(key, 0) + 1
     top_misses = sorted(miss_patterns.items(), key=lambda x: -x[1])[:8]
     error_items = [_error_review_item(r) for r in misses]

@@ -40,7 +40,7 @@ from share_card import (
     html_share_parlay,
     html_share_posters_batch,
 )
-from web_ui import html_agent_workbench, html_ah_analytics, html_ai_settings, html_daily_picks, html_dashboard, html_eu_ah_divergence, html_group_final_copy, html_group_knockout_outlook, html_group_stage, html_kelly_calculator, html_match_detail, html_quant_analytics, html_recommendation_review, html_worldcup_ledger
+from web_ui import html_agent_pipeline_settings, html_agent_workbench, html_ah_analytics, html_ai_settings, html_daily_picks, html_dashboard, html_eu_ah_divergence, html_group_final_copy, html_group_knockout_outlook, html_group_stage, html_kelly_calculator, html_match_detail, html_quant_analytics, html_recommendation_review, html_worldcup_ledger
 
 
 def _error_html(body: str) -> str:
@@ -1024,6 +1024,11 @@ class Handler(BaseHTTPRequestHandler):
 
             self._send_html(html_ai_settings(editable_config_summary(root)))
             return
+        if path == "/settings/agent-pipeline":
+            from match_agents.pipeline_config import load_pipeline_editor_payload
+
+            self._send_html(html_agent_pipeline_settings(load_pipeline_editor_payload(output_root=root)))
+            return
         if path == "/kelly":
             qs = parse_qs(urlparse(self.path).query)
             fid = (qs.get("fixture_id", [None])[0] or "").strip()
@@ -1134,6 +1139,11 @@ class Handler(BaseHTTPRequestHandler):
 
             self._send_json(public_config_summary(self.output_root))
             return
+        if path == "/api/agent-pipeline/config":
+            from match_agents.pipeline_config import load_pipeline_editor_payload
+
+            self._send_json(load_pipeline_editor_payload(output_root=self.output_root))
+            return
         if path == "/api/latest":
             data = _read_json(root / "latest.json")
             if data is None:
@@ -1222,6 +1232,37 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "请求体须为 JSON"}, 400)
             except Exception as exc:
                 log.exception("保存 AI 配置失败")
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/agent-pipeline/config":
+            try:
+                from match_agents.pipeline_config import save_all_pipeline_profiles
+
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b"{}"
+                payload = json.loads(raw.decode("utf-8"))
+                profiles = payload.get("profiles")
+                if not isinstance(profiles, dict) or not profiles:
+                    self._send_json({"ok": False, "error": "请求体须包含 profiles 对象"}, 400)
+                    return
+                result = save_all_pipeline_profiles(profiles, output_root=self.output_root)
+                self._send_json(result)
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "请求体须为 JSON"}, 400)
+            except Exception as exc:
+                log.exception("保存 Agent 编排失败")
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/agent-pipeline/config/reset":
+            try:
+                from match_agents.pipeline_config import load_pipeline_editor_payload, reset_pipeline_profile
+
+                profile_id = (qs.get("profile", ["cup"])[0] or "cup").strip()
+                reset_pipeline_profile(profile_id, output_root=self.output_root)
+                payload = load_pipeline_editor_payload(output_root=self.output_root)
+                self._send_json({"ok": True, "profiles": payload.get("profiles") or {}})
+            except Exception as exc:
+                log.exception("恢复 Agent 编排失败")
                 self._send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/ai/test":

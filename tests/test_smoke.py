@@ -1623,6 +1623,56 @@ def test_match_agents_board_and_guardrail_render():
     assert "流式 Pipeline 执行" in workbench_html
     assert "agent-pipeline-stream" in workbench_html
     assert "runAgentPipeline" in workbench_html
+    assert "抖音总结" in workbench_html
+    assert "保存抖音总结图" in workbench_html
+    assert "盘口" not in workbench_html.split("export-poster-safe")[1][:2000] if "export-poster-safe" in workbench_html else True
+
+    from share_card import (
+        _is_standings_motivation_line,
+        _sanitize_agent_export_text,
+        build_agent_workbench_social_ctx,
+        html_agent_workbench_social_card,
+    )
+
+    clean = _sanitize_agent_export_text("竞彩推荐下盘，亚盘盘口分歧，双方已出线战意偏低")
+    assert "盘口" not in clean
+    assert "竞彩" not in clean
+    assert "水位" not in clean
+    assert "下盘" not in clean
+    assert not _is_standings_motivation_line("亚盘倾向客队，水位下降")
+    assert _is_standings_motivation_line("双方已出线，末轮战意偏低")
+    social = build_agent_workbench_social_ctx(
+        index={"match_name": "挪威VS法国"},
+        prediction={"result_1x2_cn": "客胜", "likely_scores": ["1-2", "0-2"]},
+        agent_board={
+            "agents": [
+                {
+                    "agent_id": "motivation",
+                    "evidence": ["战意类型：出线后轮换观察", "双方已提前出线，末轮战意偏低"],
+                },
+                {
+                    "agent_id": "cup_standing",
+                    "evidence": ["杯赛小组：E", "主队出线状态：已锁定出线", "亚盘倾向客胜"],
+                },
+                {
+                    "agent_id": "schedule_venue",
+                    "evidence": ["开球时间已确认，球场海拔较高"],
+                },
+            ]
+        },
+        chief_report={"analysis": {"summary": "双方已出线战意偏低，赛果方向倾向客胜", "buy_decision": "C 仅参考"}},
+    )
+    card = html_agent_workbench_social_card(social)
+    assert "保存抖音总结图" in workbench_html or "saveModuleImage" in workbench_html
+    assert "战意分析" in card
+    assert "小组出线" in card
+    assert "胜负判断" in card
+    assert "客胜" in card
+    assert "1-2" in card
+    assert "盘口" not in card
+    assert "水位" not in card
+    assert "海拔" not in card
+    assert "E" in card or "出线" in card
 
     from match_agents.pipeline import iter_match_pipeline_events, pipeline_event_json
 
@@ -1637,6 +1687,7 @@ def test_match_agents_board_and_guardrail_render():
         assert names.count("step_start") >= 5
         assert names.count("step_done") >= 5
         assert pipeline_event_json(pipeline_events[0])
+        assert "parallel_start" in names or "parallel_done" in names
 
         mdir = root / "matches" / "999"
         mdir.mkdir(parents=True, exist_ok=True)
@@ -1668,6 +1719,28 @@ def test_match_agents_board_and_guardrail_render():
         assert any(s["id"] == "chief_prompt" for s in workflow["steps"])
         assert any(s["id"] == "growth_agent" for s in workflow["steps"])
 
+    from match_agents.pipeline_config import (
+        iter_execution_blocks,
+        load_pipeline_editor_payload,
+        stages_from_legacy_agents,
+    )
+    from web_ui import html_agent_pipeline_settings
+
+    editor = load_pipeline_editor_payload()
+    assert "cup" in editor["profiles"]
+    assert editor["agent_registry"]
+    settings_html = html_agent_pipeline_settings(editor)
+    assert "Agent 工作流编排" in settings_html
+    assert "wf-canvas" in settings_html
+    assert "插件库" in settings_html
+    assert "/api/agent-pipeline/config" in settings_html
+
+    cup_stages = editor["profiles"]["cup"]["stages"]
+    blocks = iter_execution_blocks(cup_stages, run_chief=False)
+    assert any(b.get("block") == "parallel" for b in blocks)
+    rebuilt = stages_from_legacy_agents(["intel", "asian_handicap", "jingcai"])
+    assert any(s.get("type") == "parallel" for s in rebuilt)
+
 
 def test_dashboard_chief_report_column():
     import json
@@ -1697,6 +1770,59 @@ def test_dashboard_chief_report_column():
         assert "C 仅参考" in cell
         assert "大让球" in cell
         assert "/agents" in cell
+
+        from match_agents.board import (
+            list_verdict_from_board,
+            list_verdict_from_prediction,
+            resolve_best_list_verdict,
+        )
+
+        board = {
+            "hard_guards": ["大让球风险"],
+            "agents": [{"recommended_action": "skip", "risk": 0.9}],
+            "summary": {"warnings": ["亚盘分歧"]},
+        }
+        verdict = list_verdict_from_board(board)
+        assert verdict["buy_decision"] == "C 仅参考"
+        guard_verdict = resolve_best_list_verdict(None, board=board, match={"buy_tier_cn": "可串"})
+        assert guard_verdict["buy_decision"] == "C 仅参考"
+        assert guard_verdict["certainty_label"] == "高"
+
+        chief = {"analysis": {"buy_decision": "B 可单关", "confidence": "中", "risk_level": "中", "summary": "客胜有支撑"}}
+        pred = {"buy_tier_cn": "可单关", "predict_row": {"竞彩推荐": "客胜", "置信度": "中"}}
+        merged = resolve_best_list_verdict(chief, board={"hard_guards": [], "agents": [{"recommended_action": "single_only", "confidence": 0.7, "risk": 0.3, "weight": 1}], "summary": {}}, match=pred)
+        assert merged["buy_decision"] == "B 可单关"
+        assert merged.get("certainty_label")
+
+        board_cell = _chief_report_list_cell(fid, None, board=board)
+        assert "确认度" in board_cell
+
+        pred_cell = _chief_report_list_cell(
+            fid,
+            None,
+            match={"buy_tier_cn": "仅参考", "predict_row": {"竞彩推荐": "客胜", "置信度": "低", "赛果预测": "客胜", "推荐比分": "1-0、2-1"}},
+        )
+        assert "确认度" in pred_cell
+        assert "赛果" in pred_cell or "客胜" in pred_cell
+
+        from match_agents.experts import result_1x2_agent, scoreline_agent
+        from match_agents.board import merge_result_and_scores
+        from match_agents.profiles import AGENT_REGISTRY
+
+        pred = {
+            "result_1x2": "away",
+            "result_1x2_cn": "客胜",
+            "likely_scores": ["1-2", "0-2"],
+            "predict_row": {"赛果预测": "客胜", "推荐比分": "1-2、0-2"},
+        }
+        r1 = result_1x2_agent(pred)
+        assert r1.raw.get("pick_1x2_cn") == "客胜"
+        scoreline_agent(pred)
+        assert "result_1x2" in AGENT_REGISTRY
+        assert "scoreline" in AGENT_REGISTRY
+        merged = merge_result_and_scores(None, match=pred)
+        assert merged.get("result_1x2_cn") == "客胜"
+        assert len(merged.get("top_scores") or []) >= 1
 
         dash = html_dashboard({}, None, output_root=root)
         assert "Agent研判" in dash

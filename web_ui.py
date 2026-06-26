@@ -14,7 +14,9 @@ from product_focus import score_prediction_enabled as _score_enabled
 from eu_odds_chart import build_eu_multi_chart_data
 from share_card import (
     AI_SUMMARY_POSTER_CSS,
+    build_agent_workbench_social_ctx,
     build_ai_summary_context,
+    html_agent_workbench_social_panel,
     html_ai_summary_panel,
     long_image_export_script,
 )
@@ -286,6 +288,24 @@ function runAgentPipeline(fid, runChief, btn) {
   pipelineEs.addEventListener('log', e => {
     const d = parseData(e);
     pipelineLog(d.message || '', d.level || 'info');
+  });
+
+  pipelineEs.addEventListener('parallel_start', e => {
+    const d = parseData(e);
+    const labels = (d.agent_labels || d.agents || []).join(' · ');
+    pipelineLog('⚡ 并行: ' + (d.title || d.stage_id || '') + ' — ' + labels, 'info');
+    if (current) {
+      current.className = 'pipeline-current pipeline-running';
+      current.innerHTML = '<div class="pipeline-live"><div class="pipeline-live-head"><h3>'
+        + pipelineEsc(d.title || '并行节点') + '</h3><span class="tag running">并行执行</span></div>'
+        + '<p class="meta">同时运行: ' + pipelineEsc(labels) + '</p>'
+        + '<ul id="pipeline-live-list" class="pipeline-live-list"></ul></div>';
+    }
+  });
+
+  pipelineEs.addEventListener('parallel_done', e => {
+    const d = parseData(e);
+    pipelineLog('✓ 并行完成: ' + (d.title || d.stage_id || ''), 'ok');
   });
 
   pipelineEs.addEventListener('pipeline_complete', e => {
@@ -1178,34 +1198,72 @@ def _alert_tags_html(m: dict, row: dict | None = None) -> str:
     return "".join(f' <span class="tag tag-qual-div">{_e(t)}</span>' for t in tags)
 
 
-def _chief_report_list_cell(fid: str, chief_report: dict | None) -> str:
-    """Compact chief-agent verdict for dashboard list rows."""
-    if not chief_report:
+def _resolve_list_verdict(
+    chief_report: dict | None,
+    *,
+    board: dict | None = None,
+    match: dict | None = None,
+) -> tuple[dict[str, Any], str]:
+    """Return merged highest-certainty verdict (analysis dict, source tag)."""
+    from match_agents.board import resolve_best_list_verdict
+
+    analysis = resolve_best_list_verdict(chief_report, board=board, match=match)
+    return analysis, str(analysis.get("source") or "")
+
+
+def _chief_report_list_cell(
+    fid: str,
+    chief_report: dict | None,
+    *,
+    board: dict | None = None,
+    match: dict | None = None,
+) -> str:
+    """Compact agent verdict for dashboard — one highest-certainty conclusion."""
+    analysis, source = _resolve_list_verdict(chief_report, board=board, match=match)
+    if not analysis:
         if fid:
             return (
-                f'<span class="meta">未生成</span> '
+                f'<span class="meta">待分析</span> '
                 f'<a class="meta" href="/match/{_e(fid)}/agents">工作台</a>'
             )
         return '<span class="meta">—</span>'
-    analysis = chief_report.get("analysis") or {}
     decision = analysis.get("buy_decision") or "—"
     summary = str(analysis.get("summary") or "").strip()
     if len(summary) > 56:
         summary = summary[:56] + "…"
     risk = analysis.get("risk_level") or "—"
-    confidence = analysis.get("confidence") or "—"
+    certainty = analysis.get("certainty_label") or analysis.get("confidence") or "—"
     css = "chief-list-cell"
     dl = str(decision).lower()
     if "skip" in dl or "仅参考" in str(decision):
         css += " chief-skip"
     elif str(risk) == "高" or "观望" in str(decision):
         css += " chief-risk"
+    elif str(certainty) == "高":
+        css += " chief-strong"
     agents_link = f'/match/{_e(fid)}/agents' if fid else ""
     link_html = f' <a class="meta" href="{agents_link}">详情</a>' if agents_link else ""
+    src_html = ""
+    if source == "consensus":
+        agree = analysis.get("agreement") or ""
+        src_html = f'<span class="meta chief-src"> · 确认{agree}</span>' if agree else ""
+    result_cn = str(analysis.get("result_1x2_cn") or "").strip()
+    top_scores = [str(x) for x in (analysis.get("top_scores") or []) if x][:2]
+    pick_line = ""
+    if result_cn or top_scores:
+        parts = []
+        if result_cn:
+            parts.append(f"赛果 <strong>{_e(result_cn)}</strong>")
+        if top_scores:
+            parts.append("比分 " + " / ".join(_e(s) for s in top_scores))
+        pick_line = f'<p class="meta chief-picks">{" · ".join(parts)}</p>'
     return (
         f'<div class="{css}">'
         f'<strong>{_e(decision)}</strong>'
-        f'<span class="meta"> · {_e(risk)}/{_e(confidence)}</span>'
+        f'<span class="meta"> · 确认度{_e(certainty)}</span>'
+        f'<span class="meta"> · 风险{_e(risk)}</span>'
+        f'{src_html}'
+        f'{pick_line}'
         f'<p class="meta chief-summary">{_e(summary) if summary else "—"}</p>'
         f'{link_html}'
         f'</div>'
@@ -1218,6 +1276,7 @@ def _dashboard_active_row(
     kickoff_map: dict | None = None,
     *,
     chief_report: dict | None = None,
+    agent_board: dict | None = None,
 ) -> str:
     from daily_picks import _kickoff_date
 
@@ -1278,9 +1337,10 @@ def _dashboard_active_row(
     )
     sp_cell = _e(sp_val) if sp_val else "—"
     pick_plain = _format_dual_pick(m)
-    chief_cell = _chief_report_list_cell(fid, chief_report)
-    chief_summary = ((chief_report or {}).get("analysis") or {}).get("summary") or ""
-    chief_decision = ((chief_report or {}).get("analysis") or {}).get("buy_decision") or ""
+    chief_cell = _chief_report_list_cell(fid, chief_report, board=agent_board, match=m)
+    analysis, _ = _resolve_list_verdict(chief_report, board=agent_board, match=m)
+    chief_summary = analysis.get("summary") or ""
+    chief_decision = analysis.get("buy_decision") or ""
     return (
         f"<tr class='dash-row' data-sweet='{sweet_flag}' "
         f"data-acc-grade='{_e(grade)}' data-tier='{_e(m.get('buy_tier') or '')}' "
@@ -1297,7 +1357,13 @@ def _dashboard_active_row(
     )
 
 
-def _dashboard_finished_row(m: dict, indexes: dict, *, chief_report: dict | None = None) -> str:
+def _dashboard_finished_row(
+    m: dict,
+    indexes: dict,
+    *,
+    chief_report: dict | None = None,
+    agent_board: dict | None = None,
+) -> str:
     settled = m.get("settled") or {}
     fid = str(m.get("fixture_id") or settled.get("external_id") or "")
     row = m.get("predict_row") or m
@@ -1306,7 +1372,7 @@ def _dashboard_finished_row(m: dict, indexes: dict, *, chief_report: dict | None
         pick = _format_dual_pick(m) if row else "—"
         n_pts = (indexes.get(fid) or {}).get("point_count", 0)
         detail = f'<a href="/match/{_e(fid)}">复盘 ({n_pts})</a>' if fid else "—"
-        chief_cell = _chief_report_list_cell(fid, chief_report)
+        chief_cell = _chief_report_list_cell(fid, chief_report, board=agent_board, match=m)
         return (
             f"<tr><td><a href=\"/match/{_e(fid)}\">{_e(name)}</a></td>"
             f"<td colspan='2'><span class='meta'>待抓取赛果</span></td>"
@@ -1328,7 +1394,7 @@ def _dashboard_finished_row(m: dict, indexes: dict, *, chief_report: dict | None
     hit_sc = _hit_badge(settled.get("hit_score"))
     n_pts = (indexes.get(fid) or {}).get("point_count", 0)
     detail = f'<a href="/match/{_e(fid)}">复盘 ({n_pts})</a>' if fid else "—"
-    chief_cell = _chief_report_list_cell(fid, chief_report)
+    chief_cell = _chief_report_list_cell(fid, chief_report, board=agent_board, match=m)
     return (
         f"<tr><td><a href=\"/match/{_e(fid)}\">{_e(name)}</a></td>"
         f"<td><strong>{_e(score)}</strong> {_e(result_cn)}</td>"
@@ -1386,6 +1452,7 @@ def html_dashboard(
     else:
         active_title = f"未开赛 / 进行中 · {len(all_active)} 场"
 
+    from match_agents.board import load_agent_board_map
     from match_agents.chief import load_chief_report_map
 
     chief_fids = [
@@ -1394,6 +1461,7 @@ def html_dashboard(
         if m.get("fixture_id")
     ]
     chief_map = load_chief_report_map(output_root, chief_fids)
+    board_map = load_agent_board_map(output_root, chief_fids)
 
     active_rows = "".join(
         _dashboard_active_row(
@@ -1401,6 +1469,7 @@ def html_dashboard(
             indexes,
             kickoff_map,
             chief_report=chief_map.get(str(m.get("fixture_id") or "")),
+            agent_board=board_map.get(str(m.get("fixture_id") or "")),
         )
         for m in all_active_enriched
     )
@@ -1412,6 +1481,7 @@ def html_dashboard(
             m,
             indexes,
             chief_report=chief_map.get(str(m.get("fixture_id") or "")),
+            agent_board=board_map.get(str(m.get("fixture_id") or "")),
         )
         for m in finished
     )
@@ -1529,6 +1599,9 @@ def html_dashboard(
         ".chief-list-cell strong { color: #c4b5fd; font-size: 13px; }"
         ".chief-list-cell.chief-risk strong { color: #fdba74; }"
         ".chief-list-cell.chief-skip strong { color: #94a3b8; }"
+        ".chief-list-cell.chief-strong strong { color: #86efac; }"
+        ".chief-list-cell .chief-picks { margin: 4px 0 2px; color: #cbd5e1; font-size: 12px; }"
+        ".chief-list-cell .chief-picks strong { color: #e2e8f0; font-size: 12px; }"
         ".chief-summary { margin: 2px 0 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }"
         ".dashboard-table td:nth-child(8) { min-width: 160px; max-width: 260px; }"
         ".dep-foot { margin-top: 12px; padding-top: 10px; border-top: 1px dashed rgba(255,255,255,0.12); "
@@ -1558,6 +1631,7 @@ def html_dashboard(
   · <a href="/quant">📈 量化回测</a>
   · <a href="/review"><strong>📋 推荐复盘</strong></a>
   · <a href="/settings/ai">🤖 AI 设置</a>
+  · <a href="/settings/agent-pipeline">🔗 Agent 工作流</a>
   · <a href="/kelly">🧮 Kelly</a>
   · 状态 <strong>{run_status}</strong>
 </nav>
@@ -2818,6 +2892,15 @@ def html_agent_workbench(
         "buy_tier": (prediction or {}).get("buy_tier_cn") or (prediction or {}).get("buy_tier"),
     }
     has_archive = bool(counts.get("agent_board") or counts.get("chief_report") or analysis)
+    social_ctx = build_agent_workbench_social_ctx(
+        index=index,
+        prediction=prediction,
+        agent_board=board if board else None,
+        chief_report=chief if chief else None,
+    )
+    social_panel = html_agent_workbench_social_panel(social_ctx, slug="agent-summary")
+    export_fname = re.sub(r"[^\w\u4e00-\u9fff]+", "-", str(name or fid)).strip("-") or f"agent-{fid}"
+    export_script = long_image_export_script(root_id="agent-workbench-export-root", filename=export_fname)
     archive_body = ""
     if has_archive:
         archive_body = f"""
@@ -2837,7 +2920,9 @@ def html_agent_workbench(
     else:
         main_archive = f"""<div class="card"><p class="meta">尚无归档。使用上方「开始流式分析」，完成后最终结论会显示在 Pipeline 下方。</p></div>
 {_growth_agent_panel(growth_report, fid)}"""
-    css = _shared_css("""
+    css = _shared_css(
+        AI_SUMMARY_POSTER_CSS,
+        """
 body { max-width: min(1240px, 100%); }
 .workbench-hero { position: relative; overflow: hidden; border: 1px solid rgba(99,102,241,.22);
   background: radial-gradient(circle at top left, rgba(124,58,237,.20), transparent 34%),
@@ -2950,14 +3035,31 @@ body { max-width: min(1240px, 100%); }
 .log-line.log-warn { color:#fdba74; }
 .log-line.log-err { color:#f87171; }
 #pipeline-results { margin-top:14px; }
+.agent-douyin-module { margin:14px 0 0; }
+.agent-douyin-hint { margin:8px 0 0; color:#94a3b8; font-size:12px; }
+.jc-agent-score-row { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:10px 0 4px; padding:10px 12px; border-radius:12px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.08); }
+.jc-agent-score-label { color:#94a3b8; font-size:12px; }
+.jc-agent-score-row strong { color:#e2e8f0; font-size:15px; letter-spacing:.02em; }
+.jc-safe-watch { margin-top:10px; padding:10px 12px; border-radius:12px; background:rgba(0,0,0,0.22); border:1px solid rgba(255,255,255,0.08); }
+.jc-safe-watch-hd { color:#5eead4; font-size:12px; font-weight:700; margin-bottom:6px; }
+.jc-safe-watch ul { margin:0; padding-left:18px; color:#cbd5e1; font-size:12px; line-height:1.55; }
+.jc-agent-match-title { text-align:center; font-size:22px; font-weight:800; color:#f8fafc; margin:8px 0 14px; }
+.jc-agent-block { margin:10px 0; padding:12px 14px; border-radius:14px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); }
+.jc-agent-block-hd { color:#5eead4; font-size:13px; font-weight:800; letter-spacing:.06em; margin-bottom:8px; }
+.jc-agent-block-lead { color:#e2e8f0; font-size:14px; line-height:1.65; margin:0; }
+.jc-agent-motiv-list { margin:8px 0 0; padding-left:18px; color:#cbd5e1; font-size:12px; line-height:1.6; }
+.jc-agent-result-row { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+.jc-agent-result .jc-hero-score { font-size:28px; }
 @media (max-width: 900px) { .workbench-layout, .workbench-buy-summary, .pipeline-layout { grid-template-columns:1fr; } .workbench-final-head { flex-direction:column; } .pipeline-done-list, .pipeline-console { max-height:240px; } }
-""")
+""",
+    )
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>{_e(name)} · 多 Agent 工作台</title>
 <style>{css}</style>
+{export_script}
 <script>{_AI_BTN_JS}
 function switchAiWorkbenchTab(fid, idx) {{
   const root = document.getElementById('ai-tabs-' + fid);
@@ -2971,7 +3073,7 @@ function switchAiWorkbenchTab(fid, idx) {{
 }}
 </script>
 </head><body>
-<p class="back page-nav"><a href="/match/{_e(fid)}">← 返回单场</a> · <a href="/">首页</a> · <a href="/daily">当日推荐</a> · <a href="/review">推荐复盘</a></p>
+<p class="back page-nav"><a href="/match/{_e(fid)}">← 返回单场</a> · <a href="/">首页</a> · <a href="/settings/agent-pipeline">Agent 工作流</a> · <a href="/daily">当日推荐</a> · <a href="/review">推荐复盘</a></p>
 <section class="workbench-hero">
   <h1>多 Agent 分析工作台 · {_e(name)}</h1>
   <p class="meta">用 profile 编排角色：专家 Agent 产出证据与风险闸门，Chief AI Agent 只基于证据生成最终报告。</p>
@@ -2993,6 +3095,13 @@ function switchAiWorkbenchTab(fid, idx) {{
     <a class="btn" style="background:#2563eb" href="/api/match/{_e(fid)}/agent-workflow" target="_blank" rel="noopener">查看 JSON Workflow</a>
   </div>
 </section>
+<div id="agent-workbench-export-root" data-export-base="{_e(export_fname)}" data-export-bg="#0a0c18">
+<section class="card agent-douyin-wrap">
+  <h3>📱 抖音总结 · 战意 + 胜负</h3>
+  <p class="meta">战意卡片仅含小组出线、积分、胜负关系；点「保存抖音总结图」下载 PNG（无水位/盘口/竞彩）。</p>
+  {social_panel}
+</section>
+</div>
 {_agent_pipeline_runner_html(fid, str(profile), has_archive=has_archive)}
 <div class="workbench-layout">
   <main>
@@ -5735,6 +5844,470 @@ def html_eu_ah_divergence(report: dict) -> str:
 </div>
 
 <p class="meta" style="margin-top:20px">公益体彩 量力而行 · 仅供参考 不构成投注建议</p>
+</body></html>"""
+
+
+def html_agent_pipeline_settings(payload: dict) -> str:
+    import json as _json
+
+    cfg_json = _json.dumps(payload, ensure_ascii=False)
+    cfg_path = payload.get("config_path") or "data/match_agent_weights.json"
+    pipe_css = _shared_css("""
+.hero-card { background: linear-gradient(135deg, #f5f3ff 0%, #fff 55%); border: 1px solid #ddd6fe; }
+.pipe-tabs { display:flex; gap:8px; margin:12px 0 16px; flex-wrap:wrap; }
+.pipe-tab { padding:8px 16px; border:1px solid #cbd5e1; border-radius:999px; background:#fff; cursor:pointer; font-size:13px; }
+.pipe-tab.active { background:#6366f1; color:#fff; border-color:#6366f1; }
+.wf-layout { display:grid; grid-template-columns:240px minmax(0,1fr); gap:16px; align-items:start; }
+@media (max-width:900px) { .wf-layout { grid-template-columns:1fr; } }
+.wf-palette { position:sticky; top:12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:14px; padding:12px; max-height:calc(100vh - 120px); overflow:auto; }
+.wf-palette h3 { margin:0 0 10px; font-size:14px; color:#334155; }
+.wf-palette-section { font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:#64748b; margin:12px 0 6px; }
+.wf-palette-item { display:flex; align-items:center; gap:8px; padding:8px 10px; margin-bottom:6px; background:#fff; border:1px solid #e2e8f0; border-radius:10px; cursor:grab; font-size:12px; color:#334155; user-select:none; }
+.wf-palette-item:active { cursor:grabbing; }
+.wf-palette-item .dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.wf-palette-item.builtin .dot { background:#6366f1; }
+.wf-palette-item.agent .dot { background:#10b981; }
+.wf-palette-item.parallel .dot { background:#0ea5e9; }
+.wf-palette-item.sequential .dot { background:#8b5cf6; }
+.wf-canvas-wrap { min-height:480px; background:linear-gradient(180deg,#fafafa 0%,#f1f5f9 100%); border:1px dashed #cbd5e1; border-radius:16px; padding:20px 16px 28px; }
+.wf-canvas { display:flex; flex-direction:column; align-items:center; gap:0; min-height:200px; }
+.wf-insert { width:min(520px,100%); height:14px; margin:2px 0; border-radius:8px; transition:background .15s,height .15s; }
+.wf-insert.drag-over { height:28px; background:rgba(99,102,241,.18); border:2px dashed #6366f1; }
+.wf-node { width:min(520px,100%); border-radius:14px; background:#fff; border:2px solid #e2e8f0; box-shadow:0 2px 8px rgba(15,23,42,.06); cursor:grab; transition:box-shadow .15s,opacity .15s; }
+.wf-node:active { cursor:grabbing; }
+.wf-node.dragging { opacity:.45; }
+.wf-node.disabled { opacity:.5; }
+.wf-node.type-builtin { border-color:#a5b4fc; }
+.wf-node.type-parallel { border-color:#7dd3fc; }
+.wf-node.type-sequential { border-color:#c4b5fd; }
+.wf-node.type-agent { border-color:#6ee7b7; }
+.wf-node-head { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:10px 12px; border-bottom:1px solid #f1f5f9; }
+.wf-node-badge { font-size:10px; font-weight:700; padding:2px 8px; border-radius:999px; text-transform:uppercase; letter-spacing:.03em; }
+.wf-node-badge.builtin { background:#eef2ff; color:#4338ca; }
+.wf-node-badge.parallel { background:#e0f2fe; color:#0369a1; }
+.wf-node-badge.sequential { background:#ede9fe; color:#6d28d9; }
+.wf-node-badge.agent { background:#d1fae5; color:#047857; }
+.wf-node-title { flex:1; min-width:120px; border:none; background:transparent; font-weight:600; font-size:14px; color:#1e293b; padding:2px 4px; border-radius:6px; }
+.wf-node-title:focus { outline:2px solid #c7d2fe; background:#fff; }
+.wf-node-actions { display:flex; gap:4px; }
+.wf-node-actions button { border:1px solid #e2e8f0; background:#f8fafc; border-radius:8px; padding:3px 8px; font-size:11px; cursor:pointer; }
+.wf-node-body { padding:10px 12px 12px; }
+.wf-agent-zone { min-height:44px; border:2px dashed #e2e8f0; border-radius:10px; padding:8px; display:flex; flex-wrap:wrap; gap:6px; align-items:center; transition:border-color .15s,background .15s; }
+.wf-agent-zone.drag-over { border-color:#6366f1; background:rgba(99,102,241,.06); }
+.wf-agent-zone.empty::before { content:'拖入 Agent 插件'; color:#94a3b8; font-size:12px; width:100%; text-align:center; padding:6px 0; }
+.wf-chip { display:inline-flex; align-items:center; gap:4px; padding:4px 10px; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:999px; font-size:12px; color:#334155; cursor:grab; user-select:none; }
+.wf-chip .rm { border:none; background:transparent; color:#94a3b8; cursor:pointer; font-size:14px; line-height:1; padding:0 2px; }
+.wf-chip .rm:hover { color:#ef4444; }
+.wf-connector { width:2px; height:20px; background:linear-gradient(#cbd5e1,#94a3b8); position:relative; }
+.wf-connector::after { content:''; position:absolute; bottom:-4px; left:50%; transform:translateX(-50%); border:5px solid transparent; border-top-color:#94a3b8; }
+.wf-end-drop { width:min(520px,100%); margin-top:8px; padding:14px; text-align:center; border:2px dashed #cbd5e1; border-radius:12px; color:#64748b; font-size:13px; transition:all .15s; }
+.wf-end-drop.drag-over { border-color:#6366f1; background:rgba(99,102,241,.08); color:#4338ca; }
+.pipe-toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:16px 0 0; }
+#save-status { font-size:13px; color:#64748b; }
+.flow-preview { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; line-height:1.7; color:#475569; white-space:pre-wrap; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px; margin-top:12px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; }
+.wf-hint { font-size:12px; color:#64748b; margin:0 0 12px; }
+""")
+
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Agent 工作流编排</title>
+<style>{pipe_css}</style>
+</head><body>
+<p class="back page-nav"><a href="/">← 返回首页</a> · <a href="/settings/ai">AI 设置</a> · <a href="/daily">当日推荐</a></p>
+
+<div class="card hero-card">
+  <h1>🔗 Agent 工作流编排</h1>
+  <p class="meta">像插件 + 工作流一样拖拽编排：左侧插件库拖入画布，节点可排序，Agent 可拖入并行/顺序组。</p>
+  <p class="meta">配置写入：<code class="mono">{_e(cfg_path)}</code></p>
+</div>
+
+<div class="card">
+  <h2>可视化 Pipeline</h2>
+  <div id="pipe-tabs" class="pipe-tabs"></div>
+  <p class="wf-hint">拖拽节点调整顺序 · 从左侧拖 Agent 到并行/顺序组 · 仅 Chief 调用 AI</p>
+  <div class="wf-layout">
+    <aside class="wf-palette" id="wf-palette"></aside>
+    <div class="wf-canvas-wrap">
+      <div id="wf-canvas" class="wf-canvas"></div>
+      <div id="wf-end-drop" class="wf-end-drop">＋ 拖放插件或节点到末尾</div>
+    </div>
+  </div>
+  <div class="pipe-toolbar">
+    <button type="button" class="btn" id="reset-default-btn" style="background:#64748b">恢复默认编排</button>
+    <button type="button" class="btn" id="save-btn">保存全部</button>
+    <span id="save-status"></span>
+  </div>
+  <details style="margin-top:14px">
+    <summary class="meta" style="cursor:pointer">查看 JSON 预览</summary>
+    <pre id="flow-preview" class="flow-preview"></pre>
+  </details>
+</div>
+
+<script>
+const PIPE_PAYLOAD = {cfg_json};
+let activeProfile = PIPE_PAYLOAD.default_profile || 'cup';
+let state = JSON.parse(JSON.stringify(PIPE_PAYLOAD.profiles || {{}}));
+let dragState = null;
+
+function esc(s) {{
+  const d = document.createElement('div');
+  d.textContent = s == null ? '' : String(s);
+  return d.innerHTML;
+}}
+
+function labelOf(id) {{
+  const reg = [...(PIPE_PAYLOAD.agent_registry || []), ...(PIPE_PAYLOAD.builtin_registry || [])];
+  const hit = reg.find(x => x.id === id);
+  return hit ? (hit.label || id) : id;
+}}
+
+function stages() {{
+  const prof = state[activeProfile];
+  if (!prof) state[activeProfile] = {{ stages: [] }};
+  if (!state[activeProfile].stages) state[activeProfile].stages = [];
+  return state[activeProfile].stages;
+}}
+
+function stageLabel(st) {{
+  if (st.title) return st.title;
+  if (st.type === 'agent') return labelOf(st.agent || st.id);
+  if (st.type === 'builtin') return labelOf(st.id);
+  return st.id || '阶段';
+}}
+
+function newStageFromPalette(kind, id) {{
+  if (kind === 'builtin') {{
+    const titles = {{ input:'输入数据校验', hard_guards:'硬风险闸门', archive:'归档证据板', chief:'Chief AI 总 Agent' }};
+    return {{ id, type:'builtin', title: titles[id] || id, enabled:true, optional: id === 'chief' }};
+  }}
+  if (kind === 'parallel') return {{ id:'parallel_' + Date.now(), type:'parallel', title:'并行组', agents:[], enabled:true }};
+  if (kind === 'sequential') return {{ id:'sequential_' + Date.now(), type:'sequential', title:'顺序组', agents:[], enabled:true }};
+  if (kind === 'agent') return {{ id, type:'agent', agent:id, title: labelOf(id), enabled:true }};
+  return {{ id:'custom_' + Date.now(), type:'sequential', title:'新阶段', agents:[], enabled:true }};
+}}
+
+function renderFlowPreview() {{
+  const el = document.getElementById('flow-preview');
+  if (!el) return;
+  const lines = [];
+  stages().forEach((st, i) => {{
+    if (st.enabled === false) return;
+    const n = i + 1;
+    if (st.type === 'parallel') {{
+      lines.push(n + '. [并行] ' + stageLabel(st));
+      (st.agents || []).forEach(a => lines.push('   ├─ ' + a));
+    }} else if (st.type === 'sequential') {{
+      lines.push(n + '. [顺序] ' + stageLabel(st));
+      (st.agents || []).forEach(a => lines.push('   → ' + a));
+    }} else if (st.type === 'agent') {{
+      lines.push(n + '. ' + (st.agent || st.id));
+    }} else {{
+      lines.push(n + '. [' + st.type + '] ' + (st.id || ''));
+    }}
+  }});
+  el.textContent = lines.join('\\n') || '（空流水线）';
+}}
+
+function renderTabs() {{
+  const box = document.getElementById('pipe-tabs');
+  if (!box) return;
+  box.innerHTML = '';
+  Object.keys(state).forEach(pid => {{
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'pipe-tab' + (pid === activeProfile ? ' active' : '');
+    btn.textContent = pid.toUpperCase() + (state[pid].description ? ' · ' + state[pid].description : '');
+    btn.onclick = () => {{ activeProfile = pid; renderAll(); }};
+    box.appendChild(btn);
+  }});
+}}
+
+function renderPalette() {{
+  const box = document.getElementById('wf-palette');
+  if (!box) return;
+  let html = '<h3>插件库</h3><div class="wf-palette-section">内置节点</div>';
+  (PIPE_PAYLOAD.builtin_registry || []).forEach(b => {{
+    html += '<div class="wf-palette-item builtin" draggable="true" data-drag="palette" data-kind="builtin" data-id="' + esc(b.id) + '">'
+      + '<span class="dot"></span>' + esc(b.label || b.id) + '</div>';
+  }});
+  html += '<div class="wf-palette-section">容器</div>';
+  html += '<div class="wf-palette-item parallel" draggable="true" data-drag="palette" data-kind="parallel" data-id="parallel">'
+    + '<span class="dot"></span>并行组 Parallel</div>';
+  html += '<div class="wf-palette-item sequential" draggable="true" data-drag="palette" data-kind="sequential" data-id="sequential">'
+    + '<span class="dot"></span>顺序组 Sequential</div>';
+  html += '<div class="wf-palette-section">专家 Agent</div>';
+  (PIPE_PAYLOAD.agent_registry || []).forEach(a => {{
+    html += '<div class="wf-palette-item agent" draggable="true" data-drag="palette" data-kind="agent" data-id="' + esc(a.id) + '">'
+      + '<span class="dot"></span>' + esc(a.label || a.id) + '</div>';
+  }});
+  box.innerHTML = html;
+  bindDragSources(box);
+}}
+
+function agentsOfStage(st) {{
+  if (st.type === 'agent') return st.agent ? [st.agent] : [];
+  if (st.type === 'builtin') return [];
+  return st.agents || [];
+}}
+
+function setStageAgents(st, agents) {{
+  if (st.type === 'agent') {{ st.agent = agents[0] || ''; st.id = st.agent; }}
+  else st.agents = agents;
+}}
+
+function renderCanvas() {{
+  const canvas = document.getElementById('wf-canvas');
+  if (!canvas) return;
+  canvas.innerHTML = '';
+  const list = stages();
+  list.forEach((st, idx) => {{
+    const insert = document.createElement('div');
+    insert.className = 'wf-insert';
+    insert.dataset.insertIdx = String(idx);
+    bindDropZone(insert);
+    canvas.appendChild(insert);
+
+    const node = document.createElement('div');
+    const typ = st.type || 'agent';
+    node.className = 'wf-node type-' + typ + (st.enabled === false ? ' disabled' : '');
+    node.draggable = true;
+    node.dataset.drag = 'stage';
+    node.dataset.stageIdx = String(idx);
+
+    const badgeCls = typ === 'builtin' ? 'builtin' : typ;
+    const agents = agentsOfStage(st);
+    let body = '';
+    if (typ === 'parallel' || typ === 'sequential') {{
+      const empty = agents.length ? '' : ' empty';
+      body = '<div class="wf-node-body"><div class="wf-agent-zone' + empty + '" data-zone="agents" data-stage-idx="' + idx + '">'
+        + agents.map((aid, ai) => chipHtml(aid, idx, ai)).join('')
+        + '</div></div>';
+    }} else if (typ === 'agent') {{
+      body = '<div class="wf-node-body"><div class="wf-agent-zone' + (agents.length ? '' : ' empty') + '" data-zone="single" data-stage-idx="' + idx + '">'
+        + (agents[0] ? chipHtml(agents[0], idx, 0) : '') + '</div></div>';
+    }} else {{
+      body = '<div class="wf-node-body"><p class="meta" style="margin:0;font-size:12px">' + esc(labelOf(st.id)) + '</p></div>';
+    }}
+
+    node.innerHTML = '<div class="wf-node-head">'
+      + '<span class="wf-node-badge ' + badgeCls + '">' + esc(typ) + '</span>'
+      + '<input class="wf-node-title" type="text" value="' + esc(stageLabel(st)) + '" data-title-idx="' + idx + '">'
+      + '<label class="meta" style="font-size:11px"><input type="checkbox" data-enabled-idx="' + idx + '"' + (st.enabled !== false ? ' checked' : '') + '> 启用</label>'
+      + '<div class="wf-node-actions"><button type="button" data-del-idx="' + idx + '">删除</button></div>'
+      + '</div>' + body;
+    canvas.appendChild(node);
+    bindDragSources(node);
+
+    const conn = document.createElement('div');
+    conn.className = 'wf-connector';
+    canvas.appendChild(conn);
+  }});
+
+  const tailInsert = document.createElement('div');
+  tailInsert.className = 'wf-insert';
+  tailInsert.dataset.insertIdx = String(list.length);
+  bindDropZone(tailInsert);
+  canvas.appendChild(tailInsert);
+
+  canvas.querySelectorAll('[data-title-idx]').forEach(inp => {{
+    inp.oninput = () => {{ stages()[Number(inp.dataset.titleIdx)].title = inp.value; renderFlowPreview(); }};
+  }});
+  canvas.querySelectorAll('[data-enabled-idx]').forEach(inp => {{
+    inp.onchange = () => {{ stages()[Number(inp.dataset.enabledIdx)].enabled = inp.checked; renderAll(); }};
+  }});
+  canvas.querySelectorAll('[data-del-idx]').forEach(btn => {{
+    btn.onclick = () => {{ stages().splice(Number(btn.dataset.delIdx), 1); renderAll(); }};
+  }});
+  canvas.querySelectorAll('.wf-agent-zone').forEach(zone => bindDropZone(zone));
+  canvas.querySelectorAll('.wf-chip .rm').forEach(btn => {{
+    btn.onclick = e => {{
+      e.stopPropagation();
+      const chip = btn.closest('.wf-chip');
+      const sidx = Number(chip.dataset.stageIdx);
+      const aidx = Number(chip.dataset.agentIdx);
+      const st = stages()[sidx];
+      const arr = agentsOfStage(st).slice();
+      arr.splice(aidx, 1);
+      setStageAgents(st, arr);
+      renderAll();
+    }};
+  }});
+
+  bindDropZone(document.getElementById('wf-end-drop'));
+}}
+
+function chipHtml(aid, stageIdx, agentIdx) {{
+  return '<span class="wf-chip" draggable="true" data-drag="chip" data-agent-id="' + esc(aid) + '" data-stage-idx="' + stageIdx + '" data-agent-idx="' + agentIdx + '">'
+    + esc(labelOf(aid)) + '<button type="button" class="rm" draggable="false" title="移除">×</button></span>';
+}}
+
+function bindDragSources(root) {{
+  root.querySelectorAll('[draggable][data-drag]').forEach(el => {{
+    el.addEventListener('dragstart', e => {{
+      dragState = {{
+        drag: el.dataset.drag,
+        kind: el.dataset.kind || '',
+        id: el.dataset.id || el.dataset.agentId || '',
+        stageIdx: el.dataset.stageIdx != null ? Number(el.dataset.stageIdx) : null,
+        agentIdx: el.dataset.agentIdx != null ? Number(el.dataset.agentIdx) : null,
+      }};
+      el.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', JSON.stringify(dragState));
+    }});
+    el.addEventListener('dragend', () => {{
+      el.classList.remove('dragging');
+      document.querySelectorAll('.drag-over').forEach(x => x.classList.remove('drag-over'));
+      dragState = null;
+    }});
+  }});
+}}
+
+function bindDropZone(zone) {{
+  if (!zone) return;
+  zone.addEventListener('dragover', e => {{
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    zone.classList.add('drag-over');
+  }});
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+  zone.addEventListener('drop', e => {{
+    e.preventDefault();
+    zone.classList.remove('drag-over');
+    if (!dragState) return;
+    handleDrop(zone, dragState);
+    dragState = null;
+  }});
+}}
+
+function handleDrop(zone, drag) {{
+  const list = stages();
+  const isEnd = zone.id === 'wf-end-drop';
+  const insertIdx = isEnd ? list.length : Number(zone.dataset.insertIdx);
+  const zoneType = zone.dataset.zone;
+
+  if (drag.drag === 'palette') {{
+    const st = newStageFromPalette(drag.kind, drag.id);
+    if (drag.kind === 'agent' && zoneType === 'agents') {{
+      const sidx = Number(zone.dataset.stageIdx);
+      const target = list[sidx];
+      if (target && (target.type === 'parallel' || target.type === 'sequential')) {{
+        const arr = (target.agents || []).slice();
+        if (!arr.includes(drag.id)) arr.push(drag.id);
+        target.agents = arr;
+        renderAll();
+        return;
+      }}
+    }}
+    if (drag.kind === 'agent' && zoneType === 'single') {{
+      const sidx = Number(zone.dataset.stageIdx);
+      const target = list[sidx];
+      if (target && target.type === 'agent') {{
+        target.agent = drag.id;
+        target.id = drag.id;
+        target.title = labelOf(drag.id);
+        renderAll();
+        return;
+      }}
+    }}
+    list.splice(insertIdx, 0, st);
+    renderAll();
+    return;
+  }}
+
+  if (drag.drag === 'stage' && drag.stageIdx != null && !zoneType) {{
+    const from = drag.stageIdx;
+    let to = insertIdx;
+    if (from < to) to -= 1;
+    if (from === to) return;
+    const [item] = list.splice(from, 1);
+    list.splice(to, 0, item);
+    renderAll();
+    return;
+  }}
+
+  if (drag.drag === 'chip' && drag.id) {{
+    const agentId = drag.id;
+    const fromStageIdx = drag.stageIdx;
+    const fromAgentIdx = drag.agentIdx;
+
+    function removeFromSource() {{
+      if (fromStageIdx == null || fromAgentIdx == null) return;
+      const src = list[fromStageIdx];
+      if (!src) return;
+      const arr = agentsOfStage(src).slice();
+      arr.splice(fromAgentIdx, 1);
+      setStageAgents(src, arr);
+    }}
+
+    if (zoneType === 'agents' || zoneType === 'single') {{
+      const sidx = Number(zone.dataset.stageIdx);
+      const target = list[sidx];
+      if (!target) return;
+      if (zoneType === 'single' && target.type === 'agent') {{
+        if (fromStageIdx !== sidx) removeFromSource();
+        target.agent = agentId;
+        target.id = agentId;
+        target.title = labelOf(agentId);
+      }} else if (target.type === 'parallel' || target.type === 'sequential') {{
+        if (fromStageIdx !== sidx) removeFromSource();
+        const arr = (target.agents || []).slice();
+        if (!arr.includes(agentId)) arr.push(agentId);
+        target.agents = arr;
+      }}
+      renderAll();
+      return;
+    }}
+
+    if (!zoneType) {{
+      removeFromSource();
+      list.splice(insertIdx, 0, newStageFromPalette('agent', agentId));
+      renderAll();
+    }}
+  }}
+}}
+
+function renderAll() {{
+  renderTabs();
+  renderPalette();
+  renderCanvas();
+  renderFlowPreview();
+}}
+
+document.getElementById('reset-default-btn').onclick = () => {{
+  if (!confirm('恢复 ' + activeProfile + ' 为系统默认编排？未保存的修改将丢失。')) return;
+  fetch('/api/agent-pipeline/config/reset?profile=' + encodeURIComponent(activeProfile), {{ method: 'POST' }})
+    .then(r => r.json())
+    .then(d => {{
+      if (!d.ok) {{ alert(d.error || '恢复失败'); return; }}
+      if (d.profiles && d.profiles[activeProfile]) state[activeProfile] = d.profiles[activeProfile];
+      renderAll();
+      document.getElementById('save-status').textContent = '已恢复默认';
+    }});
+}};
+
+document.getElementById('save-btn').onclick = () => {{
+  const status = document.getElementById('save-status');
+  status.textContent = '保存中…';
+  fetch('/api/agent-pipeline/config', {{
+    method: 'POST',
+    headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{ profiles: Object.fromEntries(Object.entries(state).map(([k,v]) => [k, {{ stages: v.stages }}])) }})
+  }}).then(r => r.json()).then(d => {{
+    if (!d.ok) {{ status.textContent = d.error || '保存失败'; return; }}
+    if (d.profiles) {{
+      Object.keys(d.profiles).forEach(k => {{ state[k] = d.profiles[k]; }});
+    }}
+    status.textContent = '已保存 · ' + (d.path || '');
+    renderAll();
+  }}).catch(err => {{ status.textContent = String(err); }});
+}};
+
+renderAll();
+</script>
 </body></html>"""
 
 

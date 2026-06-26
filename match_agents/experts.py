@@ -1202,6 +1202,171 @@ def memory_agent(pred: dict, index: dict | None = None, *, output_root=None) -> 
     )
 
 
+_OUTCOME_CN = {"home": "主胜", "draw": "平局", "away": "客胜"}
+_CN_TO_OUTCOME = {"主胜": "home", "平局": "draw", "客胜": "away", "平": "draw"}
+
+
+def result_1x2_agent(pred: dict, index: dict | None = None, *, output_root=None) -> AgentReport:
+    """Synthesize 1X2 pick from engine, model, samples and market hints."""
+    votes: dict[str, float] = {"home": 0.0, "draw": 0.0, "away": 0.0}
+    sources: list[str] = []
+    evidence: list[str] = []
+    warnings: list[str] = []
+    row = pred.get("predict_row") or {}
+
+    ref_key = pred.get("result_1x2") or pred.get("reference_result_1x2")
+    ref_cn = pred.get("result_1x2_cn") or pred.get("reference_result_1x2_cn") or row.get("赛果预测")
+    if ref_key in votes:
+        votes[str(ref_key)] += 1.25
+        sources.append("规则引擎")
+        evidence.append(f"规则引擎赛果：{_OUTCOME_CN.get(str(ref_key), ref_cn or ref_key)}")
+    elif ref_cn in _CN_TO_OUTCOME:
+        votes[_CN_TO_OUTCOME[ref_cn]] += 1.25
+        sources.append("规则引擎")
+        evidence.append(f"规则引擎赛果：{ref_cn}")
+
+    sm = (pred.get("quant") or {}).get("score_model") or {}
+    p1 = sm.get("prob_1x2_pct") or {}
+    if isinstance(p1, dict) and p1:
+        for k in ("home", "draw", "away"):
+            v = _safe_float(p1.get(k))
+            if v is not None:
+                votes[k] += (v / 100.0) * 0.9
+        sources.append("Poisson")
+        evidence.append(
+            "模型 1X2："
+            + " / ".join(f"{_OUTCOME_CN[k]}{float(p1.get(k) or 0):.1f}%" for k in ("home", "draw", "away") if p1.get(k) is not None)
+        )
+
+    sim = pred.get("similarity_analysis") or {}
+    for pool_name, pool in (("亚盘样本", sim.get("asian")), ("欧赔样本", sim.get("european"))):
+        rates = (pool or {}).get("result_rates") or {}
+        cnt = int((pool or {}).get("count") or 0)
+        if cnt >= 8 and rates:
+            for k in ("home", "draw", "away"):
+                v = _safe_float(rates.get(k))
+                if v is not None:
+                    votes[k] += v * 0.55
+            sources.append(pool_name)
+            evidence.append(
+                f"{pool_name} {cnt} 场："
+                + " / ".join(f"{_OUTCOME_CN[k]}{_pct(rates.get(k))}" for k in ("home", "draw", "away"))
+            )
+
+    odds = _odds(pred, index)
+    try:
+        from analysis.signals.odds import build_market_signals
+
+        sig = build_market_signals(odds)
+        if sig.ah_side_bias > 0.05:
+            votes["home"] += 0.35
+            evidence.append("亚盘倾向主队")
+        elif sig.ah_side_bias < -0.05:
+            votes["away"] += 0.35
+            evidence.append("亚盘倾向客队")
+    except Exception:
+        pass
+
+    pick_info = pred.get("jingcai_pick_info") or {}
+    jc_key = pick_info.get("jingcai_pick")
+    if jc_key in votes:
+        votes[jc_key] += 0.45
+        sources.append("竞彩")
+        evidence.append(f"竞彩方向：{_OUTCOME_CN.get(jc_key, jc_key)}")
+
+    total = sum(votes.values()) or 1.0
+    best = max(votes, key=lambda k: votes[k])
+    share = votes[best] / total
+    pick_cn = _OUTCOME_CN[best]
+    confidence = min(0.82, 0.32 + share * 0.55)
+    risk = 0.35 if share >= 0.42 else 0.58
+    if not sources:
+        warnings.append("胜负信号来源不足，只能低置信参考")
+        risk = max(risk, 0.62)
+
+    return AgentReport(
+        agent_id="result_1x2",
+        name="胜负研判 Agent",
+        verdict=OUTCOME_TO_VERDICT.get(best, "neutral"),
+        confidence=confidence,
+        risk=risk,
+        weight=_weight("result_1x2", output_root),
+        evidence=evidence[:6] or [f"综合研判：{pick_cn}"],
+        warnings=warnings[:4],
+        recommended_action="watch" if share >= 0.38 else "skip",
+        raw={
+            "pick_1x2": best,
+            "pick_1x2_cn": pick_cn,
+            "vote_share": round(share, 3),
+            "votes": {k: round(v, 3) for k, v in votes.items()},
+            "sources": sources,
+        },
+    )
+
+
+def scoreline_agent(pred: dict, index: dict | None = None, *, output_root=None) -> AgentReport:
+    """Top scorelines from historical + Poisson tracks."""
+    evidence: list[str] = []
+    warnings: list[str] = []
+    raw: dict[str, Any] = {}
+    primary: list[dict[str, Any]] = []
+    try:
+        from analysis.score_recommend import build_score_recommendation
+
+        sr = build_score_recommendation(pred)
+        raw["score_recommendation"] = sr
+        primary = list(sr.get("primary") or [])[:2]
+        top_scores = [str(p.get("score") or "") for p in primary if p.get("score")]
+        raw["top_scores"] = top_scores
+        if sr.get("pick_1x2_cn"):
+            raw["pick_1x2_cn"] = sr["pick_1x2_cn"]
+        if sr.get("disabled"):
+            warnings.append(str(sr.get("headline") or "比分预测已关闭"))
+        elif not primary:
+            warnings.append(str(sr.get("reason") or "暂无比分推荐"))
+        else:
+            detail = " / ".join(
+                f"{p['score']}" + (f"({p['prob_pct']}%)" if p.get("prob_pct") is not None else "")
+                for p in primary
+            )
+            evidence.append(f"Top{len(primary)} 比分：{detail}")
+            if sr.get("summary"):
+                evidence.append(str(sr["summary"])[:160])
+            tracks = sr.get("track_summary") or {}
+            if tracks.get("historical") and tracks.get("historical") != "—":
+                evidence.append(f"历史轨：{tracks['historical']}")
+            if tracks.get("model") and tracks.get("model") != "—":
+                evidence.append(f"模型轨：{tracks['model']}")
+    except Exception as exc:
+        raw["error"] = str(exc)
+        warnings.append(f"比分研判失败：{exc}")
+        top_scores = []
+        primary = []
+
+    margins = _recommended_score_margins(pred)
+    if margins and raw.get("top_scores"):
+        hcap = _extract_handicap(pred)
+        if hcap is not None:
+            near = [s for s in raw["top_scores"] if any(abs(m + hcap) <= 1 for m in margins)]
+            if near:
+                warnings.append("Top 比分贴近让球线，一球差可能改变竞彩结算")
+
+    confidence = 0.62 if primary else 0.3
+    risk = 0.4 if primary else 0.65
+    return AgentReport(
+        agent_id="scoreline",
+        name="比分研判 Agent",
+        verdict="neutral",
+        confidence=confidence,
+        risk=risk,
+        weight=_weight("scoreline", output_root),
+        evidence=evidence[:6] or ["比分数据不足"],
+        warnings=warnings[:4],
+        recommended_action="watch" if primary else "skip",
+        raw=raw,
+    )
+
+
 DEFAULT_EXPERTS = (
     intel_agent,
     external_context_agent,

@@ -293,6 +293,293 @@ def _confidence_to_safe_cn(conf: str) -> str:
     return conf
 
 
+def _decision_to_safe_cn(decision: str) -> str:
+    d = str(decision or "").strip()
+    for key, label in (
+        ("A 可串", "一致性强"),
+        ("B 可单关", "中等把握"),
+        ("C 仅参考", "低把握参考"),
+        ("skip", "建议跳过"),
+        ("观望", "观望"),
+    ):
+        if key in d:
+            return label
+    safe = _tier_to_safe_cn(d)
+    if safe and safe != d:
+        return safe
+    cleaned = _sanitize_export_text(d)
+    return cleaned or "待更新"
+
+
+def _risk_to_safe_cn(risk: str) -> str:
+    r = str(risk or "").strip()
+    if r in ("高", "中", "低"):
+        return f"波动 · {r}"
+    return _sanitize_export_text(r) or ""
+
+
+def _contains_market_terms(text: str) -> bool:
+    bad = (
+        "水位", "盘口", "亚盘", "欧赔", "让球", "竞彩", "上盘", "下盘", "大小球",
+        "降水", "升水", "诱盘", "走盘", "封盘", "初盘", "临盘", "SP", "Kelly", "串关",
+        "购彩", "体彩", "下注", "投注", "赔率",
+    )
+    blob = str(text or "")
+    return any(x in blob for x in bad)
+
+
+def _sanitize_agent_export_text(text: str) -> str:
+    """Stronger sanitizer for multi-agent Douyin export — motivation/result only."""
+    out = _sanitize_export_text(text)
+    extra = [
+        (r"\bAgent\b", ""),
+        (r"Chief|证据板|Pipeline|工作台|智能模块", ""),
+        (r"硬风险闸门?", ""),
+        (r"串关|可串|可单关|仅参考|可跟|可单关", ""),
+        (r"入手|仓位|Kelly|购彩|体彩|下注|投注|购彩", ""),
+        (r"让球(?:\([+\-]?\d+\))?", ""),
+        (r"盘口|亚盘|欧赔|水位|竞彩|上盘|下盘|大小球|降水|升水|诱盘|走盘|封盘|初盘|临盘", ""),
+        (r"SP(?:\s*[\d.]+)?", ""),
+        (r"数据面|走势", ""),
+        (r"欧亚(?:数据|一致性)?", "赛果方向"),
+    ]
+    for pat, repl in extra:
+        out = re.sub(pat, repl, out, flags=re.IGNORECASE)
+    out = re.sub(r"[（(]\s*[）)]", "", out)
+    out = re.sub(r"\s{2,}", " ", out).strip(" ·，,。；;")
+    return out
+
+
+_MOTIVATION_TOPIC_RE = re.compile(
+    r"出线|小组|积分|排名第|净胜球|战意|晋级|淘汰|第三|同组|末轮|"
+    r"默契|轮换|已锁|已达|争夺|打平|平局|战绩|交手|相互|对头|"
+    r"进球数|胜场|负场|平场|积分榜|轮次|出线状态|出线形势|杯赛小组|"
+    r"双方|必须赢|保平|拿分|全取|胜负关系|出线后",
+)
+
+
+def _is_standings_motivation_line(text: str) -> bool:
+    """Only group standings / points / H2H motivation — no market wording."""
+    raw = str(text or "").strip()
+    if len(raw) < 4 or _contains_market_terms(raw):
+        return False
+    clean = _sanitize_agent_export_text(raw)
+    if len(clean) < 4 or _contains_market_terms(clean):
+        return False
+    return bool(_MOTIVATION_TOPIC_RE.search(clean))
+
+
+def _motivation_clean_lines(text: str, *, limit: int = 4) -> list[str]:
+    lines: list[str] = []
+    for chunk in re.split(r"[。\n；;]", str(text or "")):
+        clean = _sanitize_agent_export_text(chunk.strip())
+        if not _is_standings_motivation_line(clean):
+            continue
+        if clean not in lines:
+            lines.append(clean)
+        if len(lines) >= limit:
+            break
+    return lines
+
+
+def _social_clean_lines(text: str, *, limit: int = 4) -> list[str]:
+    lines: list[str] = []
+    for chunk in re.split(r"[。\n；;]", str(text or "")):
+        clean = _sanitize_agent_export_text(chunk.strip())
+        if len(clean) < 4 or _contains_market_terms(clean):
+            continue
+        if clean not in lines:
+            lines.append(clean)
+        if len(lines) >= limit:
+            break
+    return lines
+
+
+def _extract_motivation_judgment(
+    agent_board: dict[str, Any] | None,
+    *,
+    match_name: str = "",
+) -> dict[str, Any]:
+    """小组出线 / 积分 / 胜负关系 — strictly no handicap or lottery terms."""
+    lines: list[str] = []
+    motiv_ids = ("cup_standing", "motivation", "scenario_simulator", "cross_group_path")
+    for agent in (agent_board or {}).get("agents") or []:
+        if str(agent.get("agent_id") or "") not in motiv_ids:
+            continue
+        for ev in agent.get("evidence") or []:
+            clean = _sanitize_agent_export_text(str(ev))
+            if _is_standings_motivation_line(clean) and clean not in lines:
+                lines.append(clean[:160])
+    if not lines and match_name:
+        try:
+            from group_stage_model import analyze_match_from_name
+
+            ma = analyze_match_from_name(match_name)
+            if ma:
+                mt = ma.get("match_type_cn") or ma.get("match_type")
+                if mt:
+                    line = _sanitize_agent_export_text(f"战意类型：{mt}")
+                    if _is_standings_motivation_line(line) and line not in lines:
+                        lines.append(line)
+                for bit in (ma.get("reasoning") or [])[:4]:
+                    clean = _sanitize_agent_export_text(str(bit))
+                    if _is_standings_motivation_line(clean) and clean not in lines:
+                        lines.append(clean[:160])
+        except Exception:
+            pass
+    headline = lines[0] if lines else "暂无小组出线/积分/胜负关系分析，请先运行多智能体分析"
+    return {"headline": headline[:120], "lines": lines[:4]}
+
+
+def build_agent_workbench_social_ctx(
+    *,
+    index: dict | None = None,
+    prediction: dict | None = None,
+    agent_board: dict | None = None,
+    chief_report: dict | None = None,
+) -> dict[str, Any]:
+    """Build Douyin-safe summary context from multi-agent workbench data."""
+    from match_agents.board import merge_result_and_scores, resolve_best_list_verdict
+
+    index = index or {}
+    match_name = str(
+        index.get("match_name")
+        or (prediction or {}).get("match")
+        or (chief_report or {}).get("match_name")
+        or ""
+    ).strip()
+    home, away = split_teams(match_name)
+    verdict = resolve_best_list_verdict(chief_report, board=agent_board, match=prediction)
+    picks = merge_result_and_scores(chief_report, board=agent_board, match=prediction)
+    analysis = (chief_report or {}).get("analysis") or {}
+
+    result_cn = str(picks.get("result_1x2_cn") or analysis.get("result_1x2_cn") or "").strip()
+    top_scores = [str(x).strip() for x in (picks.get("top_scores") or []) if str(x).strip()][:2]
+    motiv = _extract_motivation_judgment(agent_board, match_name=match_name)
+
+    summary_raw = str(verdict.get("summary") or analysis.get("summary") or "").strip()
+    summary_lines = _motivation_clean_lines(summary_raw, limit=2)
+    if not summary_lines:
+        summary_lines = _social_clean_lines(summary_raw, limit=2)
+        summary_lines = [x for x in summary_lines if _is_standings_motivation_line(x) or "胜" in x or "平" in x or "负" in x][:2]
+    if not summary_lines:
+        summary_lines = [x for x in motiv.get("lines") or [] if x != motiv.get("headline")][:2]
+    summary = "。".join(summary_lines)
+    if summary and not summary.endswith("。"):
+        summary += "。"
+    if not summary and not result_cn:
+        summary = "请先运行含 Chief 的流式分析，或等待定时任务生成专家板。"
+
+    watch: list[str] = []
+    for item in (analysis.get("watch_points") or [])[:4]:
+        clean = _sanitize_agent_export_text(str(item))
+        if clean and clean not in watch and _is_standings_motivation_line(clean):
+            watch.append(clean)
+
+    return {
+        "match_name": match_name,
+        "home": home or match_name,
+        "away": away or "",
+        "result_1x2_cn": result_cn if result_cn in ("主胜", "平局", "客胜") else _sanitize_agent_export_text(result_cn) or result_cn,
+        "top_scores": top_scores,
+        "motivation_headline": motiv.get("headline") or "",
+        "motivation_lines": motiv.get("lines") or [],
+        "certainty": str(verdict.get("certainty_label") or verdict.get("confidence") or "—"),
+        "summary": summary,
+        "watch_points": watch,
+        "ready": bool(
+            (motiv.get("lines") or result_cn or top_scores)
+            and summary != "请先运行含 Chief 的流式分析，或等待定时任务生成专家板。"
+        ),
+    }
+
+
+def html_agent_workbench_social_card(ctx: dict[str, Any]) -> str:
+    """Douyin-safe poster: motivation + result only (no handicap/market terms)."""
+    home = _e(ctx.get("home") or "主队")
+    away = _e(ctx.get("away") or "客队")
+    result = _e(ctx.get("result_1x2_cn") or "待更新")
+    scores = ctx.get("top_scores") or []
+    scores_txt = " / ".join(_e(s) for s in scores[:2]) if scores else "—"
+    certainty = _e(ctx.get("certainty") or "—")
+    summary = _e(ctx.get("summary") or "暂无总结，请先完成多智能体分析。")
+    motiv_head = _e(ctx.get("motivation_headline") or "战意信息待更新")
+    motiv_lines = ctx.get("motivation_lines") or []
+    motiv_html = ""
+    extra_lines = [x for x in motiv_lines if x != ctx.get("motivation_headline")][:3]
+    if extra_lines:
+        motiv_html = "<ul class='jc-agent-motiv-list'>" + "".join(f"<li>{_e(x)}</li>" for x in extra_lines) + "</ul>"
+
+    pick_key = {"主胜": "home", "平局": "draw", "客胜": "away"}.get(str(ctx.get("result_1x2_cn") or ""), "")
+    pills_html = ""
+    for key, lbl, active_cls in (
+        ("home", "主", "jc-safe-pill-home"),
+        ("draw", "平", "jc-safe-pill-draw"),
+        ("away", "客", "jc-safe-pill-away"),
+    ):
+        on = " is-on" if pick_key == key else ""
+        pills_html += f'<span class="jc-safe-pill {active_cls}{on}">{lbl}</span>'
+
+    watch_html = ""
+    for w in ctx.get("watch_points") or []:
+        watch_html += f"<li>{_e(w)}</li>"
+    watch_block = ""
+    if watch_html:
+        watch_block = f'<div class="jc-safe-watch"><div class="jc-safe-watch-hd">赛前关注</div><ul>{watch_html}</ul></div>'
+
+    return f"""
+<div class="jc-poster jc-poster-safe agent-douyin-poster">
+  <div class="jc-safe-top">
+    <div class="jc-safe-brand">FIFA WORLD CUP · 战意与赛果研判</div>
+  </div>
+  <div class="jc-hero-match jc-agent-match-title">{home} <span class="jc-vs-inline">VS</span> {away}</div>
+  <div class="jc-agent-block jc-agent-motiv">
+    <div class="jc-agent-block-hd">战意分析 · 小组出线 / 积分 / 胜负关系</div>
+    <p class="jc-agent-block-lead">{motiv_head}</p>
+    {motiv_html}
+  </div>
+  <div class="jc-agent-block jc-agent-result">
+    <div class="jc-agent-block-hd">胜负判断</div>
+    <div class="jc-agent-result-row">
+      <div class="jc-hero-score">{result}</div>
+      <div class="jc-safe-pills">{pills_html}</div>
+    </div>
+    <div class="jc-agent-score-row">
+      <span class="jc-agent-score-label">可能比分</span>
+      <strong>{scores_txt}</strong>
+    </div>
+  </div>
+  <div class="jc-safe-synth">
+    <div class="jc-safe-synth-hd">综合说明</div>
+    <p>{summary}</p>
+  </div>
+  {watch_block}
+  <div class="jc-safe-meta-row"><span class="jc-safe-meta-chip">确认度 · {certainty}</span></div>
+  <div class="jc-safe-foot">世界杯数据研判 · 仅供交流参考 · #世界杯 #战意分析 #足球数据</div>
+</div>"""
+
+
+def html_agent_workbench_social_panel(ctx: dict[str, Any], *, slug: str = "agent-douyin") -> str:
+    """Export module with Douyin-safe poster + save button."""
+    poster = html_agent_workbench_social_card(ctx)
+    btn = (
+        '<button type="button" class="btn-poster-save export-hide" '
+        'onclick="saveModuleImage(this)">📷 保存抖音总结图</button>'
+    )
+    hint = (
+        '<p class="meta agent-douyin-hint export-hide">'
+        "存图版只展示<strong>战意分析（小组出线·积分·胜负关系）</strong>与<strong>胜负判断</strong>，不含水位/盘口/竞彩等词。"
+        "</p>"
+    )
+    return (
+        f'<div class="export-module export-module-poster agent-douyin-module" data-export-slug="{_e(slug)}">'
+        f'<div class="export-poster-actions">{btn}{hint}</div>'
+        f'<div class="export-poster export-poster-screen export-hide">{poster}</div>'
+        f'<div class="export-poster export-poster-safe">{poster}</div>'
+        f"</div>"
+    )
+
+
 def _latest_jingcai(timeline: list | None) -> dict:
     for p in reversed(timeline or []):
         jc = (p.get("odds") or {}).get("jingcai")

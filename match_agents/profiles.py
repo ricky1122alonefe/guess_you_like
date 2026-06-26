@@ -22,6 +22,8 @@ AGENT_REGISTRY: dict[str, AgentFn] = {
     "contrarian": experts.contrarian_agent,
     "memory": experts.memory_agent,
     "history": experts.history_agent,
+    "result_1x2": experts.result_1x2_agent,
+    "scoreline": experts.scoreline_agent,
     "asian_handicap": experts.asian_handicap_agent,
     "european_odds": experts.european_odds_agent,
     "jingcai": experts.jingcai_agent,

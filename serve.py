@@ -71,6 +71,7 @@ _API_DEEP_RE = re.compile(r"^/api/match/(\d+)/deep-analyze$")
 _API_AGENT_BOARD_RE = re.compile(r"^/api/match/(\d+)/agent-board$")
 _API_CHIEF_AGENT_RE = re.compile(r"^/api/match/(\d+)/chief-agent$")
 _API_AGENT_WORKFLOW_RE = re.compile(r"^/api/match/(\d+)/agent-workflow$")
+_API_GROWTH_AGENT_RE = re.compile(r"^/api/match/(\d+)/growth-agent$")
 _API_SCORE_RE = re.compile(r"^/api/match/(\d+)/score-recommend$")
 _API_SWEET_RE = re.compile(r"^/api/match/(\d+)/sweet-spot$")
 _API_CHAT_RE = re.compile(r"^/api/match/(\d+)/chat-stream$")
@@ -599,6 +600,7 @@ class Handler(BaseHTTPRequestHandler):
             ai_records = load_ai_records(root, fid)
             deep_records = load_deep_analyses(root, fid)
             from match_agents.chief import load_latest_agent_board, load_latest_chief_report
+            from match_agents.growth import load_latest_growth_report
             from match_agents.workflow import build_agent_workflow
 
             self._send_html(html_agent_workbench(
@@ -607,6 +609,7 @@ class Handler(BaseHTTPRequestHandler):
                 agent_board=load_latest_agent_board(root, fid),
                 chief_report=load_latest_chief_report(root, fid),
                 agent_workflow=build_agent_workflow(root, fid),
+                growth_report=load_latest_growth_report(root, fid),
                 ai_records=ai_records,
                 deep_records=deep_records,
             ))
@@ -689,6 +692,30 @@ class Handler(BaseHTTPRequestHandler):
             from match_agents.workflow import build_agent_workflow
 
             self._send_json(build_agent_workflow(root, awm.group(1)))
+            return
+
+        grm = _API_GROWTH_AGENT_RE.match(path)
+        if grm:
+            fid = grm.group(1)
+            from match_agents.growth import build_growth_report, load_latest_growth_report
+            from match_agents.chief import load_latest_agent_board, load_latest_chief_report
+            from match_settlement import load_settled_map
+
+            latest = load_latest_growth_report(root, fid)
+            if latest:
+                self._send_json(latest)
+                return
+            pred = _load_latest_pred(root, fid)
+            idx = _load_match_index(root, fid) or {}
+            report = build_growth_report(
+                fid,
+                prediction=pred,
+                index=idx,
+                board=load_latest_agent_board(root, fid),
+                chief=load_latest_chief_report(root, fid),
+                settled=load_settled_map(root).get(fid),
+            )
+            self._send_json(report)
             return
 
         sm = _API_SCORE_RE.match(path)
@@ -1189,6 +1216,30 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "请求体须为 JSON"}, 400)
             except Exception as exc:
                 log.exception("多 Agent 总分析失败 fid=%s", fid)
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        grm_post = _API_GROWTH_AGENT_RE.match(path)
+        if grm_post:
+            fid = grm_post.group(1)
+            try:
+                pred = _load_latest_pred(self.output_root, fid)
+                idx = _load_match_index(self.output_root, fid) or {}
+                from match_agents.chief import load_latest_agent_board, load_latest_chief_report
+                from match_agents.growth import build_and_archive_growth_report
+                from match_settlement import load_settled_map
+
+                report = build_and_archive_growth_report(
+                    self.output_root,
+                    fid,
+                    prediction=pred,
+                    index=idx,
+                    board=load_latest_agent_board(self.output_root, fid),
+                    chief=load_latest_chief_report(self.output_root, fid),
+                    settled=load_settled_map(self.output_root).get(fid),
+                )
+                self._send_json(report)
+            except Exception as exc:
+                log.exception("自我成长 Agent 失败 fid=%s", fid)
                 self._send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/kelly/calc":

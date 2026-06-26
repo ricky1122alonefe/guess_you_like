@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from .config import agent_weight, load_match_agent_config
@@ -865,13 +867,310 @@ def league_pressure_agent(pred: dict, index: dict | None = None, *, output_root=
     )
 
 
+def late_confirmation_agent(pred: dict, index: dict | None = None, *, output_root=None) -> AgentReport:
+    """Pre-kickoff checklist: lineups, closing odds, weather and data freshness."""
+    evidence: list[str] = []
+    warnings: list[str] = []
+    raw: dict[str, Any] = {}
+    kickoff = _kickoff_value(pred, index)
+    run_id = str(pred.get("run_id") or "")
+    risk = 0.45
+    confidence = 0.35
+
+    if kickoff:
+        evidence.append(f"已识别开球时间：{kickoff}")
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                ko = datetime.strptime(kickoff[: len(fmt)], fmt)
+                if run_id and len(run_id) >= 16:
+                    ts = datetime.strptime(run_id[:16], "%Y-%m-%d_%H%M")
+                    hours = round((ko - ts).total_seconds() / 3600, 1)
+                    raw["lead_hours"] = hours
+                    evidence.append(f"当前预测距开球约 {hours:g} 小时")
+                    if hours > 3:
+                        risk = max(risk, 0.72)
+                        warnings.append("预测快照距离开球超过 3 小时，必须临场复核终盘/首发/天气")
+                    elif 0 <= hours <= 3:
+                        confidence = max(confidence, 0.55)
+                        evidence.append("处于临场窗口，可用于终盘确认")
+                break
+            except ValueError:
+                continue
+    else:
+        risk = max(risk, 0.75)
+        warnings.append("缺少开球时间，无法判断是否需要临场复核")
+
+    odds = _odds(pred, index)
+    raw["odds_keys"] = sorted(k for k, v in odds.items() if v is not None)
+    if odds.get("ah_line") is not None and odds.get("eu_home") is not None:
+        evidence.append("已有当前亚盘/欧赔快照")
+    else:
+        risk = max(risk, 0.7)
+        warnings.append("缺少当前亚盘或欧赔快照，不能当作临场版结论")
+    if not pred.get("lineup") and not pred.get("lineups"):
+        warnings.append("未接入首发阵容；开球前必须复核主力轮换、门将和中轴线")
+    if not pred.get("injury_report") and not pred.get("injuries"):
+        warnings.append("未接入可靠伤停；总 Agent 只能标注缺失，不能补故事")
+
+    return AgentReport(
+        agent_id="late_confirmation",
+        name="临场确认 Agent",
+        verdict="risk" if risk >= 0.7 else "neutral",
+        confidence=confidence,
+        risk=risk,
+        weight=_weight("late_confirmation", output_root),
+        evidence=evidence or ["临场确认数据不足"],
+        warnings=warnings[:6],
+        recommended_action="watch" if risk < 0.75 else "skip",
+        raw=raw,
+    )
+
+
+def scenario_simulator_agent(pred: dict, index: dict | None = None, *, output_root=None) -> AgentReport:
+    """Cup scenario simulator for group/cross-group knock-on effects."""
+    match_name = _match_name(pred, index)
+    evidence: list[str] = []
+    warnings: list[str] = []
+    raw: dict[str, Any] = {}
+    risk = 0.35
+    confidence = 0.35
+    try:
+        from analysis.tournament.group_knockout_outlook import outlook_for_match
+        outlook = outlook_for_match(match_name)
+        raw["outlook"] = outlook
+        if outlook.get("ok"):
+            group = outlook.get("group")
+            if group:
+                evidence.append(f"{group}组场景：需联动同组另一场与跨组第三排名")
+            best = outlook.get("best_third_live") or {}
+            rows = best.get("rows") or []
+            boundary = [r for r in rows if r.get("third_rank") in (7, 8, 9, 10)][:5]
+            if boundary:
+                risk = max(risk, 0.75)
+                warnings.append("最佳第三边界队伍接近，胜/平/净胜球变化会影响多队决策")
+                evidence.append("边界第三：" + "；".join(
+                    f"{r.get('group')}组{r.get('team')}第{r.get('third_rank')}"
+                    for r in boundary
+                ))
+            grp = outlook.get("group_outlook") or {}
+            team_lines = []
+            for team in grp.get("teams") or []:
+                scenarios = team.get("rank_scenarios") or []
+                if scenarios:
+                    risk = max(risk, 0.68)
+                    team_lines.append(
+                        f"{team.get('team')}：" + " / ".join(
+                            f"第{s.get('rank')}→{s.get('r32_summary')}" for s in scenarios[:3]
+                        )
+                    )
+            if team_lines:
+                evidence.extend(x[:180] for x in team_lines[:4])
+                confidence = max(confidence, 0.62)
+    except Exception as exc:
+        raw["outlook_error"] = str(exc)
+        warnings.append("场景模拟读取出线/签位数据失败")
+
+    try:
+        from group_stage_model import analyze_match_from_name
+        ma = analyze_match_from_name(match_name)
+        raw["motivation"] = ma
+        if ma and ma.get("match_type") in ("must_win", "gd_race", "draw_friendly", "collusion_watch"):
+            risk = max(risk, 0.78)
+            evidence.append("战意场景：" + "；".join(str(x) for x in (ma.get("reasoning") or [])[:3])[:180])
+            warnings.append("不同比分场景下战术目标可能改变，不能只用单一赛果预测")
+    except Exception as exc:
+        raw["motivation_error"] = str(exc)
+
+    if not evidence:
+        evidence.append("未读取到可模拟的杯赛联动场景")
+        warnings.append("缺少同组/跨组场景数据，出线压力只能低置信参考")
+        risk = max(risk, 0.55)
+    return AgentReport(
+        agent_id="scenario_simulator",
+        name="杯赛场景模拟 Agent",
+        verdict="risk" if risk >= 0.7 else "neutral",
+        confidence=confidence,
+        risk=risk,
+        weight=_weight("scenario_simulator", output_root),
+        evidence=evidence[:8],
+        warnings=warnings[:5],
+        recommended_action="watch" if risk < 0.8 else "skip",
+        raw=raw,
+    )
+
+
+def market_consistency_agent(pred: dict, index: dict | None = None, *, output_root=None) -> AgentReport:
+    """Judge whether European odds and Asian handicap express the same attitude."""
+    odds = _odds(pred, index)
+    evidence: list[str] = []
+    warnings: list[str] = []
+    raw: dict[str, Any] = {"odds": odds}
+    risk = 0.35
+    confidence = 0.35
+    verdict = "neutral"
+    try:
+        from eu_implied_metrics import compute_eu_implied
+        live = compute_eu_implied(odds.get("eu_home"), odds.get("eu_draw"), odds.get("eu_away"))
+        if live:
+            raw["eu_live"] = live.to_dict()
+            probs = {"home": live.fair_home_pct, "draw": live.fair_draw_pct, "away": live.fair_away_pct}
+            eu_side = max(probs, key=probs.get)
+            verdict = OUTCOME_TO_VERDICT.get(eu_side, "neutral")
+            evidence.append(f"欧赔态度：{eu_side} 概率最高 {probs[eu_side]:.1f}%")
+            line = _safe_float(odds.get("ah_line"))
+            if line is not None:
+                ah_side = "home" if line < 0 else ("away" if line > 0 else "balanced")
+                raw["ah_side"] = ah_side
+                evidence.append(f"亚盘态度：主视角盘口 {line:+g}，倾向 {ah_side}")
+                if ah_side != "balanced" and eu_side in ("home", "away") and ah_side != eu_side:
+                    risk = max(risk, 0.82)
+                    warnings.append("欧赔主方向与亚盘让球方向不一致，存在诱盘/分歧风险")
+                elif ah_side != "balanced" and eu_side == ah_side:
+                    confidence = max(confidence, 0.62)
+                    evidence.append("欧赔与亚盘主方向一致")
+                if abs(line) >= 2 and probs.get(ah_side if ah_side != "balanced" else eu_side, 0) < 68:
+                    risk = max(risk, 0.78)
+                    warnings.append("亚盘大让球但欧赔优势没有明显拉开，净胜球风险偏高")
+    except Exception as exc:
+        raw["error"] = str(exc)
+        warnings.append("欧亚一致性解析失败")
+    if not evidence:
+        evidence.append("欧赔/亚盘数据不足，无法判断欧亚态度是否一致")
+        risk = max(risk, 0.6)
+    return AgentReport(
+        agent_id="market_consistency",
+        name="欧亚一致性 Agent",
+        verdict="risk" if risk >= 0.75 else verdict,
+        confidence=confidence,
+        risk=risk,
+        weight=_weight("market_consistency", output_root),
+        evidence=evidence,
+        warnings=warnings,
+        recommended_action="watch" if risk < 0.8 else "skip",
+        raw=raw,
+    )
+
+
+def contrarian_agent(pred: dict, index: dict | None = None, *, output_root=None) -> AgentReport:
+    """Always argue against buying; useful for suppressing overconfident stories."""
+    evidence: list[str] = []
+    warnings: list[str] = []
+    risk = 0.35
+    row = pred.get("predict_row") or {}
+    pick = row.get("竞彩推荐") or pred.get("pick_jingcai_cn") or ""
+    if pick:
+        evidence.append(f"当前推荐：{pick}")
+    hcap = _extract_handicap(pred)
+    if hcap is not None and abs(hcap) >= 2:
+        risk = max(risk, 0.88)
+        warnings.append("反方观点：大让球需要净胜球兑现，强队赢球不等于赢盘/让胜")
+    conf = pred.get("confidence_cn") or row.get("置信度")
+    if conf and conf != "高":
+        risk = max(risk, 0.65)
+        warnings.append(f"反方观点：置信度为 {conf}，不适合当稳胆")
+    risk_cn = pred.get("risk_level_cn")
+    if risk_cn in ("升高", "显著升高", "高"):
+        risk = max(risk, 0.75)
+        warnings.append(f"反方观点：系统风险等级 {risk_cn}，应先解释不买理由")
+    if not pred.get("lineup") and not pred.get("injury_report"):
+        warnings.append("反方观点：缺少首发/伤停，热门方向容易被赛前信息反转")
+        risk = max(risk, 0.62)
+    odds = _odds(pred, index)
+    line = _safe_float(odds.get("ah_line"))
+    open_line = _safe_float(odds.get("ah_open_line"))
+    if line is not None and open_line is not None and abs(line - open_line) >= 0.5:
+        risk = max(risk, 0.72)
+        warnings.append("反方观点：盘口移动较大，可能已透支或诱导热门")
+    if not warnings:
+        evidence.append("未找到强反方风险，但仍需避免无条件升为 A 档")
+    return AgentReport(
+        agent_id="contrarian",
+        name="反方辩手 Agent",
+        verdict="risk" if risk >= 0.65 else "neutral",
+        confidence=0.65 if risk >= 0.65 else 0.35,
+        risk=risk,
+        weight=_weight("contrarian", output_root),
+        evidence=evidence,
+        warnings=warnings[:6],
+        recommended_action="watch" if risk < 0.82 else "skip",
+        raw={"pick": pick, "handicap": hcap},
+    )
+
+
+def memory_agent(pred: dict, index: dict | None = None, *, output_root=None) -> AgentReport:
+    """Search prior GrowthAgent reports for reusable error patterns."""
+    evidence: list[str] = []
+    warnings: list[str] = []
+    raw: dict[str, Any] = {}
+    risk = 0.35
+    confidence = 0.25
+    if output_root:
+        root = Path(output_root)
+        records = []
+        for p in (root / "matches").glob("*/growth_report.jsonl") if (root / "matches").is_dir() else []:
+            try:
+                for line in p.read_text(encoding="utf-8").splitlines()[-3:]:
+                    if not line.strip():
+                        continue
+                    import json
+                    records.append(json.loads(line))
+            except Exception:
+                continue
+        raw["growth_count"] = len(records)
+        miss_records = [r for r in records if r.get("status") == "learned_miss"]
+        hcap = _extract_handicap(pred)
+        matched = []
+        for r in miss_records:
+            diag = r.get("diagnosis") or {}
+            tags = diag.get("tags") or []
+            if hcap is not None and abs(hcap) >= 2 and "大让球" in tags:
+                matched.append(r)
+            elif "RQSP" in tags and "让球" in str((pred.get("predict_row") or {}).get("竞彩推荐") or ""):
+                matched.append(r)
+        raw["matched_count"] = len(matched)
+        if matched:
+            risk = max(risk, 0.78)
+            confidence = 0.65
+            evidence.append(f"历史成长库命中 {len(matched)} 个相似错误模式")
+            for r in matched[:3]:
+                evidence.append(f"{r.get('match_name')}：{(r.get('diagnosis') or {}).get('tags')}")
+            warnings.append("当前场景接近历史翻车样本，Chief 必须解释为何本场不一样，否则降级")
+        elif records:
+            evidence.append(f"已读取成长记忆 {len(records)} 条，未命中强相似错误模式")
+            confidence = 0.45
+        else:
+            evidence.append("暂无历史成长记忆，先累计完赛复盘样本")
+            warnings.append("记忆库为空，不能声称已吸收历史错误模式")
+    else:
+        evidence.append("未提供 output_root，无法读取成长记忆库")
+        warnings.append("Growth 历史记忆未参与本场判断")
+        risk = 0.55
+    return AgentReport(
+        agent_id="memory",
+        name="成长记忆库 Agent",
+        verdict="risk" if risk >= 0.7 else "neutral",
+        confidence=confidence,
+        risk=risk,
+        weight=_weight("memory", output_root),
+        evidence=evidence[:6],
+        warnings=warnings[:4],
+        recommended_action="watch" if risk < 0.8 else "skip",
+        raw=raw,
+    )
+
+
 DEFAULT_EXPERTS = (
     intel_agent,
     external_context_agent,
     schedule_venue_agent,
+    late_confirmation_agent,
     opening_structure_agent,
+    scenario_simulator_agent,
     goal_swing_agent,
     cross_group_path_agent,
+    market_consistency_agent,
+    contrarian_agent,
+    memory_agent,
     history_agent,
     asian_handicap_agent,
     european_odds_agent,

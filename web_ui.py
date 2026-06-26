@@ -119,6 +119,26 @@ function aiChiefAnalyze(fid, btn) {
     });
 }
 
+function growthAnalyze(fid, btn) {
+  const b = btn || (typeof event !== 'undefined' && event.target);
+  if (b) { b.disabled = true; b.textContent = '成长复盘中…'; }
+  fetch('/api/match/' + fid + '/growth-agent', {method:'POST'})
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) {
+        showToast(d.error || '自我成长复盘失败', true);
+        if (b) { b.disabled = false; b.textContent = b.dataset.label || '生成成长报告'; }
+        return;
+      }
+      showToast('✅ 自我成长报告已生成，刷新页面…');
+      setTimeout(() => location.reload(), 900);
+    })
+    .catch(e => {
+      showToast('请求失败: ' + e, true);
+      if (b) { b.disabled = false; b.textContent = b.dataset.label || '生成成长报告'; }
+    });
+}
+
 function escHtmlSim(s) {
   const d = document.createElement('div');
   d.textContent = s == null ? '' : String(s);
@@ -2405,6 +2425,58 @@ def _buy_summary_panel(chief_report: dict | None, board: dict | None, prediction
 </div>"""
 
 
+def _growth_agent_panel(growth_report: dict | None, fid: str) -> str:
+    if not growth_report:
+        return f"""
+<div class="card growth-card missing">
+  <div class="growth-head">
+    <div>
+      <h3>自我成长 Agent</h3>
+      <p class="meta">完赛结算后生成：它会把赛果、硬风控、各 Agent 表现和 Chief 决策合并，沉淀下一场可复用的教训。</p>
+    </div>
+    <button type="button" class="btn" data-label="生成成长报告" onclick="growthAnalyze('{_e(fid)}', this)">生成成长报告</button>
+  </div>
+</div>"""
+    lessons = growth_report.get("lessons") or []
+    updates = growth_report.get("agent_updates") or []
+    suggestions = growth_report.get("policy_suggestions") or []
+    gaps = growth_report.get("data_gaps") or []
+    notes = growth_report.get("next_prompt_notes") or []
+    outcome = growth_report.get("outcome") or {}
+    def _items(items, fn):
+        return "".join(fn(x) for x in items) or "<li>暂无</li>"
+    lesson_html = _items(lessons, lambda x: (
+        f"<li><strong>{_e(x.get('priority') or '')} {_e(x.get('title') or '')}</strong>"
+        f"<p class='meta'>{_e(x.get('action') or '')}</p></li>"
+    ))
+    update_html = _items(updates[:8], lambda x: (
+        f"<li><strong>{_e(x.get('agent_id'))}</strong> · {_e(x.get('action'))} "
+        f"<span class='meta'>delta {_e(x.get('suggested_delta'))}</span>"
+        f"<p class='meta'>{_e(x.get('reason') or '')}</p></li>"
+    ))
+    suggestion_html = _items(suggestions[:8], lambda x: f"<li><strong>{_e(x.get('priority') or '')}</strong> {_e(x.get('suggestion') or '')}</li>")
+    gap_html = _items(gaps[:8], lambda x: f"<li>{_e(x)}</li>")
+    note_html = _items(notes[:8], lambda x: f"<li>{_e(x)}</li>")
+    status = growth_report.get("status") or "—"
+    return f"""
+<div class="card growth-card growth-{_e(status)}">
+  <div class="growth-head">
+    <div>
+      <h3>自我成长 Agent <span class="tag">{_e(status)}</span></h3>
+      <p class="meta">生成 {_e(growth_report.get('generated_at') or '—')} · 赛果 {_e(outcome.get('score_text') or '—')} · 命中 {_e(outcome.get('hit_1x2'))}</p>
+    </div>
+    <button type="button" class="btn" data-label="重新生成成长报告" onclick="growthAnalyze('{_e(fid)}', this)">重新生成成长报告</button>
+  </div>
+  <div class="growth-grid">
+    <div><h4>本场学到什么</h4><ul>{lesson_html}</ul></div>
+    <div><h4>Agent 调整建议</h4><ul>{update_html}</ul></div>
+    <div><h4>规则/策略建议</h4><ul>{suggestion_html}</ul></div>
+    <div><h4>数据缺口</h4><ul>{gap_html}</ul></div>
+  </div>
+  {_fold('下一轮 Prompt 注意事项', f"<ul class='deep-list'>{note_html}</ul>", muted=True, open=True)}
+</div>"""
+
+
 def html_agent_workbench(
     index: dict,
     *,
@@ -2412,6 +2484,7 @@ def html_agent_workbench(
     agent_board: dict | None = None,
     chief_report: dict | None = None,
     agent_workflow: dict | None = None,
+    growth_report: dict | None = None,
     ai_records: list[dict] | None = None,
     deep_records: list[dict] | None = None,
 ) -> str:
@@ -2483,6 +2556,15 @@ body { max-width: min(1240px, 100%); }
 .workbench-buy-summary.buy-ok h2 { color:#166534; }
 .buy-summary-side { background:rgba(255,255,255,.62); border:1px solid rgba(255,255,255,.85); border-radius:14px; padding:12px; }
 .buy-summary-side ul { margin:10px 0 0; padding-left:18px; color:#475569; font-size:13px; line-height:1.6; }
+.growth-card { border-left:5px solid #0d9488; }
+.growth-card.missing { border-left-color:#94a3b8; background:#f8fafc; }
+.growth-card.growth-learned_miss { border-left-color:#f97316; background:#fff7ed; }
+.growth-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:12px; }
+.growth-head h3 { margin:0 0 4px; }
+.growth-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr)); gap:12px; }
+.growth-grid > div { background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:10px; }
+.growth-grid h4 { color:#0f766e; }
+.growth-grid ul { margin:0; padding-left:18px; font-size:13px; line-height:1.6; color:#334155; }
 .workbench-final { background:#fff; border:1px solid #ddd6fe; border-left:5px solid #8b5cf6; border-radius:16px; padding:16px; box-shadow:0 10px 30px rgba(88,28,135,.08); }
 .workbench-final.missing { border-left-color:#94a3b8; background:#f8fafc; }
 .workbench-final-head { display:flex; gap:12px; align-items:flex-start; justify-content:space-between; margin-bottom:8px; }
@@ -2552,6 +2634,8 @@ function switchAiWorkbenchTab(fid, idx) {{
   <div class="workbench-actions">
     <button type="button" class="btn" style="background:#9333ea" data-label="运行多 Agent 总分析"
       onclick="aiChiefAnalyze('{_e(fid)}', this)">运行多 Agent 总分析</button>
+    <button type="button" class="btn" style="background:#0d9488" data-label="生成成长报告"
+      onclick="growthAnalyze('{_e(fid)}', this)">生成成长报告</button>
     <a class="btn" style="background:#2563eb" href="/api/match/{_e(fid)}/agent-workflow" target="_blank" rel="noopener">查看 JSON Workflow</a>
     <a class="btn" style="background:#64748b" href="/api/match/{_e(fid)}/agent-board" target="_blank" rel="noopener">重新生成证据板</a>
   </div>
@@ -2561,6 +2645,7 @@ function switchAiWorkbenchTab(fid, idx) {{
     {_agent_final_panel(chief_report)}
     {_ai_model_tabs(prediction, ai_records, deep_records, fid)}
     {_agent_workflow_card(agent_workflow)}
+    {_growth_agent_panel(growth_report, fid)}
   </main>
   <aside>
     <div class="card">

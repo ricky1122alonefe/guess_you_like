@@ -40,6 +40,11 @@ def _hard_guards(agents: list[AgentReport]) -> list[str]:
     goal_swing = by_id.get("goal_swing")
     schedule_venue = by_id.get("schedule_venue")
     cross_group = by_id.get("cross_group_path")
+    late = by_id.get("late_confirmation")
+    scenario = by_id.get("scenario_simulator")
+    market_consistency = by_id.get("market_consistency")
+    contrarian = by_id.get("contrarian")
+    memory = by_id.get("memory")
 
     if jc and jc.risk >= 0.9:
         guards.append("竞彩 Agent 识别到仅让球/大让球硬风险，禁止升级为稳健串关")
@@ -51,6 +56,16 @@ def _hard_guards(agents: list[AgentReport]) -> list[str]:
         guards.append("一球杠杆 Agent 识别到 1 个进球可能改变出线/让球结算，禁止升级为稳健串关")
     if cross_group and cross_group.risk >= 0.8:
         guards.append("跨组出线路径 Agent 识别到最佳第三/32强路径/默契球风险，必须降级或观望")
+    if late and late.risk >= 0.7:
+        guards.append("临场确认 Agent 识别到首发/终盘/时间窗口缺口，当前报告不能当作最终临场版")
+    if scenario and scenario.risk >= 0.78:
+        guards.append("杯赛场景模拟 Agent 识别到同组/跨组结果联动，必须解释不同比分场景")
+    if market_consistency and market_consistency.risk >= 0.8:
+        guards.append("欧亚一致性 Agent 识别到欧赔与亚盘态度不一致，必须降级或观望")
+    if contrarian and contrarian.risk >= 0.82:
+        guards.append("反方辩手 Agent 给出强不买理由，禁止升级为稳健串关")
+    if memory and memory.risk >= 0.75:
+        guards.append("成长记忆库 Agent 命中历史相似翻车模式，必须降级并解释差异")
     if intel and intel.raw.get("status") == "insufficient_data":
         guards.append("情报 Agent 未接入可靠伤停/天气/首发，AI 不得编造外部情报")
     if external and external.raw.get("status") == "insufficient_data":

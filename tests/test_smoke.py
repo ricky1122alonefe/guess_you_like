@@ -1409,6 +1409,7 @@ def test_review_agent_diagnosis_and_page_render():
 def test_match_agents_board_and_guardrail_render():
     from match_agents import build_agent_board
     from match_agents.chief import _guardrail_downgrade
+    from match_agents.growth import build_and_archive_growth_report, build_growth_report, load_latest_growth_report
     from match_agents.workflow import build_agent_workflow
     import tempfile
     import json
@@ -1452,8 +1453,13 @@ def test_match_agents_board_and_guardrail_render():
         "opening_structure",
         "external_context",
         "schedule_venue",
+        "late_confirmation",
+        "scenario_simulator",
         "goal_swing",
         "cross_group_path",
+        "market_consistency",
+        "contrarian",
+        "memory",
     } <= ids
     assert all("weight" in a for a in board["agents"])
     assert "weighted_signal" in board["summary"]
@@ -1469,12 +1475,41 @@ def test_match_agents_board_and_guardrail_render():
     league_ids = {a["agent_id"] for a in league_board["agents"]}
     assert league_board["scope"] == "league"
     assert "league_pressure" in league_ids
+    assert "market_consistency" in league_ids
+    assert "contrarian" in league_ids
+    assert "memory" in league_ids
     assert "cross_group_path" not in league_ids
+    assert "scenario_simulator" not in league_ids
     assert "cup_standing" not in league_ids
 
     downgraded = _guardrail_downgrade({"buy_decision": "A 可串", "risk_level": "低"}, board["hard_guards"])
     assert downgraded["buy_decision"] == "C 仅参考"
     assert downgraded["guardrail_downgraded"] is True
+    settled = {
+        "fixture_id": "999",
+        "match_name": "A vs B",
+        "kickoff_at": "2026-06-25 06:00:00",
+        "score_text": "1-0",
+        "result_1x2_cn": "主胜",
+        "pick_jingcai_cn": "让球(-2) 负",
+        "jingcai_market": "rqsp",
+        "jingcai_handicap": -2,
+        "hit_1x2": False,
+        "hit_ah": False,
+        "buy_tier": "A",
+        "buy_tier_cn": "可串",
+    }
+    growth_preview = build_growth_report(
+        "999",
+        prediction=pred,
+        index=index,
+        board=board,
+        chief={"analysis": downgraded},
+        settled=settled,
+    )
+    assert growth_preview["status"] == "learned_miss"
+    assert growth_preview["lessons"]
+    assert growth_preview["policy_suggestions"]
 
     html = html_match_detail(
         index,
@@ -1533,9 +1568,10 @@ def test_match_agents_board_and_guardrail_render():
         },
         agent_workflow={
             "fixture_id": "999",
-            "history_counts": {"agent_board": 1, "chief_report": 1},
+            "history_counts": {"agent_board": 1, "chief_report": 1, "growth_report": 1},
             "steps": [{"id": "input", "title": "输入数据", "status": "ok", "summary": "A vs B", "items": ["fixture_id=999"]}],
         },
+        growth_report=growth_preview,
         ai_records=[
             {
                 "ts": "2026-06-26 11:00:00",
@@ -1580,6 +1616,7 @@ def test_match_agents_board_and_guardrail_render():
     assert "多 AI 分析 Tabs" in workbench_html
     assert "DeepSeek" in workbench_html
     assert "豆包" in workbench_html
+    assert "自我成长 Agent" in workbench_html
     assert "最终汇总 · 是否值得入手" in workbench_html
     assert "Chief Prompt / Messages" in workbench_html
     assert "C 仅参考" in workbench_html
@@ -1599,9 +1636,22 @@ def test_match_agents_board_and_guardrail_render():
             "raw_text": "{\"summary\":\"完成\"}",
         }
         (mdir / "chief_report.jsonl").write_text(json.dumps(chief, ensure_ascii=False) + "\n", encoding="utf-8")
+        archived_growth = build_and_archive_growth_report(
+            root,
+            "999",
+            prediction=pred,
+            index=index,
+            board=board,
+            chief=chief,
+            settled=settled,
+        )
+        assert archived_growth["status"] == "learned_miss"
+        assert load_latest_growth_report(root, "999")["status"] == "learned_miss"
         workflow = build_agent_workflow(root, "999")
         assert workflow["history_counts"]["agent_board"] == 1
+        assert workflow["history_counts"]["growth_report"] == 1
         assert any(s["id"] == "chief_prompt" for s in workflow["steps"])
+        assert any(s["id"] == "growth_agent" for s in workflow["steps"])
 
 
 def test_sweet_spot_analysis():

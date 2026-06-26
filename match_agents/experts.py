@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .factor_fetch import enrich_match_factors, kickoff_value, parse_match_teams
 from .config import agent_weight, load_match_agent_config
 from .types import AgentReport
 
@@ -53,17 +54,42 @@ def _match_name(pred: dict, index: dict | None = None) -> str:
 
 
 def intel_agent(pred: dict, index: dict | None = None, *, output_root=None) -> AgentReport:
+    factors = enrich_match_factors(pred, index, output_root=output_root)
+    news = factors.get("news") or {}
+    fetch_log = factors.get("fetch_log") or []
+    evidence: list[str] = []
+    warnings: list[str] = []
+    raw: dict[str, Any] = {"factors": factors, "fetch_log": fetch_log}
+
+    snippets = news.get("snippets") or []
+    if snippets:
+        evidence.append(f"情报检索：{news.get('summary') or snippets[0][:80]}")
+        for line in snippets[:4]:
+            evidence.append(str(line)[:160])
+        raw["status"] = "partial"
+    elif news.get("summary"):
+        evidence.append(f"情报：{news.get('summary')}")
+        raw["status"] = "partial"
+    else:
+        evidence.append("已尝试 500 情报页 + 网页搜索伤停/首发，暂无可靠结构化伤停")
+        warnings.append("AI 总 Agent 不得编造未提供的球员、天气、新闻信息")
+        raw["status"] = "insufficient_data"
+
+    for line in fetch_log:
+        if any(k in line for k in ("500.com", "网页搜索", "情报")):
+            evidence.append(f"查询：{line}")
+
     return AgentReport(
         agent_id="intel",
         name="情报 Agent",
         verdict="neutral",
-        confidence=0.1,
-        risk=0.4,
+        confidence=0.45 if news else 0.15,
+        risk=0.35 if news else 0.45,
         weight=_weight("intel", output_root),
-        evidence=["第一版暂未接入可靠伤停、首发、天气外部数据源"],
-        warnings=["AI 总 Agent 不得编造未提供的球员、天气、新闻信息"],
+        evidence=evidence,
+        warnings=warnings,
         recommended_action="watch",
-        raw={"status": "insufficient_data"},
+        raw=raw,
     )
 
 
@@ -96,30 +122,55 @@ def external_context_agent(pred: dict, index: dict | None = None, *, output_root
     cfg = load_match_agent_config(output_root)
     ext_cfg = cfg.get("external_factors") or {}
     sources = ext_cfg.get("sources") or {}
+    factors = enrich_match_factors(pred, index, output_root=output_root, cfg=cfg)
+    fetch_log = factors.get("fetch_log") or []
     evidence: list[str] = []
     warnings: list[str] = []
-    raw: dict[str, Any] = {"sources": sources}
+    raw: dict[str, Any] = {"sources": sources, "fetch_log": fetch_log}
     found: dict[str, Any] = {}
+
     if ext_cfg.get("enabled", True):
         for key, label in (("news", "新闻/伤停"), ("weather", "天气"), ("venue", "场地/海拔")):
-            item = _read_factor_source(sources.get(key), pred, index)
+            item = factors.get(key) or {}
+            if not item and sources.get(key):
+                item = _read_factor_source(sources.get(key), pred, index) or {}
             if item:
                 found[key] = item
-                summary = item.get("summary") if isinstance(item, dict) else str(item)
-                evidence.append(f"{label}：{summary or '已接入数据'}")
-    if not evidence:
-        evidence.append("暂无可靠新闻、天气、场地/海拔数据源")
+                if key == "news":
+                    summary = item.get("summary") or "已接入伤停/新闻"
+                elif key == "weather":
+                    summary = item.get("summary") or item.get("condition") or "已接入天气"
+                    temp = item.get("temperature_c")
+                    if temp is not None:
+                        summary = f"{summary} · {temp}°C"
+                elif key == "venue":
+                    name = item.get("stadium") or item.get("venue") or item.get("name") or "球场"
+                    city = item.get("city") or ""
+                    alt = item.get("altitude_m")
+                    summary = name + (f" · {city}" if city else "")
+                    if alt is not None:
+                        summary += f" · 海拔{alt}m"
+                else:
+                    summary = item.get("summary") if isinstance(item, dict) else str(item)
+                src = item.get("source") or "unknown"
+                evidence.append(f"{label}（{src}）：{summary or '已接入数据'}")
+
+    for line in fetch_log[:6]:
+        evidence.append(f"数据查询：{line}")
+
+    if not found:
+        evidence.append("外部因素仍不完整；已执行 catalog / API 自动查询")
         warnings.append("总 Agent 不得臆测伤停、天气、海拔或场地条件")
-        raw["status"] = "insufficient_data"
+        raw["status"] = factors.get("status") or "insufficient_data"
     else:
-        raw["status"] = "available"
+        raw["status"] = "available" if factors.get("status") == "available" else "partial"
         raw["factors"] = found
     return AgentReport(
         agent_id="external_context",
         name="外部因素 Agent",
         verdict="neutral",
-        confidence=0.55 if found else 0.15,
-        risk=0.35 if found else 0.45,
+        confidence=0.6 if len(found) >= 2 else (0.5 if found else 0.15),
+        risk=0.3 if len(found) >= 2 else (0.4 if found else 0.45),
         weight=_weight("external_context", output_root),
         evidence=evidence,
         warnings=warnings,
@@ -129,31 +180,20 @@ def external_context_agent(pred: dict, index: dict | None = None, *, output_root
 
 
 def _kickoff_value(pred: dict, index: dict | None = None) -> str:
-    row = pred.get("predict_row") or {}
-    return str(
-        pred.get("kickoff_at")
-        or pred.get("kickoff")
-        or (index or {}).get("kickoff_at")
-        or (index or {}).get("kickoff")
-        or row.get("开球")
-        or row.get("比赛时间")
-        or ""
-    ).strip()
+    return kickoff_value(pred, index)
 
 
 def schedule_venue_agent(pred: dict, index: dict | None = None, *, output_root=None) -> AgentReport:
     cfg = load_match_agent_config(output_root)
-    sources = ((cfg.get("external_factors") or {}).get("sources") or {})
-    schedule = _read_factor_source(sources.get("schedule"), pred, index) or {}
-    venue = _read_factor_source(sources.get("venue"), pred, index) or {}
-    weather = _read_factor_source(sources.get("weather"), pred, index) or {}
-    kickoff = (
-        schedule.get("kickoff_at")
-        if isinstance(schedule, dict) else None
-    ) or _kickoff_value(pred, index)
+    factors = enrich_match_factors(pred, index, output_root=output_root, cfg=cfg)
+    schedule = factors.get("schedule") or {}
+    venue = factors.get("venue") or {}
+    weather = factors.get("weather") or {}
+    fetch_log = factors.get("fetch_log") or []
+    kickoff = schedule.get("kickoff_at") or _kickoff_value(pred, index)
     evidence: list[str] = []
     warnings: list[str] = []
-    raw = {"schedule": schedule, "venue": venue, "weather": weather}
+    raw = {"schedule": schedule, "venue": venue, "weather": weather, "fetch_log": fetch_log}
     risk = 0.35
     confidence = 0.25
 
@@ -215,6 +255,9 @@ def schedule_venue_agent(pred: dict, index: dict | None = None, *, output_root=N
         confidence = max(confidence, 0.65)
     else:
         warnings.append("缺少天气数据，不能推断高温、雨战、风速等球风影响")
+
+    for line in fetch_log[:5]:
+        evidence.append(f"数据查询：{line}")
 
     if not evidence:
         evidence.append("赛程/球馆数据不足")

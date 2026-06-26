@@ -72,6 +72,7 @@ _API_AGENT_BOARD_RE = re.compile(r"^/api/match/(\d+)/agent-board$")
 _API_CHIEF_AGENT_RE = re.compile(r"^/api/match/(\d+)/chief-agent$")
 _API_AGENT_WORKFLOW_RE = re.compile(r"^/api/match/(\d+)/agent-workflow$")
 _API_GROWTH_AGENT_RE = re.compile(r"^/api/match/(\d+)/growth-agent$")
+_API_AGENT_PIPELINE_STREAM_RE = re.compile(r"^/api/match/(\d+)/agent-pipeline-stream$")
 _API_SCORE_RE = re.compile(r"^/api/match/(\d+)/score-recommend$")
 _API_SWEET_RE = re.compile(r"^/api/match/(\d+)/sweet-spot$")
 _API_CHAT_RE = re.compile(r"^/api/match/(\d+)/chat-stream$")
@@ -270,6 +271,46 @@ def _sse_write(handler: BaseHTTPRequestHandler, event: str, data: str) -> None:
         handler.wfile.flush()
     except _CLIENT_GONE:
         pass
+
+
+def _send_agent_pipeline_sse(
+    handler: BaseHTTPRequestHandler,
+    *,
+    fixture_id: str,
+    prediction: dict,
+    index: dict | None,
+    output_root: Path | str,
+    profile: str | None = None,
+    run_chief: bool = False,
+    provider: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> None:
+    from match_agents.pipeline import iter_match_pipeline_events, pipeline_event_json
+
+    handler.send_response(200)
+    handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
+    handler.send_header("Cache-Control", "no-cache")
+    handler.send_header("Connection", "keep-alive")
+    handler.end_headers()
+    try:
+        for evt in iter_match_pipeline_events(
+            output_root,
+            fixture_id,
+            prediction,
+            index=index,
+            profile=profile,
+            run_chief=run_chief,
+            provider=provider,
+            model=model,
+            base_url=base_url,
+        ):
+            _sse_write(handler, evt["event"], pipeline_event_json(evt))
+        _sse_write(handler, "done", "ok")
+    except Exception as exc:
+        log.exception("Agent pipeline SSE failed fid=%s", fixture_id)
+        _sse_write(handler, "error", json.dumps({"message": str(exc)}, ensure_ascii=False))
+        _sse_write(handler, "done", "error")
 
 
 def _send_chat_sse(
@@ -752,6 +793,35 @@ class Handler(BaseHTTPRequestHandler):
             from accuracy_pick import build_sweet_spot_analysis
 
             self._send_json(build_sweet_spot_analysis(pred))
+            return
+
+        aps = _API_AGENT_PIPELINE_STREAM_RE.match(path)
+        if aps:
+            fid = aps.group(1)
+            qs = parse_qs(urlparse(self.path).query)
+            pred = _load_latest_pred(root, fid)
+            if pred is None:
+                self._send_json({"ok": False, "error": "not found"}, 404)
+                return
+            idx = _load_match_index(root, fid) or {}
+            _ensure_similarity_analysis(pred, root)
+            _ensure_quant_analysis(pred, idx)
+            _ensure_post_recommendation(pred)
+            run_chief = qs.get("run_chief", ["0"])[0] in ("1", "true", "yes")
+            profile = qs.get("profile", [None])[0]
+            provider = qs.get("provider", [None])[0]
+            _send_agent_pipeline_sse(
+                self,
+                fixture_id=fid,
+                prediction=pred,
+                index=idx,
+                output_root=root,
+                profile=profile,
+                run_chief=run_chief,
+                provider=provider,
+                model=self.ai_model,
+                base_url=self.ai_base_url,
+            )
             return
 
         cm = _API_CHAT_RE.match(path)

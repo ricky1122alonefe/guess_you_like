@@ -1,0 +1,128 @@
+{
+  "description": "WC2026 及常用球场目录；Agent 在无外部 JSON 时按主队/赛事推断场地并拉天气。",
+  "venues": {
+    "azteca": {
+      "stadium": "阿兹特克球场",
+      "city": "墨西哥城",
+      "country": "墨西哥",
+      "lat": 19.3029,
+      "lon": -99.1505,
+      "altitude_m": 2240,
+      "surface": "天然草"
+    },
+    "akron": {
+      "stadium": "阿克伦球场",
+      "city": "瓜达拉哈拉",
+      "country": "墨西哥",
+      "lat": 20.6819,
+      "lon": -103.4622,
+      "altitude_m": 1560,
+      "surface": "天然草"
+    },
+    "bbva_mx": {
+      "stadium": "BBVA 球场",
+      "city": "蒙特雷",
+      "country": "墨西哥",
+      "lat": 25.6694,
+      "lon": -100.2447,
+      "altitude_m": 540,
+      "surface": "天然草"
+    },
+    "metlife": {
+      "stadium": "大都会人寿球场",
+      "city": "东卢瑟福",
+      "country": "美国",
+      "lat": 40.8128,
+      "lon": -74.0742,
+      "altitude_m": 3,
+      "surface": "人工草"
+    },
+    "sofi": {
+      "stadium": "SoFi 球场",
+      "city": "英格尔伍德",
+      "country": "美国",
+      "lat": 33.9535,
+      "lon": -118.3392,
+      "altitude_m": 30,
+      "surface": "人工草"
+    },
+    "att": {
+      "stadium": "AT&T 球场",
+      "city": "阿灵顿",
+      "country": "美国",
+      "lat": 32.7473,
+      "lon": -97.0945,
+      "altitude_m": 180,
+      "surface": "人工草"
+    },
+    "mercedes": {
+      "stadium": "梅赛德斯-奔驰球场",
+      "city": "亚特兰大",
+      "country": "美国",
+      "lat": 33.7553,
+      "lon": -84.4006,
+      "altitude_m": 320,
+      "surface": "人工草"
+    },
+    "hardrock": {
+      "stadium": "Hard Rock 球场",
+      "city": "迈阿密",
+      "country": "美国",
+      "lat": 25.958,
+      "lon": -80.2389,
+      "altitude_m": 2,
+      "surface": "天然草"
+    },
+    "lumen": {
+      "stadium": "流明球场",
+      "city": "西雅图",
+      "country": "美国",
+      "lat": 47.5952,
+      "lon": -122.3316,
+      "altitude_m": 15,
+      "surface": "人工草"
+    },
+    "bmo_field": {
+      "stadium": "BMO 球场",
+      "city": "多伦多",
+      "country": "加拿大",
+      "lat": 43.6332,
+      "lon": -79.4186,
+      "altitude_m": 90,
+      "surface": "人工草"
+    },
+    "bc_place": {
+      "stadium": "BC Place",
+      "city": "温哥华",
+      "country": "加拿大",
+      "lat": 49.2768,
+      "lon": -123.112,
+      "altitude_m": 5,
+      "surface": "人工草"
+    }
+  },
+  "team_default_venue": {
+    "墨西哥": "azteca",
+    "美国": "metlife",
+    "加拿大": "bmo_field",
+    "巴西": "hardrock",
+    "阿根廷": "hardrock",
+    "英格兰": "metlife",
+    "法国": "mercedes",
+    "德国": "metlife",
+    "西班牙": "att",
+    "荷兰": "metlife",
+    "比利时": "metlife",
+    "葡萄牙": "hardrock",
+    "意大利": "metlife",
+    "日本": "lumen",
+    "韩国": "lumen",
+    "澳大利亚": "lumen"
+  },
+  "competition_default_venue": {
+    "世界杯": "metlife",
+    "World Cup": "metlife",
+    "2026 FIFA World Cup": "metlife"
+  },
+  "fixture_overrides": {}
+}

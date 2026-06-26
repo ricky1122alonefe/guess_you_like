@@ -139,6 +139,188 @@ function growthAnalyze(fid, btn) {
     });
 }
 
+let pipelineEs = null;
+
+function pipelineEsc(s) {
+  const d = document.createElement('div');
+  d.textContent = s == null ? '' : String(s);
+  return d.innerHTML;
+}
+
+function pipelineLog(msg, level) {
+  const el = document.getElementById('pipeline-console');
+  if (!el) return;
+  const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  const line = document.createElement('div');
+  line.className = 'log-line log-' + (level || 'info');
+  line.textContent = '[' + ts + '] ' + msg;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+function pipelineUnlockBtns() {
+  document.querySelectorAll('.pipeline-run-btn').forEach(x => {
+    x.disabled = false;
+    x.textContent = x.dataset.label || x.textContent;
+  });
+}
+
+function appendPipelineDoneStep(d) {
+  const doneList = document.getElementById('pipeline-done-steps');
+  if (!doneList) return;
+  const empty = doneList.querySelector('.pipeline-done-empty');
+  if (empty) empty.remove();
+  const card = document.createElement('div');
+  card.className = 'pipeline-done-card';
+  card.innerHTML = '<div class="pipeline-done-head"><strong>' + pipelineEsc(d.title || d.id)
+    + '</strong><span class="tag ok">完成</span></div><p class="meta">' + pipelineEsc(d.summary || '') + '</p>';
+  doneList.appendChild(card);
+  doneList.scrollTop = doneList.scrollHeight;
+}
+
+function setPipelineProgress(step, totalSteps, title) {
+  const label = document.getElementById('pipeline-progress-label');
+  const barFill = document.getElementById('pipeline-bar-fill');
+  if (label) label.textContent = '步骤 ' + step + ' / ' + totalSteps + (title ? ' · ' + title : '');
+  if (barFill && totalSteps) barFill.style.width = Math.round((step / totalSteps) * 100) + '%';
+}
+
+function renderPipelineResults(d) {
+  const box = document.getElementById('pipeline-results');
+  if (!box) return;
+  const analysis = (d.chief && d.chief.analysis) || {};
+  const guards = d.hard_guards || [];
+  const guardHtml = guards.length
+    ? guards.map(x => '<li>' + pipelineEsc(x) + '</li>').join('')
+    : '<li>未触发硬风险</li>';
+  const decision = analysis.buy_decision || '—';
+  const summary = analysis.summary || '专家证据板已生成。';
+  const reportMd = analysis.final_report_md || '';
+  box.hidden = false;
+  box.innerHTML = '<div class="workbench-buy-summary">'
+    + '<div><p class="meta">Pipeline 最终汇总</p><h2>' + pipelineEsc(decision) + '</h2><p>' + pipelineEsc(summary) + '</p></div>'
+    + '<div class="buy-summary-side"><span class="tag">风险 ' + pipelineEsc(analysis.risk_level || '—') + '</span>'
+    + ' <span class="tag">置信 ' + pipelineEsc(analysis.confidence || '—') + '</span><ul>' + guardHtml + '</ul></div></div>'
+    + (reportMd ? '<div class="card workbench-final"><h2>Chief 最终报告</h2><div class="chief-report">' + pipelineEsc(reportMd).replace(/\\n/g, '<br>') + '</div></div>' : '');
+}
+
+function runAgentPipeline(fid, runChief, btn) {
+  if (pipelineEs) { pipelineEs.close(); pipelineEs = null; }
+  const root = document.getElementById('pipeline-root');
+  const profile = (root && root.dataset.profile) || '';
+  const b = btn || (typeof event !== 'undefined' && event.target);
+  if (b) { b.disabled = true; b.textContent = '执行中…'; }
+  document.querySelectorAll('.pipeline-run-btn').forEach(x => { x.disabled = true; });
+
+  const current = document.getElementById('pipeline-current');
+  const doneList = document.getElementById('pipeline-done-steps');
+  const barFill = document.getElementById('pipeline-bar-fill');
+  const label = document.getElementById('pipeline-progress-label');
+  const results = document.getElementById('pipeline-results');
+  const consoleEl = document.getElementById('pipeline-console');
+
+  if (current) {
+    current.className = 'pipeline-current pipeline-idle';
+    current.innerHTML = '<div class="pipeline-live"><h3>准备中…</h3><p class="meta">正在连接 Pipeline…</p></div>';
+  }
+  if (doneList) doneList.innerHTML = '<p class="meta pipeline-done-empty">等待第一步完成…</p>';
+  if (barFill) barFill.style.width = '0%';
+  if (label) label.textContent = '启动中…';
+  if (results) { results.hidden = true; results.innerHTML = ''; }
+  if (consoleEl) consoleEl.innerHTML = '';
+
+  let total = 0;
+  const qs = new URLSearchParams({ run_chief: runChief ? '1' : '0' });
+  if (profile && profile !== '—') qs.set('profile', profile);
+  pipelineEs = new EventSource('/api/match/' + fid + '/agent-pipeline-stream?' + qs.toString());
+
+  function parseData(e) {
+    try { return JSON.parse(e.data); } catch (_) { return {}; }
+  }
+
+  function liveList() { return document.getElementById('pipeline-live-list'); }
+
+  pipelineEs.addEventListener('pipeline_init', e => {
+    const d = parseData(e);
+    total = d.total_steps || 0;
+    pipelineLog('Pipeline 启动: ' + (d.match_name || fid) + ' · profile=' + (d.profile || ''), 'info');
+    if (label) label.textContent = '共 ' + total + ' 步 · 等待第一步';
+  });
+
+  pipelineEs.addEventListener('step_start', e => {
+    const d = parseData(e);
+    setPipelineProgress(d.step, d.total || total, d.title);
+    if (current) {
+      current.className = 'pipeline-current pipeline-running';
+      current.innerHTML = '<div class="pipeline-live"><div class="pipeline-live-head"><h3>'
+        + pipelineEsc(d.title || d.id) + '</h3><span class="tag running">执行中</span></div>'
+        + '<p class="meta">步骤 ' + d.step + ' / ' + (d.total || total) + '</p>'
+        + '<ul id="pipeline-live-list" class="pipeline-live-list"></ul>'
+        + '<pre id="pipeline-chief-stream" class="pipeline-chief-stream" hidden></pre></div>';
+    }
+    pipelineLog('▶ 开始: ' + (d.title || d.id), 'info');
+  });
+
+  pipelineEs.addEventListener('chunk', e => {
+    const d = parseData(e);
+    if (d.kind === 'chief_raw') {
+      const chiefPre = document.getElementById('pipeline-chief-stream');
+      if (chiefPre) { chiefPre.hidden = false; chiefPre.textContent += d.text || ''; }
+      return;
+    }
+    const ul = liveList();
+    if (!ul) return;
+    const li = document.createElement('li');
+    li.className = d.kind === 'warning' ? 'warn' : (d.kind === 'guard' ? 'guard' : (d.kind === 'meta' ? 'meta' : ''));
+    li.textContent = d.text || '';
+    ul.appendChild(li);
+  });
+
+  pipelineEs.addEventListener('step_done', e => {
+    const d = parseData(e);
+    appendPipelineDoneStep(d);
+    setPipelineProgress(d.step, d.total || total, (d.title || d.id) + ' ✓');
+    pipelineLog('✓ 完成: ' + (d.title || d.id) + ' — ' + (d.summary || ''), 'ok');
+  });
+
+  pipelineEs.addEventListener('log', e => {
+    const d = parseData(e);
+    pipelineLog(d.message || '', d.level || 'info');
+  });
+
+  pipelineEs.addEventListener('pipeline_complete', e => {
+    const d = parseData(e);
+    if (current) {
+      current.className = 'pipeline-current pipeline-complete';
+      current.innerHTML = '<div class="pipeline-live"><h3>Pipeline 已全部完成</h3><p class="meta">'
+        + pipelineEsc(d.match_name || '') + ' · profile=' + pipelineEsc(d.profile || '') + '</p></div>';
+    }
+    if (label) label.textContent = '全部完成 · ' + (total || d.total_steps || '—') + ' 步';
+    if (barFill) barFill.style.width = '100%';
+    renderPipelineResults(d);
+    pipelineLog('Pipeline 全部完成', 'ok');
+  });
+
+  pipelineEs.addEventListener('error', e => {
+    const d = parseData(e);
+    if (d.message) pipelineLog('错误: ' + d.message, 'err');
+  });
+
+  pipelineEs.addEventListener('done', e => {
+    if (pipelineEs) { pipelineEs.close(); pipelineEs = null; }
+    pipelineUnlockBtns();
+    if (e.data === 'error') pipelineLog('Pipeline 异常终止', 'err');
+  });
+
+  pipelineEs.onerror = () => {
+    if (!pipelineEs || pipelineEs.readyState === EventSource.CLOSED) return;
+    pipelineLog('SSE 连接中断', 'err');
+    pipelineEs.close();
+    pipelineEs = null;
+    pipelineUnlockBtns();
+  };
+}
+
 function escHtmlSim(s) {
   const d = document.createElement('div');
   d.textContent = s == null ? '' : String(s);
@@ -399,6 +581,8 @@ function dashExportItems() {
       conf: tr.dataset.conf || '—',
       grade: tr.dataset.accGrade || '',
       matchDate: tr.dataset.matchDate || cb.dataset.matchDate || '',
+      chief: tr.dataset.chief || '',
+      chiefSummary: tr.dataset.chiefSummary || '',
     };
   }).filter(Boolean);
 }
@@ -426,6 +610,8 @@ function buildDashListExportHtml(items) {
       + '<div class="dep-meta">比分 ' + escHtml(it.scores)
       + ' · 亚盘 ' + escHtml(it.ah)
       + ' · 置信 ' + escHtml(it.conf) + '</div>'
+      + (it.chief ? '<div class="dep-chief"><strong>' + escHtml(it.chief) + '</strong>'
+        + (it.chiefSummary ? ' · ' + escHtml(it.chiefSummary) : '') + '</div>' : '')
       + '</div>';
   }).join('');
   return '<div class="dep-card">'
@@ -992,10 +1178,46 @@ def _alert_tags_html(m: dict, row: dict | None = None) -> str:
     return "".join(f' <span class="tag tag-qual-div">{_e(t)}</span>' for t in tags)
 
 
+def _chief_report_list_cell(fid: str, chief_report: dict | None) -> str:
+    """Compact chief-agent verdict for dashboard list rows."""
+    if not chief_report:
+        if fid:
+            return (
+                f'<span class="meta">未生成</span> '
+                f'<a class="meta" href="/match/{_e(fid)}/agents">工作台</a>'
+            )
+        return '<span class="meta">—</span>'
+    analysis = chief_report.get("analysis") or {}
+    decision = analysis.get("buy_decision") or "—"
+    summary = str(analysis.get("summary") or "").strip()
+    if len(summary) > 56:
+        summary = summary[:56] + "…"
+    risk = analysis.get("risk_level") or "—"
+    confidence = analysis.get("confidence") or "—"
+    css = "chief-list-cell"
+    dl = str(decision).lower()
+    if "skip" in dl or "仅参考" in str(decision):
+        css += " chief-skip"
+    elif str(risk) == "高" or "观望" in str(decision):
+        css += " chief-risk"
+    agents_link = f'/match/{_e(fid)}/agents' if fid else ""
+    link_html = f' <a class="meta" href="{agents_link}">详情</a>' if agents_link else ""
+    return (
+        f'<div class="{css}">'
+        f'<strong>{_e(decision)}</strong>'
+        f'<span class="meta"> · {_e(risk)}/{_e(confidence)}</span>'
+        f'<p class="meta chief-summary">{_e(summary) if summary else "—"}</p>'
+        f'{link_html}'
+        f'</div>'
+    )
+
+
 def _dashboard_active_row(
     m: dict,
     indexes: dict,
     kickoff_map: dict | None = None,
+    *,
+    chief_report: dict | None = None,
 ) -> str:
     from daily_picks import _kickoff_date
 
@@ -1056,22 +1278,26 @@ def _dashboard_active_row(
     )
     sp_cell = _e(sp_val) if sp_val else "—"
     pick_plain = _format_dual_pick(m)
+    chief_cell = _chief_report_list_cell(fid, chief_report)
+    chief_summary = ((chief_report or {}).get("analysis") or {}).get("summary") or ""
+    chief_decision = ((chief_report or {}).get("analysis") or {}).get("buy_decision") or ""
     return (
         f"<tr class='dash-row' data-sweet='{sweet_flag}' "
         f"data-acc-grade='{_e(grade)}' data-tier='{_e(m.get('buy_tier') or '')}' "
         f"data-fid='{_e(fid)}' data-name='{_e(name)}' data-pick='{_e(pick_plain)}' "
         f"data-sp='{_e(sp_val)}' data-tier-cn='{_e(tier_cn)}' data-scores='{_e(scores)}' "
-        f"data-ah='{_e(ah)}' data-conf='{_e(conf)}' data-match-date='{_e(match_day)}'>"
+        f"data-ah='{_e(ah)}' data-conf='{_e(conf)}' data-match-date='{_e(match_day)}' "
+        f"data-chief='{_e(chief_decision)}' data-chief-summary='{_e(chief_summary[:80])}'>"
         f"<td class='parlay-pick'>{cb}</td>"
         f"<td><a href=\"/match/{_e(fid)}\">{_e(name)}</a>{phase_tag}{tier_tag}{acc_tag}{alert_tag}</td>"
         f"<td>{_e(tier_cn)}</td>"
         f"<td>{pick_cell}<br><span class='meta'>SP {sp_cell}</span></td><td>{_e(scores)}</td>"
-        f"<td>{_e(ah)}</td><td>{_e(conf)}</td><td>{detail}</td>"
+        f"<td>{_e(ah)}</td><td>{_e(conf)}</td><td>{chief_cell}</td><td>{detail}</td>"
         f"<td>{ai_btn}</td></tr>\n"
     )
 
 
-def _dashboard_finished_row(m: dict, indexes: dict) -> str:
+def _dashboard_finished_row(m: dict, indexes: dict, *, chief_report: dict | None = None) -> str:
     settled = m.get("settled") or {}
     fid = str(m.get("fixture_id") or settled.get("external_id") or "")
     row = m.get("predict_row") or m
@@ -1080,10 +1306,11 @@ def _dashboard_finished_row(m: dict, indexes: dict) -> str:
         pick = _format_dual_pick(m) if row else "—"
         n_pts = (indexes.get(fid) or {}).get("point_count", 0)
         detail = f'<a href="/match/{_e(fid)}">复盘 ({n_pts})</a>' if fid else "—"
+        chief_cell = _chief_report_list_cell(fid, chief_report)
         return (
             f"<tr><td><a href=\"/match/{_e(fid)}\">{_e(name)}</a></td>"
             f"<td colspan='2'><span class='meta'>待抓取赛果</span></td>"
-            f"<td>{_e(pick)}</td><td class='meta'>—</td><td>{detail}</td></tr>\n"
+            f"<td>{_e(pick)}</td><td>{chief_cell}</td><td class='meta'>—</td><td>{detail}</td></tr>\n"
         )
     score = settled.get("score_text") or "—"
     result_cn = settled.get("result_1x2_cn") or "—"
@@ -1101,12 +1328,14 @@ def _dashboard_finished_row(m: dict, indexes: dict) -> str:
     hit_sc = _hit_badge(settled.get("hit_score"))
     n_pts = (indexes.get(fid) or {}).get("point_count", 0)
     detail = f'<a href="/match/{_e(fid)}">复盘 ({n_pts})</a>' if fid else "—"
+    chief_cell = _chief_report_list_cell(fid, chief_report)
     return (
         f"<tr><td><a href=\"/match/{_e(fid)}\">{_e(name)}</a></td>"
         f"<td><strong>{_e(score)}</strong> {_e(result_cn)}</td>"
         f"<td class='{cmp_cls}'>{_e(cmp_txt)}</td>"
         f"<td class='meta'>{_e(closing)}</td>"
         f"<td>{_e(pick)}</td>"
+        f"<td>{chief_cell}</td>"
         f"<td>{hit_1x2} 1X2 · {hit_sc} 比分</td>"
         f"<td>{detail} · <a href='/review'>复盘表</a></td></tr>\n"
     )
@@ -1157,15 +1386,37 @@ def html_dashboard(
     else:
         active_title = f"未开赛 / 进行中 · {len(all_active)} 场"
 
+    from match_agents.chief import load_chief_report_map
+
+    chief_fids = [
+        str(m.get("fixture_id") or "")
+        for m in all_active + finished
+        if m.get("fixture_id")
+    ]
+    chief_map = load_chief_report_map(output_root, chief_fids)
+
     active_rows = "".join(
-        _dashboard_active_row(m, indexes, kickoff_map) for m in all_active_enriched
+        _dashboard_active_row(
+            m,
+            indexes,
+            kickoff_map,
+            chief_report=chief_map.get(str(m.get("fixture_id") or "")),
+        )
+        for m in all_active_enriched
     )
     if not active_rows:
-        active_rows = "<tr><td colspan='8'>暂无未开赛/进行中比赛</td></tr>"
+        active_rows = "<tr><td colspan='9'>暂无未开赛/进行中比赛</td></tr>"
 
-    finished_rows = "".join(_dashboard_finished_row(m, indexes) for m in finished)
+    finished_rows = "".join(
+        _dashboard_finished_row(
+            m,
+            indexes,
+            chief_report=chief_map.get(str(m.get("fixture_id") or "")),
+        )
+        for m in finished
+    )
     if not finished_rows:
-        finished_rows = "<tr><td colspan='7'>暂无已结算完场（开球 105 分钟后自动抓取赛果）</td></tr>"
+        finished_rows = "<tr><td colspan='8'>暂无已结算完场（开球 105 分钟后自动抓取赛果）</td></tr>"
 
     wc_teaser = _worldcup_teaser(output_root)
     div_teaser = _divergence_teaser(output_root)
@@ -1222,7 +1473,7 @@ def html_dashboard(
         f"已完场（{len(finished)} 场）",
         f"""<p class="meta">开球约 105 分钟后抓取赛果 · <a href="/review"><strong>推荐复盘表</strong></a> 对照全部完场</p>
 <table>
-<tr><th>比赛</th><th>赛果</th><th>对照</th><th>终盘</th><th>预测</th><th>命中</th><th>详情</th></tr>
+<tr><th>比赛</th><th>赛果</th><th>对照</th><th>终盘</th><th>预测</th><th>Agent研判</th><th>命中</th><th>详情</th></tr>
 {finished_rows}
 </table>""",
         open=len(finished) <= 4 and len(finished) > 0,
@@ -1273,6 +1524,13 @@ def html_dashboard(
         ".dep-pick { font-size: 15px; font-weight: 800; color: #fde68a; }"
         ".dep-sp { font-size: 14px; font-weight: 700; color: #ff9ec8; }"
         ".dep-meta { font-size: 12px; line-height: 1.55; color: #94a3b8; }"
+        ".dep-chief { margin-top: 6px; font-size: 12px; color: #c4b5fd; line-height: 1.45; }"
+        ".chief-list-cell { font-size: 12px; line-height: 1.45; max-width: 240px; }"
+        ".chief-list-cell strong { color: #c4b5fd; font-size: 13px; }"
+        ".chief-list-cell.chief-risk strong { color: #fdba74; }"
+        ".chief-list-cell.chief-skip strong { color: #94a3b8; }"
+        ".chief-summary { margin: 2px 0 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }"
+        ".dashboard-table td:nth-child(8) { min-width: 160px; max-width: 260px; }"
         ".dep-foot { margin-top: 12px; padding-top: 10px; border-top: 1px dashed rgba(255,255,255,0.12); "
         "text-align: center; font-size: 11px; color: #64748b; }"
     )
@@ -1336,7 +1594,7 @@ def html_dashboard(
     <label><input type="checkbox" id="dash-filter-solid" onchange="onDashSolidFilter(this)"> 仅稳胆 / 稳胆甜区</label>
   </p>
   <table class="dashboard-table">
-    <tr><th title="勾选场次">选</th><th>比赛</th><th>档位</th><th>竞彩推荐</th><th>比分</th><th>亚盘</th><th>置信</th><th>详情</th><th>AI</th></tr>
+    <tr><th title="勾选场次">选</th><th>比赛</th><th>档位</th><th>竞彩推荐</th><th>比分</th><th>亚盘</th><th>置信</th><th>Agent研判</th><th>详情</th><th>AI</th></tr>
     {active_rows}
   </table>
 </div>
@@ -2477,6 +2735,44 @@ def _growth_agent_panel(growth_report: dict | None, fid: str) -> str:
 </div>"""
 
 
+def _agent_pipeline_runner_html(fid: str, profile: str, *, has_archive: bool) -> str:
+    hint = "已有归档，重新流式分析会写入新证据板。" if has_archive else "尚未运行，点击下方按钮从第一步开始。"
+    return f"""
+<section class="card pipeline-runner" id="pipeline-root" data-fid="{_e(fid)}" data-profile="{_e(profile)}">
+  <div class="pipeline-head">
+    <h3>流式 Pipeline 执行</h3>
+    <p class="meta">按步骤依次运行：输入校验 → 各专家 Agent → 硬风险闸门 → 归档 → Chief AI。当前步骤实时展示，已完成步骤归档到左侧，右侧为控制台日志。</p>
+    <p class="meta">{_e(hint)}</p>
+    <div class="pipeline-progress-wrap">
+      <div class="pipeline-progress-bar"><div id="pipeline-bar-fill"></div></div>
+      <span id="pipeline-progress-label">尚未开始</span>
+    </div>
+    <div class="pipeline-controls">
+      <button type="button" class="btn pipeline-run-btn" style="background:#9333ea" data-label="开始流式分析（含 Chief）"
+        onclick="runAgentPipeline('{_e(fid)}', true, this)">开始流式分析（含 Chief）</button>
+      <button type="button" class="btn pipeline-run-btn" style="background:#6366f1" data-label="仅专家证据板"
+        onclick="runAgentPipeline('{_e(fid)}', false, this)">仅专家证据板</button>
+    </div>
+  </div>
+  <div class="pipeline-layout">
+    <aside class="pipeline-done-list" id="pipeline-done-steps">
+      <h4>已完成步骤</h4>
+      <p class="meta pipeline-done-empty">尚无完成步骤</p>
+    </aside>
+    <main class="pipeline-stage">
+      <div id="pipeline-current" class="pipeline-current pipeline-idle">
+        <p class="meta">点击「开始流式分析」启动 Pipeline，将显示第 1 步的实时分析内容。</p>
+      </div>
+    </main>
+    <aside class="pipeline-console-wrap">
+      <h4>控制台日志</h4>
+      <div id="pipeline-console" class="pipeline-console"></div>
+    </aside>
+  </div>
+</section>
+<div id="pipeline-results" hidden></div>"""
+
+
 def html_agent_workbench(
     index: dict,
     *,
@@ -2521,6 +2817,26 @@ def html_agent_workbench(
         "risk_level": (prediction or {}).get("risk_level_cn"),
         "buy_tier": (prediction or {}).get("buy_tier_cn") or (prediction or {}).get("buy_tier"),
     }
+    has_archive = bool(counts.get("agent_board") or counts.get("chief_report") or analysis)
+    archive_body = ""
+    if has_archive:
+        archive_body = f"""
+{_agent_final_panel(chief_report)}
+{_ai_model_tabs(prediction, ai_records, deep_records, fid)}
+{_agent_workflow_card(agent_workflow)}
+{_growth_agent_panel(growth_report, fid)}
+<div class="card">
+  <h3>专家角色矩阵</h3>
+  {_agent_role_matrix(agent_board)}
+</div>
+{_buy_summary_panel(chief_report, agent_board, prediction)}
+{_fold('Chief Prompt / Messages', prompt_blocks, muted=True, open=False)}
+{_fold('AI 原始输出 Raw Text', raw_text, muted=True, open=False)}"""
+    if has_archive:
+        main_archive = _fold("查看上次归档快照", archive_body, muted=True, open=False)
+    else:
+        main_archive = f"""<div class="card"><p class="meta">尚无归档。使用上方「开始流式分析」，完成后最终结论会显示在 Pipeline 下方。</p></div>
+{_growth_agent_panel(growth_report, fid)}"""
     css = _shared_css("""
 body { max-width: min(1240px, 100%); }
 .workbench-hero { position: relative; overflow: hidden; border: 1px solid rgba(99,102,241,.22);
@@ -2538,67 +2854,103 @@ body { max-width: min(1240px, 100%); }
 .workbench-layout { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(300px,.85fr); gap:14px; margin-top:14px; }
 .ai-tabs-card { border-left:5px solid #2563eb; }
 .ai-tabs-head { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
-.ai-tab-buttons { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; border-bottom:1px solid #e2e8f0; padding-bottom:8px; }
-.ai-tab-btn { border:1px solid #c7d2fe; background:#eef2ff; color:#3730a3; border-radius:999px; padding:8px 12px; cursor:pointer; font-weight:600; }
-.ai-tab-btn.active { background:#4f46e5; color:#fff; border-color:#4f46e5; }
-.ai-tab-panel { border:1px solid #e2e8f0; background:#fff; border-radius:14px; padding:12px; }
+.ai-tab-buttons { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:8px; }
+.ai-tab-btn { border:1px solid rgba(99,102,241,.35); background:rgba(99,102,241,.12); color:#c7d2fe; border-radius:999px; padding:8px 12px; cursor:pointer; font-weight:600; }
+.ai-tab-btn.active { background:#6366f1; color:#fff; border-color:#6366f1; }
+.ai-tab-panel { border:1px solid rgba(255,255,255,0.08); background:rgba(255,255,255,0.04); border-radius:14px; padding:12px; }
 .ai-tab-panel[hidden] { display:none; }
 .ai-tab-kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,130px),1fr)); gap:8px; margin-bottom:10px; }
-.ai-tab-kpis div { background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:10px; }
-.ai-tab-kpis span { display:block; color:#64748b; font-size:12px; margin-bottom:4px; }
-.ai-tab-kpis strong { color:#1e293b; font-size:15px; }
-.ai-tab-reason { white-space:pre-wrap; line-height:1.75; color:#334155; }
-.workbench-buy-summary { margin-top:14px; border-radius:18px; padding:18px; display:grid; grid-template-columns:minmax(0,1fr) minmax(260px,.55fr); gap:14px; border:1px solid #c4b5fd; background:linear-gradient(135deg,#faf5ff,#eef2ff); box-shadow:0 12px 34px rgba(79,70,229,.12); }
-.workbench-buy-summary h2 { margin:4px 0 8px; font-size:clamp(1.35rem,4vw,1.8rem); color:#4c1d95; }
-.workbench-buy-summary.buy-risk { border-color:#fdba74; background:linear-gradient(135deg,#fff7ed,#fff1f2); }
-.workbench-buy-summary.buy-risk h2, .workbench-buy-summary.buy-skip h2 { color:#9a3412; }
-.workbench-buy-summary.buy-ok { border-color:#86efac; background:linear-gradient(135deg,#ecfdf5,#f0fdf4); }
-.workbench-buy-summary.buy-ok h2 { color:#166534; }
-.buy-summary-side { background:rgba(255,255,255,.62); border:1px solid rgba(255,255,255,.85); border-radius:14px; padding:12px; }
-.buy-summary-side ul { margin:10px 0 0; padding-left:18px; color:#475569; font-size:13px; line-height:1.6; }
+.ai-tab-kpis div { background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:10px; }
+.ai-tab-kpis span { display:block; color:#94a3b8; font-size:12px; margin-bottom:4px; }
+.ai-tab-kpis strong { color:#f1f5f9; font-size:15px; }
+.ai-tab-reason { white-space:pre-wrap; line-height:1.75; color:#cbd5e1; }
+.workbench-buy-summary { margin-top:14px; border-radius:18px; padding:18px; display:grid; grid-template-columns:minmax(0,1fr) minmax(260px,.55fr); gap:14px; border:1px solid rgba(139,92,246,.35); background:linear-gradient(135deg,rgba(88,28,135,.25),rgba(49,46,129,.2)); box-shadow:0 12px 34px rgba(79,70,229,.12); }
+.workbench-buy-summary h2 { margin:4px 0 8px; font-size:clamp(1.35rem,4vw,1.8rem); color:#e9d5ff; }
+.workbench-buy-summary p { color:#cbd5e1; }
+.workbench-buy-summary.buy-risk { border-color:rgba(251,146,60,.45); background:linear-gradient(135deg,rgba(154,52,18,.2),rgba(127,29,29,.15)); }
+.workbench-buy-summary.buy-risk h2, .workbench-buy-summary.buy-skip h2 { color:#fdba74; }
+.workbench-buy-summary.buy-ok { border-color:rgba(34,197,94,.35); background:linear-gradient(135deg,rgba(6,78,59,.25),rgba(20,83,45,.15)); }
+.workbench-buy-summary.buy-ok h2 { color:#86efac; }
+.buy-summary-side { background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.08); border-radius:14px; padding:12px; }
+.buy-summary-side ul { margin:10px 0 0; padding-left:18px; color:#cbd5e1; font-size:13px; line-height:1.6; }
 .growth-card { border-left:5px solid #0d9488; }
-.growth-card.missing { border-left-color:#94a3b8; background:#f8fafc; }
-.growth-card.growth-learned_miss { border-left-color:#f97316; background:#fff7ed; }
+.growth-card.missing { border-left-color:#64748b; background:rgba(255,255,255,0.03); }
+.growth-card.growth-learned_miss { border-left-color:#f97316; background:rgba(154,52,18,.12); }
 .growth-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:12px; }
-.growth-head h3 { margin:0 0 4px; }
+.growth-head h3 { margin:0 0 4px; color:#f1f5f9; }
 .growth-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr)); gap:12px; }
-.growth-grid > div { background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:10px; }
-.growth-grid h4 { color:#0f766e; }
-.growth-grid ul { margin:0; padding-left:18px; font-size:13px; line-height:1.6; color:#334155; }
-.workbench-final { background:#fff; border:1px solid #ddd6fe; border-left:5px solid #8b5cf6; border-radius:16px; padding:16px; box-shadow:0 10px 30px rgba(88,28,135,.08); }
-.workbench-final.missing { border-left-color:#94a3b8; background:#f8fafc; }
+.growth-grid > div { background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:10px; }
+.growth-grid h4 { color:#5eead4; }
+.growth-grid ul { margin:0; padding-left:18px; font-size:13px; line-height:1.6; color:#cbd5e1; }
+.workbench-final { background:rgba(255,255,255,0.04); border:1px solid rgba(139,92,246,.3); border-left:5px solid #8b5cf6; border-radius:16px; padding:16px; box-shadow:0 10px 30px rgba(88,28,135,.08); }
+.workbench-final.missing { border-left-color:#64748b; background:rgba(255,255,255,0.03); }
 .workbench-final-head { display:flex; gap:12px; align-items:flex-start; justify-content:space-between; margin-bottom:8px; }
-.workbench-final h2 { margin:0; font-size:clamp(1.1rem,3vw,1.35rem); color:#4c1d95; }
+.workbench-final h2 { margin:0; font-size:clamp(1.1rem,3vw,1.35rem); color:#e9d5ff; }
 .workbench-final-tags { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
 .final-decision { background:#7c3aed; color:#fff; }
 .workbench-triple { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr)); gap:10px; margin-top:12px; }
-.workbench-triple > div { background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:10px; }
-.workbench-triple h4 { color:#6d28d9; }
-.workbench-triple ul { margin:0; padding-left:18px; font-size:13px; line-height:1.6; color:#475569; }
+.workbench-triple > div { background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:10px; }
+.workbench-triple h4 { color:#c4b5fd; }
+.workbench-triple ul { margin:0; padding-left:18px; font-size:13px; line-height:1.6; color:#cbd5e1; }
 .agent-workflow-card, .agent-board-card, .chief-agent-card { border-left:4px solid #8b5cf6; }
 .agent-flow { display:grid; gap:12px; margin-top:12px; }
 .agent-flow-step { display:grid; grid-template-columns:22px 1fr; gap:10px; align-items:start; position:relative; }
-.agent-flow-step:not(:last-child)::before { content:''; position:absolute; left:10px; top:28px; bottom:-14px; width:2px; background:#ddd6fe; }
+.agent-flow-step:not(:last-child)::before { content:''; position:absolute; left:10px; top:28px; bottom:-14px; width:2px; background:rgba(139,92,246,.35); }
 .agent-flow-dot { width:16px; height:16px; border-radius:999px; margin-top:7px; background:#22c55e; box-shadow:0 0 0 5px rgba(34,197,94,.12); z-index:1; }
 .agent-flow-step.flow-risk .agent-flow-dot { background:#f97316; box-shadow:0 0 0 5px rgba(249,115,22,.14); }
-.agent-flow-step.flow-missing .agent-flow-dot { background:#94a3b8; box-shadow:0 0 0 5px rgba(148,163,184,.15); }
-.agent-flow-body { border:1px solid #e2e8f0; border-radius:14px; padding:12px 14px; background:#fff; }
+.agent-flow-step.flow-missing .agent-flow-dot { background:#64748b; box-shadow:0 0 0 5px rgba(100,116,139,.15); }
+.agent-flow-body { border:1px solid rgba(255,255,255,0.08); border-radius:14px; padding:12px 14px; background:rgba(255,255,255,0.04); color:#e2e8f0; }
 .agent-flow-head { display:flex; gap:8px; justify-content:space-between; align-items:center; }
-.agent-flow-warn { margin-top:8px; padding:8px 10px; background:#fff7ed; border:1px solid #fed7aa; border-radius:8px; }
-.agent-flow-warn h4 { margin:0 0 4px; color:#9a3412; }
-.agent-flow-warn ul { margin:0; padding-left:18px; color:#9a3412; font-size:12px; line-height:1.5; }
+.agent-flow-head strong { color:#f1f5f9; }
+.agent-flow-warn { margin-top:8px; padding:8px 10px; background:rgba(251,146,60,.12); border:1px solid rgba(251,146,60,.35); border-radius:8px; }
+.agent-flow-warn h4 { margin:0 0 4px; color:#fdba74; }
+.agent-flow-warn ul { margin:0; padding-left:18px; color:#fdba74; font-size:12px; line-height:1.5; }
 .role-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr)); gap:12px; }
-.role-card { background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:12px; }
-.role-card.role-risk { border-color:#fdba74; background:#fff7ed; }
+.role-card { background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:14px; padding:12px; color:#e2e8f0; }
+.role-card.role-risk { border-color:rgba(251,146,60,.45); background:rgba(251,146,60,.08); }
 .role-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
-.role-warn { margin-top:8px; background:#ffedd5; border-radius:8px; padding:8px; }
-.role-warn ul { margin:0; padding-left:18px; color:#9a3412; font-size:12px; line-height:1.5; }
+.role-head strong { color:#f1f5f9; }
+.role-warn { margin-top:8px; background:rgba(251,146,60,.12); border-radius:8px; padding:8px; }
+.role-warn ul { margin:0; padding-left:18px; color:#fdba74; font-size:12px; line-height:1.5; }
 .agent-prompt-pre { white-space:pre-wrap; word-break:break-word; max-height:420px; overflow:auto; font-size:12px; line-height:1.55; background:#0f172a; color:#e2e8f0; border-radius:12px; padding:12px; }
-.chief-report { white-space:normal; line-height:1.75; color:#1e293b; }
+.chief-report { white-space:normal; line-height:1.75; color:#e2e8f0; }
 .deep-list { margin: 6px 0 0 16px; padding: 0; }
-.deep-list li { margin: 2px 0; font-size: 13px; color: #334155; }
-.workbench-json { font-size:12px; }
-@media (max-width: 900px) { .workbench-layout, .workbench-buy-summary { grid-template-columns:1fr; } .workbench-final-head { flex-direction:column; } }
+.deep-list li { margin: 2px 0; font-size: 13px; color: #cbd5e1; }
+.workbench-json { font-size:12px; color:#cbd5e1; }
+.pipeline-runner { border-left:4px solid #8b5cf6; margin-top:14px; }
+.pipeline-head h3 { margin:0 0 6px; color:#f1f5f9; }
+.pipeline-layout { display:grid; grid-template-columns:minmax(200px,.75fr) minmax(0,1.4fr) minmax(220px,.85fr); gap:12px; margin-top:12px; }
+.pipeline-progress-wrap { margin:12px 0; }
+.pipeline-progress-bar { height:8px; background:rgba(255,255,255,0.08); border-radius:999px; overflow:hidden; }
+#pipeline-bar-fill { height:100%; background:linear-gradient(90deg,#6366f1,#a855f7); transition:width .35s ease; width:0%; }
+#pipeline-progress-label { display:block; margin-top:6px; font-size:13px; color:#94a3b8; }
+.pipeline-controls { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+.pipeline-done-list { background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.08); border-radius:14px; padding:10px; max-height:420px; overflow:auto; }
+.pipeline-done-list h4 { margin:0 0 8px; color:#c4b5fd; font-size:13px; }
+.pipeline-done-card { background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:10px; padding:8px 10px; margin-bottom:8px; }
+.pipeline-done-head { display:flex; justify-content:space-between; gap:6px; align-items:center; }
+.pipeline-done-head strong { color:#f1f5f9; font-size:13px; }
+.pipeline-current { min-height:280px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:14px; padding:14px; }
+.pipeline-current.pipeline-running { border-color:rgba(99,102,241,.45); box-shadow:0 0 0 1px rgba(99,102,241,.15); }
+.pipeline-current.pipeline-complete { border-color:rgba(34,197,94,.45); }
+.pipeline-live-head { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+.pipeline-live h3 { margin:0; color:#f1f5f9; }
+.tag.running { background:rgba(99,102,241,.2); color:#c7d2fe; }
+.tag.ok { background:rgba(34,197,94,.15); color:#86efac; }
+.pipeline-live-list { margin:10px 0 0; padding-left:18px; color:#cbd5e1; font-size:13px; line-height:1.6; }
+.pipeline-live-list li.warn { color:#fdba74; }
+.pipeline-live-list li.guard { color:#f87171; font-weight:600; }
+.pipeline-live-list li.meta { color:#94a3b8; font-style:italic; }
+.pipeline-chief-stream { margin-top:10px; max-height:200px; overflow:auto; font-size:12px; background:rgba(0,0,0,0.35); color:#cbd5e1; border-radius:10px; padding:10px; white-space:pre-wrap; }
+.pipeline-console-wrap { display:flex; flex-direction:column; }
+.pipeline-console-wrap h4 { margin:0 0 8px; color:#94a3b8; font-size:13px; }
+.pipeline-console { flex:1; min-height:280px; max-height:420px; overflow:auto; background:#0a0c18; border:1px solid rgba(255,255,255,0.08); border-radius:14px; padding:10px; font-size:11px; line-height:1.5; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
+.log-line { color:#94a3b8; margin:2px 0; }
+.log-line.log-ok { color:#86efac; }
+.log-line.log-warn { color:#fdba74; }
+.log-line.log-err { color:#f87171; }
+#pipeline-results { margin-top:14px; }
+@media (max-width: 900px) { .workbench-layout, .workbench-buy-summary, .pipeline-layout { grid-template-columns:1fr; } .workbench-final-head { flex-direction:column; } .pipeline-done-list, .pipeline-console { max-height:240px; } }
 """)
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head>
@@ -2632,20 +2984,19 @@ function switchAiWorkbenchTab(fid, idx) {{
   </div>
   <p class="meta">{_e(profile_desc)} · 加权信号：{_e(weighted_line)}</p>
   <div class="workbench-actions">
-    <button type="button" class="btn" style="background:#9333ea" data-label="运行多 Agent 总分析"
-      onclick="aiChiefAnalyze('{_e(fid)}', this)">运行多 Agent 总分析</button>
+    <button type="button" class="btn pipeline-run-btn" style="background:#9333ea" data-label="开始流式分析"
+      onclick="runAgentPipeline('{_e(fid)}', true, this)">开始流式分析</button>
+    <button type="button" class="btn" style="background:#64748b" data-label="运行多 Agent 总分析"
+      onclick="aiChiefAnalyze('{_e(fid)}', this)">快速总分析（非流式）</button>
     <button type="button" class="btn" style="background:#0d9488" data-label="生成成长报告"
       onclick="growthAnalyze('{_e(fid)}', this)">生成成长报告</button>
     <a class="btn" style="background:#2563eb" href="/api/match/{_e(fid)}/agent-workflow" target="_blank" rel="noopener">查看 JSON Workflow</a>
-    <a class="btn" style="background:#64748b" href="/api/match/{_e(fid)}/agent-board" target="_blank" rel="noopener">重新生成证据板</a>
   </div>
 </section>
+{_agent_pipeline_runner_html(fid, str(profile), has_archive=has_archive)}
 <div class="workbench-layout">
   <main>
-    {_agent_final_panel(chief_report)}
-    {_ai_model_tabs(prediction, ai_records, deep_records, fid)}
-    {_agent_workflow_card(agent_workflow)}
-    {_growth_agent_panel(growth_report, fid)}
+    {main_archive}
   </main>
   <aside>
     <div class="card">
@@ -2658,13 +3009,6 @@ function switchAiWorkbenchTab(fid, idx) {{
     </div>
   </aside>
 </div>
-<div class="card">
-  <h3>专家角色矩阵</h3>
-  {_agent_role_matrix(agent_board)}
-</div>
-{_buy_summary_panel(chief_report, agent_board, prediction)}
-{_fold('Chief Prompt / Messages', prompt_blocks, muted=True, open=False)}
-{_fold('AI 原始输出 Raw Text', raw_text, muted=True, open=False)}
 </body></html>"""
 
 
@@ -5963,7 +6307,7 @@ def html_match_detail(
     team_form_fold = _team_form_fold_html(name)
 
     match_css = _shared_css("""
-.card.inner { box-shadow: none; border: 1px solid #e2e8f0; padding: 12px; margin: 0; }
+.card.inner { box-shadow: none; border: 1px solid rgba(255,255,255,0.08); padding: 12px; margin: 0; background: rgba(255,255,255,0.04); }
 .pick { font-size: clamp(1rem, 3.5vw, 1.15rem); }
 .pred-card { border-left: 4px solid #7c3aed; }
 .deep-card { border-left: 4px solid #0d9488; }
@@ -5975,7 +6319,7 @@ def html_match_detail(
 .agent-flow-dot { width:12px; height:12px; border-radius:999px; margin-top:7px; background:#22c55e; box-shadow:0 0 0 4px rgba(34,197,94,.12); }
 .agent-flow-step.flow-risk .agent-flow-dot { background:#f97316; box-shadow:0 0 0 4px rgba(249,115,22,.14); }
 .agent-flow-step.flow-missing .agent-flow-dot { background:#94a3b8; box-shadow:0 0 0 4px rgba(148,163,184,.15); }
-.agent-flow-body { border:1px solid #e2e8f0; border-radius:12px; padding:10px 12px; background:#fff; }
+.agent-flow-body { border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:10px 12px; background:rgba(255,255,255,0.04); }
 .agent-flow-head { display:flex; gap:8px; justify-content:space-between; align-items:center; }
 .agent-flow-warn { margin-top:8px; padding:8px 10px; background:#fff7ed; border:1px solid #fed7aa; border-radius:8px; }
 .agent-flow-warn h4 { margin:0 0 4px; color:#9a3412; }
@@ -5985,12 +6329,12 @@ def html_match_detail(
 .agent-board-table { min-width: 980px; font-size: 12px; }
 .chief-agent-card .error-review-cols { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr)); gap:10px; }
 .chief-agent-card .error-review-cols h4 { margin:0 0 6px; color:#7c3aed; font-size:13px; }
-.chief-agent-card .error-review-cols ul { margin:0; padding-left:18px; color:#475569; line-height:1.6; font-size:13px; }
-.deep-headline { font-size: clamp(1.05rem, 3.5vw, 1.2rem); font-weight: 600; color: #0f766e; margin: 0 0 8px; }
+.chief-agent-card .error-review-cols ul { margin:0; padding-left:18px; color:#cbd5e1; line-height:1.6; font-size:13px; }
+.deep-headline { font-size: clamp(1.05rem, 3.5vw, 1.2rem); font-weight: 600; color: #5eead4; margin: 0 0 8px; }
 .deep-section { margin: 10px 0; }
-.deep-section h4 { margin: 0 0 4px; font-size: 13px; color: #475569; }
+.deep-section h4 { margin: 0 0 4px; font-size: 13px; color: #cbd5e1; }
 .deep-list { margin: 4px 0 0 16px; padding: 0; }
-.deep-list li { margin: 2px 0; font-size: 13px; color: #334155; }
+.deep-list li { margin: 2px 0; font-size: 13px; color: #dbeafe; }
 .btn-deep { background: #0d9488; }
 .btn-deep:disabled { background: #94a3b8; opacity: 0.7; cursor: not-allowed; }
 .settled-card { border-left: 4px solid #059669; }
@@ -6000,61 +6344,67 @@ def html_match_detail(
 .quant-card { border-left: 4px solid #059669; margin-bottom: 14px; }
 .score-rec-card { border-left: 4px solid #ea580c; margin-bottom: 14px; }
 .sweet-spot-card { border-left: 4px solid #ea580c; margin-bottom: 14px; }
-.sweet-spot-card.sweet-in { border-left-color: #c2410c; background: linear-gradient(135deg,#fffbf5,#fff7ed); }
+.sweet-spot-card.sweet-in { border-left-color: #fb923c; background: rgba(251,146,60,0.08); }
 .sweet-spot-card.sweet-below { border-left-color: #059669; }
 .sweet-spot-card.sweet-above { border-left-color: #d97706; }
 .sweet-headline { font-size: 1.05rem; margin: 8px 0; }
 .sweet-check-table .chk-ok td:first-child { color: #047857; font-weight: 700; }
 .sweet-check-table .chk-bad td:first-child { color: #b91c1c; font-weight: 700; }
-.sweet-verdict { margin: 10px 0 6px; font-size: 14px; color: #1e293b; }
+.sweet-verdict { margin: 10px 0 6px; font-size: 14px; color: #e2e8f0; }
 .score-headline { font-size: 1.05rem; margin: 8px 0; }
 .score-rec-table .score-cell { font-size: 1.1rem; letter-spacing: 0.02em; }
 .score-track-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 8px; margin: 10px 0; font-size: 0.92rem; }
 .quant-score-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px; margin: 10px 0; }
-.quant-track { background: #f8fafc; border-radius: 8px; padding: 10px; border: 1px solid #e2e8f0; }
-.quant-track.model-track { background: #ecfdf5; border-color: #bbf7d0; }
+.quant-track { background: rgba(255,255,255,0.04); border-radius: 8px; padding: 10px; border: 1px solid rgba(255,255,255,0.08); }
+.quant-track.model-track { background: rgba(52,211,153,0.08); border-color: rgba(52,211,153,0.25); }
 .quant-ev { margin: 10px 0; padding: 10px 12px; border-radius: 8px; font-size: 14px; }
 .quant-ev.value-yes { background: #ecfdf5; border: 1px solid #86efac; color: #166534; }
-.quant-ev.value-no { background: #f8fafc; border: 1px solid #e2e8f0; color: #475569; }
+.quant-ev.value-no { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); color: #cbd5e1; }
 .quant-mc { margin-top: 12px; }
 .strategy-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; }
 .strategy-head h3 { margin: 0; flex: 1; min-width: min(100%, 200px); }
 .strategy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 14px; margin-bottom: 14px; }
 .path-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 14px; margin-bottom: 14px; }
-.path-block { background: #f8fafc; border-radius: 10px; padding: 12px; border: 1px solid #e2e8f0; }
+.strategy-card { color: #e2e8f0; }
+.strategy-card h3, .strategy-card h4 { color: #f8fafc; }
+.strategy-card td { color: #e2e8f0; }
+.strategy-card th { color: #cbd5e1; background: rgba(255,255,255,0.05); }
+.strategy-card td strong { color: #fff; }
+.strategy-card .meta { color: #cbd5e1; }
+.path-block { background: rgba(255,255,255,0.04); border-radius: 10px; padding: 12px; border: 1px solid rgba(255,255,255,0.08); }
 .path-block h4 { margin: 0 0 8px; font-size: 14px; }
-.path-notes { margin: 8px 0 0 16px; padding: 0; line-height: 1.55; }
-.bracket-lane { margin: 10px 0 12px; padding: 10px; background: #fff; border: 1px dashed #cbd5e1; border-radius: 8px; }
-.lane-title { font-size: 12px; color: #64748b; margin-bottom: 8px; }
+.path-notes { margin: 8px 0 0 16px; padding: 0; line-height: 1.55; color:#cbd5e1; }
+.bracket-lane { margin: 10px 0 12px; padding: 10px; background: rgba(255,255,255,0.04); border: 1px dashed rgba(255,255,255,0.18); border-radius: 8px; }
+.lane-title { font-size: 12px; color: #cbd5e1; margin-bottom: 8px; }
 .bracket-node { padding: 6px 10px; border-radius: 6px; font-size: 13px; text-align: center; }
-.bracket-node.group { background: #ede9fe; color: #5b21b6; }
-.bracket-node.r32 { background: #dcfce7; color: #166534; }
-.bracket-node.r16 { background: #fee2e2; color: #991b1b; }
-.bracket-node.half, .bracket-node.note { background: #f1f5f9; color: #475569; font-size: 12px; }
+.bracket-node.group { background: rgba(168,85,247,0.18); color: #ddd6fe; }
+.bracket-node.r32 { background: rgba(52,211,153,0.16); color: #bbf7d0; }
+.bracket-node.r16 { background: rgba(248,113,113,0.14); color: #fecaca; }
+.bracket-node.half, .bracket-node.note { background: rgba(255,255,255,0.06); color: #cbd5e1; font-size: 12px; }
 .bracket-connector { text-align: center; color: #94a3b8; line-height: 1.2; font-size: 12px; }
-.path-row-preferred td { background: #ecfdf5; font-weight: 600; }
-.prediction-col { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 12px; }
-.picking-warn { color: #92400e; }
+.path-row-preferred td { background: rgba(52,211,153,0.08); font-weight: 600; }
+.prediction-col { background: rgba(251,191,36,0.08); border: 1px solid rgba(251,191,36,0.25); border-radius: 10px; padding: 12px; }
+.picking-warn { color: #fcd34d; }
 .bracket-notes { margin-top: 12px; font-size: 13px; }
 .group-bracket-strip { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px;
-  padding: 10px; background: #f0fdf4; border-radius: 8px; border: 1px solid #bbf7d0; }
+  padding: 10px; background: rgba(52,211,153,0.07); border-radius: 8px; border: 1px solid rgba(52,211,153,0.25); }
 .group-chaos-banner { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; font-size: 13px; line-height: 1.5; }
-.group-chaos-banner.chaos-high { background: #fff7ed; border: 1px solid #fdba74; color: #9a3412; }
-.group-chaos-banner.chaos-med { background: #eff6ff; border: 1px solid #93c5fd; color: #1e40af; }
+.group-chaos-banner.chaos-high { background: rgba(251,146,60,0.10); border: 1px solid rgba(251,146,60,0.35); color: #fed7aa; }
+.group-chaos-banner.chaos-med { background: rgba(96,165,250,0.10); border: 1px solid rgba(96,165,250,0.35); color: #bfdbfe; }
 .race-badge { font-size: 12px; padding: 6px 10px; border-radius: 8px; margin: 0 0 8px; }
-.race-badge.race-lock { background: #ecfdf5; color: #166534; border: 1px solid #86efac; }
-.race-badge.race-fight { background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; }
-.race-badge.race-out { background: #f1f5f9; color: #64748b; border: 1px solid #e2e8f0; }
-.likely-r32 { background: #f0fdf4; padding: 8px 10px; border-radius: 6px; margin-bottom: 8px; }
+.race-badge.race-lock { background: rgba(52,211,153,0.12); color: #86efac; border: 1px solid rgba(52,211,153,0.35); }
+.race-badge.race-fight { background: rgba(251,191,36,0.12); color: #fde68a; border: 1px solid rgba(251,191,36,0.35); }
+.race-badge.race-out { background: rgba(255,255,255,0.06); color: #cbd5e1; border: 1px solid rgba(255,255,255,0.1); }
+.likely-r32 { background: rgba(52,211,153,0.07); padding: 8px 10px; border-radius: 6px; margin-bottom: 8px; }
 .likely-opp-table { margin-top: 8px; }
 .bracket-chip { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; }
-.bracket-chip.r32 { background: #dcfce7; color: #166534; }
+.bracket-chip.r32 { background: rgba(52,211,153,0.16); color: #bbf7d0; }
 .rec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 12px; margin-bottom: 12px; }
-.dual-hint { color: #b45309; background: #fffbeb; padding: 8px 12px; border-radius: 6px; }
+.dual-hint { color: #fcd34d; background: rgba(251,191,36,0.08); padding: 8px 12px; border-radius: 6px; }
 canvas { max-height: 260px; }
-tr.chg td { background: #fffbeb; }
+tr.chg td { background: rgba(251,191,36,0.08); }
 .style-clash-banner { margin-bottom: 8px; line-height: 1.5; }
-.style-clash-banner strong { color: #92400e; }
+.style-clash-banner strong { color: #fcd34d; }
 .similar-block { overflow-x: auto; }
 .similar-block table { min-width: min(960px, 100%); }
 .similar-block .tag { margin-bottom: 4px; }
@@ -6062,17 +6412,17 @@ tr.chg td { background: #fffbeb; }
 .similar-head h4 { margin: 0; flex: 1; min-width: min(100%, 200px); }
 .similar-ai-btn { font-size: 12px; padding: 5px 10px; white-space: nowrap; }
 .similar-ai-out { margin: 10px 0; }
-.similar-ai-box { background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 10px; padding: 10px 12px; }
+.similar-ai-box { background: rgba(168,85,247,0.08); border: 1px solid rgba(168,85,247,0.25); border-radius: 10px; padding: 10px 12px; }
 .similar-ai-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
-.similar-ai-top strong { color: #5b21b6; font-size: 14px; line-height: 1.35; }
+.similar-ai-top strong { color: #ddd6fe; font-size: 14px; line-height: 1.35; }
 .similar-ai-pick { margin: 0 0 8px; font-size: 13px; }
-.similar-ai-ev { margin: 6px 0; padding-left: 18px; font-size: 12px; color: #475569; line-height: 1.45; }
-.similar-ai-action { margin: 8px 0 0; font-size: 13px; font-weight: 600; color: #6d28d9; }
+.similar-ai-ev { margin: 6px 0; padding-left: 18px; font-size: 12px; color: #cbd5e1; line-height: 1.45; }
+.similar-ai-action { margin: 8px 0 0; font-size: 13px; font-weight: 600; color: #c4b5fd; }
 .similar-ai-err { color: #b91c1c; }
-h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
+h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
 .export-hero h1 { margin: 0 0 6px; font-size: clamp(1.15rem, 4vw, 1.45rem); }
-.export-footer { margin-top: 16px; padding-top: 10px; border-top: 1px dashed #cbd5e1; text-align: center; font-size: 11px; color: #64748b; }
-#match-export-root { background: #f8fafc; padding: 4px 0 8px; }
+.export-footer { margin-top: 16px; padding-top: 10px; border-top: 1px dashed rgba(255,255,255,0.16); text-align: center; font-size: 11px; color: #94a3b8; }
+#match-export-root { background: #0a0c18; padding: 4px 0 8px; }
 .export-chart-img { border-radius: 8px; background: #fff; max-width: 100%; }
 """ + AI_SUMMARY_POSTER_CSS)
 

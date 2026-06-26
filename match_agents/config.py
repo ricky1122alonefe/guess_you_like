@@ -73,7 +73,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "agent_weights": DEFAULT_AGENT_WEIGHTS,
     "external_factors": {
         "enabled": True,
+        "auto_fetch": True,
         "default_weight": 0.6,
+        "openweather_api_key_env": "OPENWEATHER_API_KEY",
+        "api_football_key_env": "API_FOOTBALL_KEY",
         "sources": {
             "news": None,
             "weather": None,
@@ -81,8 +84,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "schedule": None,
         },
         "notes": [
-            "外部因素只有在配置文件提供可靠数据源或本地数据文件时才参与研判。",
-            "未提供数据时，总 Agent 必须写明暂无可靠新闻/天气/场地数据。",
+            "无需 API Key：球场用 data/match_venues.json 固定映射，天气用 Open-Meteo/wttr.in，伤停用 500 情报页 + 网页搜索。",
+            "可选配置 OPENWEATHER_API_KEY / API_FOOTBALL_KEY 作为额外补充。",
         ],
     },
 }

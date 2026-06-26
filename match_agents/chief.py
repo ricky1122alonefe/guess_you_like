@@ -21,6 +21,33 @@ def load_latest_chief_report(output_root: str | Path, fixture_id: str) -> dict[s
     return load_latest_artifact(output_root, fixture_id, CHIEF_FILE)
 
 
+def load_chief_report_map(
+    output_root: str | Path,
+    fixture_ids: list[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Load latest chief reports keyed by fixture_id."""
+    root = Path(output_root)
+    out: dict[str, dict[str, Any]] = {}
+    if fixture_ids:
+        for fid in fixture_ids:
+            if not fid:
+                continue
+            rec = load_latest_chief_report(root, fid)
+            if rec:
+                out[str(fid)] = rec
+        return out
+    matches_dir = root / "matches"
+    if not matches_dir.is_dir():
+        return out
+    for mdir in matches_dir.iterdir():
+        if not mdir.is_dir():
+            continue
+        rec = load_latest_artifact(root, mdir.name, CHIEF_FILE)
+        if rec:
+            out[str(mdir.name)] = rec
+    return out
+
+
 def load_latest_agent_board(output_root: str | Path, fixture_id: str) -> dict[str, Any] | None:
     return load_latest_artifact(output_root, fixture_id, BOARD_FILE)
 

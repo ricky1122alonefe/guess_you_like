@@ -63,7 +63,10 @@
   },
   "external_factors": {
     "enabled": true,
+    "auto_fetch": true,
     "default_weight": 0.6,
+    "openweather_api_key_env": "OPENWEATHER_API_KEY",
+    "api_football_key_env": "API_FOOTBALL_KEY",
     "sources": {
       "news": null,
       "weather": null,
@@ -71,8 +74,8 @@
       "schedule": null
     },
     "notes": [
-      "外部因素只有在配置文件提供可靠数据源或本地数据文件时才参与研判。",
-      "未提供数据时，总 Agent 必须写明暂无可靠新闻/天气/场地数据。"
+      "无需 API Key：球场固定目录 → 城市固定；天气 Open-Meteo；伤停 500 情报 + 网页搜索。",
+      "精确球场：data/match_venues.json → fixture_overrides。"
     ]
   }
 }

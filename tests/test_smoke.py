@@ -1620,11 +1620,26 @@ def test_match_agents_board_and_guardrail_render():
     assert "最终汇总 · 是否值得入手" in workbench_html
     assert "Chief Prompt / Messages" in workbench_html
     assert "C 仅参考" in workbench_html
+    assert "流式 Pipeline 执行" in workbench_html
+    assert "agent-pipeline-stream" in workbench_html
+    assert "runAgentPipeline" in workbench_html
+
+    from match_agents.pipeline import iter_match_pipeline_events, pipeline_event_json
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
+        pipeline_events = list(
+            iter_match_pipeline_events(root, "999", pred, index=index, run_chief=False)
+        )
+        names = [e["event"] for e in pipeline_events]
+        assert "pipeline_init" in names
+        assert "pipeline_complete" in names
+        assert names.count("step_start") >= 5
+        assert names.count("step_done") >= 5
+        assert pipeline_event_json(pipeline_events[0])
+
         mdir = root / "matches" / "999"
-        mdir.mkdir(parents=True)
+        mdir.mkdir(parents=True, exist_ok=True)
         (mdir / "agent_board.jsonl").write_text(json.dumps(board, ensure_ascii=False) + "\n", encoding="utf-8")
         chief = {
             "ok": True,
@@ -1652,6 +1667,93 @@ def test_match_agents_board_and_guardrail_render():
         assert workflow["history_counts"]["growth_report"] == 1
         assert any(s["id"] == "chief_prompt" for s in workflow["steps"])
         assert any(s["id"] == "growth_agent" for s in workflow["steps"])
+
+
+def test_dashboard_chief_report_column():
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from match_agents.chief import load_chief_report_map
+    from web_ui import _chief_report_list_cell, html_dashboard
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fid = "12345"
+        mdir = root / "matches" / fid
+        mdir.mkdir(parents=True)
+        chief = {
+            "analysis": {
+                "buy_decision": "C 仅参考",
+                "summary": "大让球风险高，建议观望",
+                "risk_level": "高",
+                "confidence": "低",
+            }
+        }
+        (mdir / "chief_report.jsonl").write_text(json.dumps(chief, ensure_ascii=False) + "\n", encoding="utf-8")
+        loaded = load_chief_report_map(root, [fid])
+        assert fid in loaded
+        cell = _chief_report_list_cell(fid, loaded[fid])
+        assert "C 仅参考" in cell
+        assert "大让球" in cell
+        assert "/agents" in cell
+
+        dash = html_dashboard({}, None, output_root=root)
+        assert "Agent研判" in dash
+
+
+def test_factor_fetch_catalog_and_agents():
+    from match_agents.experts import external_context_agent, schedule_venue_agent
+    from match_agents.factor_fetch import clear_factor_cache, enrich_match_factors, parse_match_teams
+
+    clear_factor_cache()
+    pred = {
+        "fixture_id": "888",
+        "match": "墨西哥VS南非",
+        "home_team": "墨西哥",
+        "away_team": "南非",
+        "kickoff_at": "2026-06-25 06:00:00",
+        "predict_row": {"比赛": "墨西哥VS南非"},
+        "competition": "世界杯",
+    }
+    index = {"fixture_id": "888", "match_name": "墨西哥VS南非"}
+    assert parse_match_teams(pred, index) == ("墨西哥", "南非")
+
+    factors = enrich_match_factors(pred, index)
+    assert factors.get("venue", {}).get("stadium")
+    assert factors.get("venue", {}).get("city")
+    assert "catalog" in str(factors.get("venue", {}).get("source"))
+    logs = " ".join(factors.get("fetch_log") or [])
+    assert "固定" in logs or "catalog" in logs or "球场" in logs
+
+    sv = schedule_venue_agent(pred, index)
+    assert any("阿兹特克" in x or "球馆" in x for x in sv.evidence)
+    ext = external_context_agent(pred, index)
+    assert any("场地" in x or "数据查询" in x or "catalog" in x for x in ext.evidence)
+
+
+def test_web_lookup_open_meteo_parse():
+    from match_agents.web_lookup import fetch_open_meteo_weather
+    from unittest.mock import MagicMock, patch
+
+    payload = {
+        "hourly": {
+            "time": ["2026-06-25T05:00", "2026-06-25T06:00", "2026-06-25T07:00"],
+            "temperature_2m": [18.0, 20.5, 22.0],
+            "relativehumidity_2m": [55, 50, 48],
+            "windspeed_10m": [12.0, 10.5, 9.0],
+            "weathercode": [1, 2, 3],
+        }
+    }
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json = MagicMock(return_value=payload)
+    with patch("match_agents.web_lookup._session") as mock_sess:
+        mock_sess.return_value.get.return_value = mock_resp
+        wx, logs = fetch_open_meteo_weather(19.3, -99.15, "2026-06-25 06:00:00")
+    assert wx.get("source") == "open_meteo"
+    assert wx.get("temperature_c") == 20.5
+    assert any("Open-Meteo" in x for x in logs)
 
 
 def test_sweet_spot_analysis():

@@ -149,8 +149,10 @@ Fri June 19
   20:00 UTC-7    Turkey   0-1 (0-1) Paraguay   @ San Francisco Bay Area (Santa Clara)
                     (Matías Galarza 2')
 Thu June 25
-  19:00 UTC-7    Turkey         v USA   @ Los Angeles (Inglewood)
-  19:00 UTC-7    Paraguay      v Australia     @ San Francisco Bay Area (Santa Clara)
+  19:00 UTC-7    Turkey         3-2 (2-1) USA   @ Los Angeles (Inglewood)
+                    (Arda Güler 10' Baris Alper Yilmaz 31' Kaan Ayhan 90+8';
+                       Auston Trusty 3' Sebastian Berhalter 49')
+  19:00 UTC-7    Paraguay      0-0 (0-0) Australia     @ San Francisco Bay Area (Santa Clara)
 
 
 ▪ Group E
@@ -166,8 +168,11 @@ Sat June 20
                     (Deniz Undav 68',90+4'; Franck Kessié 30')
   19:00 UTC-5    Ecuador  0-0 (0-0) Curaçao        @ Kansas City
 Thu June 25
-  16:00 UTC-4    Curaçao  v Ivory Coast     @ Philadelphia
-  16:00 UTC-4    Ecuador  v Germany         @ New York/New Jersey (East Rutherford)
+  16:00 UTC-4    Curaçao  0-2 (0-1) Ivory Coast     @ Philadelphia
+                    (Nicolas Pépé 7', 64')
+  16:00 UTC-4    Ecuador  2-1 (1-1) Germany         @ New York/New Jersey (East Rutherford)
+                    (Nilson Angulo 9' Gonzalo Plata 77';
+                       Leroy Sané 2')
 
 
 ▪ Group F
@@ -186,8 +191,12 @@ Sat June 20
   22:00 UTC-6    Tunisia      0-4 (0-2) Japan              @ Monterrey (Guadalupe)
                     (Daichi Kamada 4' Ayase Ueda 31',83' Junya Ito 69')
 Thu June 25
-  18:00 UTC-5    Japan        v Sweden             @ Dallas (Arlington)
-  18:00 UTC-5   Tunisia      v Netherlands         @ Kansas City
+  18:00 UTC-5    Japan        1-1 (0-0) Sweden             @ Dallas (Arlington)
+                    (Daizen Maeda 56';
+                       Anthony Elanga 62')
+  18:00 UTC-5   Tunisia      1-3 (0-2) Netherlands         @ Kansas City
+                    (Hazem Mastouri 54';
+                       Ellyes Skhiri 3'(OG) Brian Brobbey 7' Jan Paul van Hecke 62')
 
 
 ▪ Group G

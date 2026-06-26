@@ -97,6 +97,28 @@ function aiDeepAnalyze(fid, btn) {
     });
 }
 
+function aiChiefAnalyze(fid, btn) {
+  if (!confirm('多 Agent 总分析：会汇总盘口/竞彩/战意/积分等专家证据后调用 AI 生成最终报告，可能需要 1–3 分钟。')) return;
+  const b = btn || (typeof event !== 'undefined' && event.target);
+  if (b) { b.disabled = true; b.textContent = '总分析中…'; }
+  fetch('/api/match/' + fid + '/chief-agent', {method:'POST'})
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) {
+        showToast(d.error || '多 Agent 总分析失败', true);
+        if (b) { b.disabled = false; b.textContent = b.dataset.label || '多 Agent 总分析'; }
+        return;
+      }
+      const a = d.analysis || {};
+      showToast('✅ ' + (a.summary || '多 Agent 总分析完成') + '，刷新页面…');
+      setTimeout(() => location.reload(), 900);
+    })
+    .catch(e => {
+      showToast('请求失败: ' + e, true);
+      if (b) { b.disabled = false; b.textContent = b.dataset.label || '多 Agent 总分析'; }
+    });
+}
+
 function escHtmlSim(s) {
   const d = document.createElement('div');
   d.textContent = s == null ? '' : String(s);
@@ -2073,6 +2095,492 @@ def _deep_analysis_card(record: dict | None) -> str:
   {risk_html}
   {layers_fold}
 </div>"""
+
+
+def _agent_board_card(board: dict | None) -> str:
+    if not board:
+        return ""
+    agents = board.get("agents") or []
+    rows = ""
+    for a in agents:
+        ev = "；".join(a.get("evidence") or [])[:180]
+        warn = "；".join(a.get("warnings") or [])[:160]
+        rows += f"""
+<tr>
+  <td><strong>{_e(a.get('name') or a.get('agent_id'))}</strong></td>
+  <td>{_e(a.get('verdict') or '—')}</td>
+  <td>{_e(a.get('weight') or '—')}</td>
+  <td>{_e(a.get('confidence'))}</td>
+  <td>{_e(a.get('risk'))}</td>
+  <td class="meta">{_e(ev)}</td>
+  <td class="meta">{_e(warn)}</td>
+</tr>"""
+    guards = board.get("hard_guards") or []
+    guard_html = ""
+    if guards:
+        guard_html = "<ul class='deep-list'>" + "".join(f"<li>{_e(g)}</li>" for g in guards) + "</ul>"
+    return f"""
+<div class="card agent-board-card">
+  <h3>多 Agent 证据板 <span class="tag">{_e(format_ts(board.get('generated_at')))}</span></h3>
+  <p class="meta">专家只负责取证和预警；最终结论由 AI 总 Agent 综合。</p>
+  {f'<div class="deep-section"><h4>硬风险闸门</h4>{guard_html}</div>' if guard_html else ''}
+  <div class="review-table-wrap">
+  <table class="agent-board-table">
+    <tr><th>Agent</th><th>方向</th><th>权重</th><th>置信</th><th>风险</th><th>证据</th><th>预警</th></tr>
+    {rows}
+  </table>
+  </div>
+</div>"""
+
+
+def _chief_agent_card(record: dict | None) -> str:
+    if not record:
+        return ""
+    a = record.get("analysis") or {}
+    if not a:
+        return ""
+    fp = a.get("final_pick") or {}
+    if isinstance(fp, dict):
+        pick_txt = " · ".join(
+            f"{label}{_e(fp.get(key) or '—')}"
+            for key, label in (("sp", "胜平负 "), ("rqsp", "让球 "), ("asian_handicap", "亚盘 "))
+        )
+    else:
+        pick_txt = str(fp or "—")
+    conflicts = "".join(f"<li>{_e(x)}</li>" for x in (a.get("conflicts") or [])[:5])
+    must_not = "".join(f"<li>{_e(x)}</li>" for x in (a.get("must_not_buy_reasons") or [])[:5])
+    watch = "".join(f"<li>{_e(x)}</li>" for x in (a.get("watch_points") or [])[:5])
+    report = _e(a.get("final_report_md") or "").replace("\n", "<br>")
+    return f"""
+<div class="card chief-agent-card">
+  <h3>AI 总 Agent 最终报告 <span class="tag">{_e(format_ts(record.get('ts')))}</span></h3>
+  <p class="deep-headline">{_e(a.get('summary') or '多 Agent 综合完成')}</p>
+  <p><strong class="pick">{pick_txt}</strong>
+     · {_e(a.get('buy_decision') or '—')}
+     · 置信 {_e(a.get('confidence') or '—')}
+     · 风险 {_e(a.get('risk_level') or '—')}</p>
+  {_fold('最终深度报告', f"<p class='meta chief-report'>{report}</p>", open=True)}
+  <div class="error-review-cols">
+    <div><h4>冲突点</h4><ul>{conflicts or '<li>暂无</li>'}</ul></div>
+    <div><h4>禁止/降级理由</h4><ul>{must_not or '<li>暂无</li>'}</ul></div>
+    <div><h4>赛前观察</h4><ul>{watch or '<li>暂无</li>'}</ul></div>
+  </div>
+</div>"""
+
+
+def _agent_workflow_card(workflow: dict | None) -> str:
+    if not workflow:
+        return ""
+    steps_html = ""
+    for step in workflow.get("steps") or []:
+        status = step.get("status") or "ok"
+        items = "".join(f"<li>{_e(x)}</li>" for x in (step.get("items") or [])[:8])
+        warn = "".join(f"<li>{_e(x)}</li>" for x in (step.get("warnings") or [])[:5])
+        prompt_html = ""
+        if step.get("prompt_messages"):
+            blocks = []
+            for m in step.get("prompt_messages") or []:
+                content = _e(m.get("content") or "")
+                blocks.append(
+                    f"<h5>{_e(m.get('role') or 'message')}</h5>"
+                    f"<pre class='agent-prompt-pre'>{content}</pre>"
+                )
+            prompt_html = _fold("查看 Prompt / Messages", "".join(blocks), muted=True)
+        raw_text = ""
+        if step.get("raw_text"):
+            raw_text = _fold(
+                "查看 AI 原始输出",
+                f"<pre class='agent-prompt-pre'>{_e(step.get('raw_text'))}</pre>",
+                muted=True,
+            )
+        steps_html += f"""
+<div class="agent-flow-step flow-{_e(status)}">
+  <div class="agent-flow-dot"></div>
+  <div class="agent-flow-body">
+    <div class="agent-flow-head">
+      <strong>{_e(step.get('title') or step.get('id'))}</strong>
+      <span class="tag">{_e(status)}</span>
+    </div>
+    <p class="meta">{_e(step.get('summary') or '')}</p>
+    {f'<ul class="deep-list">{items}</ul>' if items else ''}
+    {f'<div class="agent-flow-warn"><h4>预警</h4><ul>{warn}</ul></div>' if warn else ''}
+    {prompt_html}
+    {raw_text}
+  </div>
+</div>"""
+    counts = workflow.get("history_counts") or {}
+    return f"""
+<div class="card agent-workflow-card">
+  <h3>多 Agent 工作流 / Pipeline</h3>
+  <p class="meta">展示本场从输入、专家证据、硬风险闸门、总 Agent Prompt 到 AI 输出的完整链路。
+  <a href="/api/match/{_e(workflow.get('fixture_id'))}/agent-workflow" target="_blank" rel="noopener">JSON API</a>
+  · 证据板 {counts.get('agent_board', 0)} 条 · 总报告 {counts.get('chief_report', 0)} 条</p>
+  <div class="agent-flow">{steps_html}</div>
+</div>"""
+
+
+def _agent_workbench_stat(label: str, value: str, tone: str = "") -> str:
+    tone_cls = f" workbench-stat-{tone}" if tone else ""
+    return f"""
+<div class="workbench-stat{tone_cls}">
+  <span>{_e(label)}</span>
+  <strong>{_e(value or '—')}</strong>
+</div>"""
+
+
+def _agent_role_matrix(board: dict | None) -> str:
+    if not board:
+        return "<p class='meta'>暂无专家证据板。</p>"
+    cards = ""
+    for agent in board.get("agents") or []:
+        risk = float(agent.get("risk") or 0)
+        status = "risk" if risk >= 0.7 else "ok"
+        evidence = "".join(f"<li>{_e(x)}</li>" for x in (agent.get("evidence") or [])[:3])
+        warnings = "".join(f"<li>{_e(x)}</li>" for x in (agent.get("warnings") or [])[:3])
+        cards += f"""
+<div class="role-card role-{status}">
+  <div class="role-head">
+    <strong>{_e(agent.get('name') or agent.get('agent_id'))}</strong>
+    <span class="tag">{_e(agent.get('verdict') or 'neutral')}</span>
+  </div>
+  <p class="meta">权重 {_e(agent.get('weight'))} · 置信 {_e(agent.get('confidence'))} · 风险 {_e(agent.get('risk'))}</p>
+  {f'<ul class="deep-list">{evidence}</ul>' if evidence else ''}
+  {f'<div class="role-warn"><ul>{warnings}</ul></div>' if warnings else ''}
+</div>"""
+    return f"<div class='role-grid'>{cards}</div>"
+
+
+def _agent_final_panel(chief_report: dict | None) -> str:
+    analysis = (chief_report or {}).get("analysis") or {}
+    if not analysis:
+        return """
+<div class="workbench-final missing">
+  <h2>暂无最终报告</h2>
+  <p>请先点击“运行多 Agent 总分析”，系统会生成专家证据板、Prompt、AI 原始输出和最终结构化结论。</p>
+</div>"""
+    report = _e(analysis.get("final_report_md") or "")
+    conflicts = "".join(f"<li>{_e(x)}</li>" for x in (analysis.get("conflicts") or [])[:8])
+    must_not = "".join(f"<li>{_e(x)}</li>" for x in (analysis.get("must_not_buy_reasons") or [])[:8])
+    watch = "".join(f"<li>{_e(x)}</li>" for x in (analysis.get("watch_points") or [])[:8])
+    decision = analysis.get("buy_decision") or "—"
+    risk = analysis.get("risk_level") or "—"
+    confidence = analysis.get("confidence") or "—"
+    return f"""
+<div class="workbench-final">
+  <div class="workbench-final-head">
+    <div>
+      <h2>{_e(analysis.get('summary') or 'AI 总 Agent 最终结论')}</h2>
+      <p class="meta">最终决策 · 风险 · 置信度</p>
+    </div>
+    <div class="workbench-final-tags">
+      <span class="tag final-decision">{_e(decision)}</span>
+      <span class="tag">{_e(risk)}</span>
+      <span class="tag">{_e(confidence)}</span>
+    </div>
+  </div>
+  {_fold('最终中文报告', f"<div class='chief-report'>{report}</div>", open=True)}
+  <div class="workbench-triple">
+    <div><h4>专家冲突</h4><ul>{conflicts or '<li>暂无</li>'}</ul></div>
+    <div><h4>禁止/降级理由</h4><ul>{must_not or '<li>暂无</li>'}</ul></div>
+    <div><h4>开球前复核</h4><ul>{watch or '<li>暂无</li>'}</ul></div>
+  </div>
+</div>"""
+
+
+def _latest_ai_tabs(prediction: dict | None, ai_records: list[dict] | None) -> list[dict]:
+    tabs: list[dict] = []
+    latest = (ai_records or [None])[0] or {}
+    source_ts = format_ts(latest.get("ts")) if latest else ""
+    analyses = latest.get("analyses") or {}
+    if not analyses:
+        analyses = (prediction or {}).get("ai_analyses") or {}
+    for pid, analysis in analyses.items():
+        row = analysis.get("predict_row") or {}
+        tabs.append({
+            "id": str(pid),
+            "label": analysis.get("label") or analysis.get("ai_provider_label") or str(pid),
+            "ts": source_ts,
+            "pick": _display_pick(analysis, row=row),
+            "result": analysis.get("result_1x2_cn") or row.get("胜平负"),
+            "scores": analysis.get("likely_scores") or analysis.get("likely_scores_detail") or row.get("推荐比分"),
+            "asian": analysis.get("asian_handicap_cn") or row.get("亚盘"),
+            "confidence": analysis.get("confidence_cn") or row.get("置信度"),
+            "reasoning": analysis.get("actuary_reasoning") or analysis.get("summary") or "",
+        })
+    return tabs
+
+
+def _ai_model_tabs(prediction: dict | None, ai_records: list[dict] | None, deep_records: list[dict] | None, fid: str) -> str:
+    tabs = _latest_ai_tabs(prediction, ai_records)
+    latest_deep = (deep_records or [None])[0] or {}
+    deep = latest_deep.get("analysis") or {}
+    if not tabs and not deep:
+        return """
+<div class="card ai-tabs-card">
+  <h3>多 AI 分析 Tabs</h3>
+  <p class="meta">暂无多模型 AI 记录。先在单场页运行“AI 推荐本场”或“AI 深度分析”。</p>
+</div>"""
+    btns = ""
+    panels = ""
+    for i, tab in enumerate(tabs):
+        active = " active" if i == 0 else ""
+        hidden = "" if i == 0 else " hidden"
+        btns += (
+            f'<button type="button" class="ai-tab-btn{active}" '
+            f'onclick="switchAiWorkbenchTab(\'{_e(fid)}\', {i})">{_e(tab.get("label"))}</button>'
+        )
+        reason = _e(tab.get("reasoning") or "暂无详细理由")
+        panels += f"""
+<div class="ai-tab-panel{active}" data-ai-tab-panel="{i}"{hidden}>
+  <div class="ai-tab-kpis">
+    <div><span>竞彩推荐</span><strong>{_e(tab.get('pick'))}</strong></div>
+    <div><span>胜平负</span><strong>{_e(tab.get('result') or '—')}</strong></div>
+    <div><span>比分</span><strong>{_e(tab.get('scores') or '—')}</strong></div>
+    <div><span>亚盘</span><strong>{_e(tab.get('asian') or '—')}</strong></div>
+    <div><span>置信</span><strong>{_e(tab.get('confidence') or '—')}</strong></div>
+  </div>
+  <p class="meta">分析时间：{_e(tab.get('ts') or '—')}</p>
+  {_fold('该模型分析详情', f"<p class='ai-tab-reason'>{reason}</p>", open=True)}
+</div>"""
+    if deep:
+        idx = len(tabs)
+        active = " active" if idx == 0 else ""
+        hidden = "" if idx == 0 else " hidden"
+        btns += (
+            f'<button type="button" class="ai-tab-btn{active}" '
+            f'onclick="switchAiWorkbenchTab(\'{_e(fid)}\', {idx})">深度综合</button>'
+        )
+        risks = "".join(f"<li>{_e(x)}</li>" for x in (deep.get("key_risks") or [])[:5])
+        watch = "".join(f"<li>{_e(x)}</li>" for x in (deep.get("pre_match_watchlist") or [])[:5])
+        panels += f"""
+<div class="ai-tab-panel{active}" data-ai-tab-panel="{idx}"{hidden}>
+  <div class="ai-tab-kpis">
+    <div><span>最终推荐</span><strong>{_e(deep.get('final_pick') or '—')}</strong></div>
+    <div><span>置信</span><strong>{_e(deep.get('confidence_level') or '—')}</strong></div>
+    <div><span>仓位</span><strong>{_e(deep.get('stake_advice') or '—')}</strong></div>
+  </div>
+  <p class="deep-headline">{_e(deep.get('headline') or 'AI 深度综合')}</p>
+  <p class="meta">{_e(deep.get('final_pick_reason') or '')}</p>
+  {_fold('深度研判详情', f"<p class='ai-tab-reason'>{_e(deep.get('deep_verdict') or '')}</p>", open=True)}
+  <div class="workbench-triple">
+    <div><h4>关键风险</h4><ul>{risks or '<li>暂无</li>'}</ul></div>
+    <div><h4>赛前关注</h4><ul>{watch or '<li>暂无</li>'}</ul></div>
+  </div>
+</div>"""
+    return f"""
+<div class="card ai-tabs-card" id="ai-tabs-{_e(fid)}">
+  <div class="ai-tabs-head">
+    <div>
+      <h3>多 AI 分析 Tabs</h3>
+      <p class="meta">每个模型的观点单独查看，避免混在一起；最终是否入手以下方汇总决策为准。</p>
+    </div>
+  </div>
+  <div class="ai-tab-buttons">{btns}</div>
+  <div class="ai-tab-panels">{panels}</div>
+</div>"""
+
+
+def _buy_summary_panel(chief_report: dict | None, board: dict | None, prediction: dict | None) -> str:
+    analysis = (chief_report or {}).get("analysis") or {}
+    guards = (board or {}).get("hard_guards") or []
+    decision = analysis.get("buy_decision") or (prediction or {}).get("buy_tier_cn") or (prediction or {}).get("buy_tier") or "未生成"
+    risk = analysis.get("risk_level") or (prediction or {}).get("risk_level_cn") or "—"
+    confidence = analysis.get("confidence") or (prediction or {}).get("confidence_cn") or "—"
+    summary = analysis.get("summary") or "等待 Chief Agent 汇总后给出最终购买建议。"
+    reasons = analysis.get("must_not_buy_reasons") or guards
+    reason_html = "".join(f"<li>{_e(x)}</li>" for x in reasons[:8]) or "<li>暂无硬性降级理由</li>"
+    css = "buy-skip" if str(decision).lower() == "skip" else ("buy-risk" if guards or risk == "高" or "仅参考" in str(decision) else "buy-ok")
+    return f"""
+<div class="workbench-buy-summary {css}">
+  <div>
+    <p class="meta">最终汇总 · 是否值得入手</p>
+    <h2>{_e(decision)}</h2>
+    <p>{_e(summary)}</p>
+  </div>
+  <div class="buy-summary-side">
+    <span class="tag">风险 {_e(risk)}</span>
+    <span class="tag">置信 {_e(confidence)}</span>
+    <ul>{reason_html}</ul>
+  </div>
+</div>"""
+
+
+def html_agent_workbench(
+    index: dict,
+    *,
+    prediction: dict | None = None,
+    agent_board: dict | None = None,
+    chief_report: dict | None = None,
+    agent_workflow: dict | None = None,
+    ai_records: list[dict] | None = None,
+    deep_records: list[dict] | None = None,
+) -> str:
+    fid = str(index.get("fixture_id") or (prediction or {}).get("fixture_id") or "")
+    name = index.get("match_name") or (prediction or {}).get("match") or fid
+    board = agent_board or {}
+    chief = chief_report or {}
+    workflow = agent_workflow or {}
+    analysis = chief.get("analysis") or {}
+    summary = board.get("summary") or {}
+    counts = workflow.get("history_counts") or {}
+    guards = board.get("hard_guards") or []
+    role_count = len(board.get("agents") or [])
+    profile = board.get("scope") or summary.get("profile") or "—"
+    profile_desc = summary.get("profile_description") or ""
+    weighted = summary.get("weighted_signal") or {}
+    weighted_line = " · ".join(f"{k}:{v}" for k, v in weighted.items()) or "—"
+    guards_html = "".join(f"<li>{_e(x)}</li>" for x in guards) or "<li>未触发硬风险</li>"
+    prompt_blocks = ""
+    raw_text = ""
+    if chief.get("prompt_messages"):
+        prompt_blocks = "".join(
+            f"<h4>{_e(m.get('role') or 'message')}</h4><pre class='agent-prompt-pre'>{_e(m.get('content') or '')}</pre>"
+            for m in chief.get("prompt_messages") or []
+        )
+    if chief.get("raw_text"):
+        raw_text = f"<pre class='agent-prompt-pre'>{_e(chief.get('raw_text'))}</pre>"
+    compact_input = {
+        "fixture_id": fid,
+        "match": name,
+        "profile": profile,
+        "current_pick": ((prediction or {}).get("predict_row") or {}).get("竞彩推荐") or (prediction or {}).get("pick_jingcai_cn"),
+        "asian_handicap": (prediction or {}).get("asian_handicap_cn") or ((prediction or {}).get("predict_row") or {}).get("亚盘"),
+        "risk_level": (prediction or {}).get("risk_level_cn"),
+        "buy_tier": (prediction or {}).get("buy_tier_cn") or (prediction or {}).get("buy_tier"),
+    }
+    css = _shared_css("""
+body { max-width: min(1240px, 100%); }
+.workbench-hero { position: relative; overflow: hidden; border: 1px solid rgba(99,102,241,.22);
+  background: radial-gradient(circle at top left, rgba(124,58,237,.20), transparent 34%),
+  linear-gradient(135deg, #0f172a, #312e81 54%, #581c87); color: #fff; border-radius: 22px; padding: 22px; box-shadow: 0 18px 50px rgba(15,23,42,.22); }
+.workbench-hero h1 { margin: 0 0 8px; font-size: clamp(1.45rem, 4vw, 2.2rem); }
+.workbench-hero .meta { color: #ddd6fe; }
+.workbench-actions { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:14px 0 0; }
+.workbench-actions .btn { box-shadow:none; }
+.workbench-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,160px),1fr)); gap:10px; margin:14px 0; }
+.workbench-stat { background: rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.20); border-radius:14px; padding:12px; }
+.workbench-stat span { display:block; color:#ddd6fe; font-size:12px; margin-bottom:4px; }
+.workbench-stat strong { color:#fff; font-size:17px; }
+.workbench-stat-risk strong { color:#fed7aa; }
+.workbench-layout { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(300px,.85fr); gap:14px; margin-top:14px; }
+.ai-tabs-card { border-left:5px solid #2563eb; }
+.ai-tabs-head { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
+.ai-tab-buttons { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; border-bottom:1px solid #e2e8f0; padding-bottom:8px; }
+.ai-tab-btn { border:1px solid #c7d2fe; background:#eef2ff; color:#3730a3; border-radius:999px; padding:8px 12px; cursor:pointer; font-weight:600; }
+.ai-tab-btn.active { background:#4f46e5; color:#fff; border-color:#4f46e5; }
+.ai-tab-panel { border:1px solid #e2e8f0; background:#fff; border-radius:14px; padding:12px; }
+.ai-tab-panel[hidden] { display:none; }
+.ai-tab-kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,130px),1fr)); gap:8px; margin-bottom:10px; }
+.ai-tab-kpis div { background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:10px; }
+.ai-tab-kpis span { display:block; color:#64748b; font-size:12px; margin-bottom:4px; }
+.ai-tab-kpis strong { color:#1e293b; font-size:15px; }
+.ai-tab-reason { white-space:pre-wrap; line-height:1.75; color:#334155; }
+.workbench-buy-summary { margin-top:14px; border-radius:18px; padding:18px; display:grid; grid-template-columns:minmax(0,1fr) minmax(260px,.55fr); gap:14px; border:1px solid #c4b5fd; background:linear-gradient(135deg,#faf5ff,#eef2ff); box-shadow:0 12px 34px rgba(79,70,229,.12); }
+.workbench-buy-summary h2 { margin:4px 0 8px; font-size:clamp(1.35rem,4vw,1.8rem); color:#4c1d95; }
+.workbench-buy-summary.buy-risk { border-color:#fdba74; background:linear-gradient(135deg,#fff7ed,#fff1f2); }
+.workbench-buy-summary.buy-risk h2, .workbench-buy-summary.buy-skip h2 { color:#9a3412; }
+.workbench-buy-summary.buy-ok { border-color:#86efac; background:linear-gradient(135deg,#ecfdf5,#f0fdf4); }
+.workbench-buy-summary.buy-ok h2 { color:#166534; }
+.buy-summary-side { background:rgba(255,255,255,.62); border:1px solid rgba(255,255,255,.85); border-radius:14px; padding:12px; }
+.buy-summary-side ul { margin:10px 0 0; padding-left:18px; color:#475569; font-size:13px; line-height:1.6; }
+.workbench-final { background:#fff; border:1px solid #ddd6fe; border-left:5px solid #8b5cf6; border-radius:16px; padding:16px; box-shadow:0 10px 30px rgba(88,28,135,.08); }
+.workbench-final.missing { border-left-color:#94a3b8; background:#f8fafc; }
+.workbench-final-head { display:flex; gap:12px; align-items:flex-start; justify-content:space-between; margin-bottom:8px; }
+.workbench-final h2 { margin:0; font-size:clamp(1.1rem,3vw,1.35rem); color:#4c1d95; }
+.workbench-final-tags { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+.final-decision { background:#7c3aed; color:#fff; }
+.workbench-triple { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr)); gap:10px; margin-top:12px; }
+.workbench-triple > div { background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:10px; }
+.workbench-triple h4 { color:#6d28d9; }
+.workbench-triple ul { margin:0; padding-left:18px; font-size:13px; line-height:1.6; color:#475569; }
+.agent-workflow-card, .agent-board-card, .chief-agent-card { border-left:4px solid #8b5cf6; }
+.agent-flow { display:grid; gap:12px; margin-top:12px; }
+.agent-flow-step { display:grid; grid-template-columns:22px 1fr; gap:10px; align-items:start; position:relative; }
+.agent-flow-step:not(:last-child)::before { content:''; position:absolute; left:10px; top:28px; bottom:-14px; width:2px; background:#ddd6fe; }
+.agent-flow-dot { width:16px; height:16px; border-radius:999px; margin-top:7px; background:#22c55e; box-shadow:0 0 0 5px rgba(34,197,94,.12); z-index:1; }
+.agent-flow-step.flow-risk .agent-flow-dot { background:#f97316; box-shadow:0 0 0 5px rgba(249,115,22,.14); }
+.agent-flow-step.flow-missing .agent-flow-dot { background:#94a3b8; box-shadow:0 0 0 5px rgba(148,163,184,.15); }
+.agent-flow-body { border:1px solid #e2e8f0; border-radius:14px; padding:12px 14px; background:#fff; }
+.agent-flow-head { display:flex; gap:8px; justify-content:space-between; align-items:center; }
+.agent-flow-warn { margin-top:8px; padding:8px 10px; background:#fff7ed; border:1px solid #fed7aa; border-radius:8px; }
+.agent-flow-warn h4 { margin:0 0 4px; color:#9a3412; }
+.agent-flow-warn ul { margin:0; padding-left:18px; color:#9a3412; font-size:12px; line-height:1.5; }
+.role-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr)); gap:12px; }
+.role-card { background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:12px; }
+.role-card.role-risk { border-color:#fdba74; background:#fff7ed; }
+.role-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+.role-warn { margin-top:8px; background:#ffedd5; border-radius:8px; padding:8px; }
+.role-warn ul { margin:0; padding-left:18px; color:#9a3412; font-size:12px; line-height:1.5; }
+.agent-prompt-pre { white-space:pre-wrap; word-break:break-word; max-height:420px; overflow:auto; font-size:12px; line-height:1.55; background:#0f172a; color:#e2e8f0; border-radius:12px; padding:12px; }
+.chief-report { white-space:normal; line-height:1.75; color:#1e293b; }
+.deep-list { margin: 6px 0 0 16px; padding: 0; }
+.deep-list li { margin: 2px 0; font-size: 13px; color: #334155; }
+.workbench-json { font-size:12px; }
+@media (max-width: 900px) { .workbench-layout, .workbench-buy-summary { grid-template-columns:1fr; } .workbench-final-head { flex-direction:column; } }
+""")
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>{_e(name)} · 多 Agent 工作台</title>
+<style>{css}</style>
+<script>{_AI_BTN_JS}
+function switchAiWorkbenchTab(fid, idx) {{
+  const root = document.getElementById('ai-tabs-' + fid);
+  if (!root) return;
+  root.querySelectorAll('.ai-tab-btn').forEach((btn, i) => btn.classList.toggle('active', i === idx));
+  root.querySelectorAll('[data-ai-tab-panel]').forEach(panel => {{
+    const on = Number(panel.getAttribute('data-ai-tab-panel')) === idx;
+    panel.hidden = !on;
+    panel.classList.toggle('active', on);
+  }});
+}}
+</script>
+</head><body>
+<p class="back page-nav"><a href="/match/{_e(fid)}">← 返回单场</a> · <a href="/">首页</a> · <a href="/daily">当日推荐</a> · <a href="/review">推荐复盘</a></p>
+<section class="workbench-hero">
+  <h1>多 Agent 分析工作台 · {_e(name)}</h1>
+  <p class="meta">用 profile 编排角色：专家 Agent 产出证据与风险闸门，Chief AI Agent 只基于证据生成最终报告。</p>
+  <div class="workbench-stats">
+    {_agent_workbench_stat('Profile', str(profile))}
+    {_agent_workbench_stat('角色数', str(role_count))}
+    {_agent_workbench_stat('硬风险', str(len(guards)), 'risk' if guards else '')}
+    {_agent_workbench_stat('最终决策', str(analysis.get('buy_decision') or '未生成'))}
+    {_agent_workbench_stat('归档', f"Board {counts.get('agent_board', 0)} / Chief {counts.get('chief_report', 0)}")}
+  </div>
+  <p class="meta">{_e(profile_desc)} · 加权信号：{_e(weighted_line)}</p>
+  <div class="workbench-actions">
+    <button type="button" class="btn" style="background:#9333ea" data-label="运行多 Agent 总分析"
+      onclick="aiChiefAnalyze('{_e(fid)}', this)">运行多 Agent 总分析</button>
+    <a class="btn" style="background:#2563eb" href="/api/match/{_e(fid)}/agent-workflow" target="_blank" rel="noopener">查看 JSON Workflow</a>
+    <a class="btn" style="background:#64748b" href="/api/match/{_e(fid)}/agent-board" target="_blank" rel="noopener">重新生成证据板</a>
+  </div>
+</section>
+<div class="workbench-layout">
+  <main>
+    {_agent_final_panel(chief_report)}
+    {_ai_model_tabs(prediction, ai_records, deep_records, fid)}
+    {_agent_workflow_card(agent_workflow)}
+  </main>
+  <aside>
+    <div class="card">
+      <h3>输入快照</h3>
+      <pre class="workbench-json">{_e(json.dumps(compact_input, ensure_ascii=False, indent=2, default=str))}</pre>
+    </div>
+    <div class="card">
+      <h3>硬风险闸门</h3>
+      <ul class="deep-list">{guards_html}</ul>
+    </div>
+  </aside>
+</div>
+<div class="card">
+  <h3>专家角色矩阵</h3>
+  {_agent_role_matrix(agent_board)}
+</div>
+{_buy_summary_panel(chief_report, agent_board, prediction)}
+{_fold('Chief Prompt / Messages', prompt_blocks, muted=True, open=False)}
+{_fold('AI 原始输出 Raw Text', raw_text, muted=True, open=False)}
+</body></html>"""
 
 
 def _build_deep_history_html(deep_records: list[dict] | None) -> str:
@@ -5175,6 +5683,9 @@ def html_match_detail(
     prediction: dict | None = None,
     ai_records: list[dict] | None = None,
     deep_records: list[dict] | None = None,
+    agent_board: dict | None = None,
+    chief_report: dict | None = None,
+    agent_workflow: dict | None = None,
     settled: dict | None = None,
     output_root: Path | None = None,
 ) -> str:
@@ -5192,6 +5703,9 @@ def html_match_detail(
     ah_card = _wrap_export_module("handicap", _build_ah_analysis_card(prediction, timeline))
     latest_deep = (deep_records or [None])[0]
     deep_card = _wrap_export_module("deep", _deep_analysis_card(latest_deep))
+    agent_workflow_card = _wrap_export_module("agent-workflow", _agent_workflow_card(agent_workflow))
+    agent_board_card = _wrap_export_module("agent-board", _agent_board_card(agent_board))
+    chief_agent_card = _wrap_export_module("chief-agent", _chief_agent_card(chief_report))
 
     from ai_deep_analysis import has_prior_ai_analysis
 
@@ -5368,6 +5882,25 @@ def html_match_detail(
 .pick { font-size: clamp(1rem, 3.5vw, 1.15rem); }
 .pred-card { border-left: 4px solid #7c3aed; }
 .deep-card { border-left: 4px solid #0d9488; }
+.agent-board-card { border-left: 4px solid #8b5cf6; }
+.chief-agent-card { border-left: 4px solid #a855f7; }
+.agent-workflow-card { border-left: 4px solid #6366f1; }
+.agent-flow { display:grid; gap:12px; margin-top:12px; }
+.agent-flow-step { display:grid; grid-template-columns:18px 1fr; gap:10px; align-items:start; }
+.agent-flow-dot { width:12px; height:12px; border-radius:999px; margin-top:7px; background:#22c55e; box-shadow:0 0 0 4px rgba(34,197,94,.12); }
+.agent-flow-step.flow-risk .agent-flow-dot { background:#f97316; box-shadow:0 0 0 4px rgba(249,115,22,.14); }
+.agent-flow-step.flow-missing .agent-flow-dot { background:#94a3b8; box-shadow:0 0 0 4px rgba(148,163,184,.15); }
+.agent-flow-body { border:1px solid #e2e8f0; border-radius:12px; padding:10px 12px; background:#fff; }
+.agent-flow-head { display:flex; gap:8px; justify-content:space-between; align-items:center; }
+.agent-flow-warn { margin-top:8px; padding:8px 10px; background:#fff7ed; border:1px solid #fed7aa; border-radius:8px; }
+.agent-flow-warn h4 { margin:0 0 4px; color:#9a3412; }
+.agent-flow-warn ul { margin:0; padding-left:18px; color:#9a3412; font-size:12px; line-height:1.5; }
+.agent-prompt-pre { white-space:pre-wrap; word-break:break-word; max-height:360px; overflow:auto; font-size:12px; line-height:1.55; }
+.chief-report { white-space: normal; line-height: 1.7; }
+.agent-board-table { min-width: 980px; font-size: 12px; }
+.chief-agent-card .error-review-cols { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr)); gap:10px; }
+.chief-agent-card .error-review-cols h4 { margin:0 0 6px; color:#7c3aed; font-size:13px; }
+.chief-agent-card .error-review-cols ul { margin:0; padding-left:18px; color:#475569; line-height:1.6; font-size:13px; }
 .deep-headline { font-size: clamp(1.05rem, 3.5vw, 1.2rem); font-weight: 600; color: #0f766e; margin: 0 0 8px; }
 .deep-section { margin: 10px 0; }
 .deep-section h4 { margin: 0 0 4px; font-size: 13px; color: #475569; }
@@ -5495,6 +6028,9 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
   <button type="button" class="btn btn-ai" data-label="✨ AI 推荐本场"
     onclick="aiRecommend('{_e(fid)}', this)">✨ AI 推荐本场</button>
   {deep_btn}
+  <button type="button" class="btn" style="background:#9333ea" data-label="多 Agent 总分析"
+    onclick="aiChiefAnalyze('{_e(fid)}', this)">多 Agent 总分析</button>
+  <a class="btn" style="background:#4f46e5" href="/match/{_e(fid)}/agents">多 Agent 工作台</a>
   <button type="button" class="btn" style="background:#64748b" onclick="savePageLongImage(this)">📷 整页长图（可选）</button>
   <a class="btn" href="/share/match/{_e(fid)}" target="_blank" rel="noopener">📷 朋友圈分享图</a>
   <a class="btn" style="background:#2563eb" href="/kelly?fixture_id={_e(fid)}">🧮 Kelly</a>
@@ -5514,6 +6050,9 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #475569; }
 {sweet_spot_panel}
 {score_rec_panel}
 {quant_panel}
+{agent_workflow_card}
+{chief_agent_card}
+{agent_board_card}
 {deep_card}
 <div class="rec-grid">
   {pred_card}

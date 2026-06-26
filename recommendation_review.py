@@ -94,6 +94,17 @@ def _error_review_item(r: dict) -> dict[str, Any]:
         reasons.append(f"购买档位为 {r.get('buy_tier_cn') or r.get('buy_tier')}，不适合作为稳健串关")
         actions.append("daily picks 只允许 A 档 / parlay_eligible")
 
+    guards = r.get("agent_hard_guards") or []
+    if guards:
+        category = "多 Agent 预警未充分执行"
+        reasons.append("赛前多 Agent 已触发硬风险闸门：" + "；".join(str(x) for x in guards[:2]))
+        actions.append("硬风险闸门触发时，总推荐必须降级为仅参考或观望")
+
+    chief_buy = r.get("chief_buy_decision")
+    if chief_buy and chief_buy not in ("A 可串", "可串", "A"):
+        reasons.append(f"AI 总 Agent 当时已给出 {chief_buy}")
+        actions.append("复盘时优先检查 daily picks 是否绕过了总 Agent 降级")
+
     if lead_hours is not None and lead_hours >= 3:
         reasons.append(f"推荐快照距开球约 {lead_hours:g} 小时，可能未吸收临盘变化")
         actions.append("开球前 3 小时内强制重算")
@@ -123,6 +134,9 @@ def _error_review_item(r: dict) -> dict[str, Any]:
         "market": market,
         "handicap": handicap,
         "lead_hours": lead_hours,
+        "chief_agent_summary": r.get("chief_agent_summary"),
+        "chief_buy_decision": r.get("chief_buy_decision"),
+        "agent_hard_guards": guards[:4],
         "reasons": dedup_reasons[:5],
         "actions": dedup_actions[:4],
     }
@@ -212,6 +226,18 @@ def _row_from_settled(settled: dict, *, output_root: Path) -> dict[str, Any]:
             hit=settled.get("hit_1x2"),
         ),
     }
+    try:
+        from match_agents.chief import load_latest_agent_board, load_latest_chief_report
+
+        board = load_latest_agent_board(output_root, fid) if fid else None
+        chief = load_latest_chief_report(output_root, fid) if fid else None
+        rec["agent_hard_guards"] = (board or {}).get("hard_guards") or []
+        rec["chief_agent_summary"] = ((chief or {}).get("analysis") or {}).get("summary")
+        rec["chief_buy_decision"] = ((chief or {}).get("analysis") or {}).get("buy_decision")
+        rec["chief_risk_level"] = ((chief or {}).get("analysis") or {}).get("risk_level")
+        rec["chief_guardrail_downgraded"] = ((chief or {}).get("analysis") or {}).get("guardrail_downgraded")
+    except Exception:
+        pass
 
     ledger_row = {
         **rec,

@@ -1406,6 +1406,204 @@ def test_review_agent_diagnosis_and_page_render():
     assert "诊断 Prompt" in html
 
 
+def test_match_agents_board_and_guardrail_render():
+    from match_agents import build_agent_board
+    from match_agents.chief import _guardrail_downgrade
+    from match_agents.workflow import build_agent_workflow
+    import tempfile
+    import json
+    from web_ui import html_agent_workbench, html_match_detail
+
+    pred = {
+        "fixture_id": "999",
+        "match": "A vs B",
+        "kickoff_at": "2026-06-25 06:00:00",
+        "predict_row": {"比赛": "A vs B", "竞彩推荐": "让球(-2) 负"},
+        "odds_snapshot": {
+            "ah_open_line": -1.5,
+            "ah_line": -2.0,
+            "ah_open_home_water": 0.9,
+            "ah_home_water": 0.82,
+            "ah_open_away_water": 0.9,
+            "ah_away_water": 1.02,
+            "eu_open_home": 1.45,
+            "eu_open_draw": 4.0,
+            "eu_open_away": 7.5,
+            "eu_home": 1.35,
+            "eu_draw": 4.4,
+            "eu_away": 8.0,
+        },
+        "jingcai_snapshot": {"has_sp": False, "has_rqsp": True, "handicap": -2},
+        "jingcai_pick_info": {
+            "jingcai_market": "rqsp",
+            "jingcai_market_label": "让球(-2)",
+            "jingcai_pick": "skip",
+            "jingcai_pick_display": "观望",
+        },
+    }
+    index = {"fixture_id": "999", "match_name": "A vs B", "timeline": []}
+    board = build_agent_board(pred, index=index)
+    ids = {a["agent_id"] for a in board["agents"]}
+    assert {
+        "asian_handicap",
+        "european_odds",
+        "jingcai",
+        "intel",
+        "opening_structure",
+        "external_context",
+        "schedule_venue",
+        "goal_swing",
+        "cross_group_path",
+    } <= ids
+    assert all("weight" in a for a in board["agents"])
+    assert "weighted_signal" in board["summary"]
+    goal = next(a for a in board["agents"] if a["agent_id"] == "goal_swing")
+    assert goal["risk"] >= 0.85
+    assert board["hard_guards"]
+
+    league_board = build_agent_board(
+        {**pred, "league": "英超", "profile": "league"},
+        index=index,
+        profile="league",
+    )
+    league_ids = {a["agent_id"] for a in league_board["agents"]}
+    assert league_board["scope"] == "league"
+    assert "league_pressure" in league_ids
+    assert "cross_group_path" not in league_ids
+    assert "cup_standing" not in league_ids
+
+    downgraded = _guardrail_downgrade({"buy_decision": "A 可串", "risk_level": "低"}, board["hard_guards"])
+    assert downgraded["buy_decision"] == "C 仅参考"
+    assert downgraded["guardrail_downgraded"] is True
+
+    html = html_match_detail(
+        index,
+        prediction=pred,
+        agent_board=board,
+        chief_report={
+            "ts": "2026-06-26 12:00:00",
+            "analysis": {
+                "summary": "大让球降级",
+                "final_report_md": "只卖让球，风险较高。",
+                "final_pick": {"sp": "观望", "rqsp": "观望", "asian_handicap": "观望"},
+                "buy_decision": "C 仅参考",
+                "confidence": "低",
+                "risk_level": "高",
+            },
+        },
+        agent_workflow={
+            "fixture_id": "999",
+            "history_counts": {"agent_board": 1, "chief_report": 1},
+            "steps": [
+                {"id": "input", "title": "输入数据", "status": "ok", "summary": "A vs B", "items": ["fixture_id=999"]},
+                {
+                    "id": "chief_prompt",
+                    "title": "总 Agent Prompt",
+                    "status": "ok",
+                    "summary": "2 条 message",
+                    "items": ["system", "user"],
+                    "prompt_messages": [{"role": "system", "content": "系统提示"}, {"role": "user", "content": "用户证据"}],
+                },
+            ],
+        },
+    )
+    assert "多 Agent 证据板" in html
+    assert "AI 总 Agent 最终报告" in html
+    assert "多 Agent 工作流" in html
+    assert "查看 Prompt / Messages" in html
+
+    workbench_html = html_agent_workbench(
+        index,
+        prediction=pred,
+        agent_board=board,
+        chief_report={
+            "ts": "2026-06-26 12:00:00",
+            "prompt_messages": [{"role": "system", "content": "系统提示"}],
+            "raw_text": "{\"summary\":\"大让球降级\"}",
+            "analysis": {
+                "summary": "大让球降级",
+                "final_report_md": "只卖让球，风险较高。",
+                "buy_decision": "C 仅参考",
+                "confidence": "低",
+                "risk_level": "高",
+                "conflicts": ["盘口强势但竞彩大让球风险高"],
+                "must_not_buy_reasons": ["硬风控触发"],
+                "watch_points": ["复核首发"],
+            },
+        },
+        agent_workflow={
+            "fixture_id": "999",
+            "history_counts": {"agent_board": 1, "chief_report": 1},
+            "steps": [{"id": "input", "title": "输入数据", "status": "ok", "summary": "A vs B", "items": ["fixture_id=999"]}],
+        },
+        ai_records=[
+            {
+                "ts": "2026-06-26 11:00:00",
+                "analyses": {
+                    "deepseek": {
+                        "label": "DeepSeek",
+                        "result_1x2_cn": "主胜",
+                        "likely_scores": "2-0、2-1",
+                        "asian_handicap_cn": "下盘",
+                        "confidence_cn": "中",
+                        "actuary_reasoning": "盘口强势，但让两球风险较高。",
+                    },
+                    "ark": {
+                        "label": "豆包",
+                        "result_1x2_cn": "主胜",
+                        "likely_scores": "1-0、2-0",
+                        "asian_handicap_cn": "下盘",
+                        "confidence_cn": "低",
+                        "actuary_reasoning": "竞彩只卖让球，净胜两球附近波动大。",
+                    },
+                },
+            }
+        ],
+        deep_records=[
+            {
+                "ts": "2026-06-26 11:30:00",
+                "analysis": {
+                    "headline": "多模型一致降级",
+                    "final_pick": "观望",
+                    "confidence_level": "低",
+                    "stake_advice": "不入手",
+                    "final_pick_reason": "大让球不适合串关。",
+                    "deep_verdict": "建议等待临场。",
+                    "key_risks": ["一球杠杆"],
+                    "pre_match_watchlist": ["首发"],
+                },
+            }
+        ],
+    )
+    assert "多 Agent 分析工作台" in workbench_html
+    assert "专家角色矩阵" in workbench_html
+    assert "多 AI 分析 Tabs" in workbench_html
+    assert "DeepSeek" in workbench_html
+    assert "豆包" in workbench_html
+    assert "最终汇总 · 是否值得入手" in workbench_html
+    assert "Chief Prompt / Messages" in workbench_html
+    assert "C 仅参考" in workbench_html
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        mdir = root / "matches" / "999"
+        mdir.mkdir(parents=True)
+        (mdir / "agent_board.jsonl").write_text(json.dumps(board, ensure_ascii=False) + "\n", encoding="utf-8")
+        chief = {
+            "ok": True,
+            "fixture_id": "999",
+            "match_name": "A vs B",
+            "ts": "2026-06-26 12:00:00",
+            "prompt_messages": [{"role": "system", "content": "系统提示"}],
+            "analysis": {"summary": "完成", "buy_decision": "C 仅参考", "confidence": "低", "risk_level": "高"},
+            "raw_text": "{\"summary\":\"完成\"}",
+        }
+        (mdir / "chief_report.jsonl").write_text(json.dumps(chief, ensure_ascii=False) + "\n", encoding="utf-8")
+        workflow = build_agent_workflow(root, "999")
+        assert workflow["history_counts"]["agent_board"] == 1
+        assert any(s["id"] == "chief_prompt" for s in workflow["steps"])
+
+
 def test_sweet_spot_analysis():
     from accuracy_pick import (
         attach_accuracy_pick,

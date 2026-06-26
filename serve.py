@@ -40,7 +40,7 @@ from share_card import (
     html_share_parlay,
     html_share_posters_batch,
 )
-from web_ui import html_ah_analytics, html_ai_settings, html_daily_picks, html_dashboard, html_eu_ah_divergence, html_group_final_copy, html_group_knockout_outlook, html_group_stage, html_kelly_calculator, html_match_detail, html_quant_analytics, html_recommendation_review, html_worldcup_ledger
+from web_ui import html_agent_workbench, html_ah_analytics, html_ai_settings, html_daily_picks, html_dashboard, html_eu_ah_divergence, html_group_final_copy, html_group_knockout_outlook, html_group_stage, html_kelly_calculator, html_match_detail, html_quant_analytics, html_recommendation_review, html_worldcup_ledger
 
 
 def _error_html(body: str) -> str:
@@ -63,10 +63,14 @@ log = logging.getLogger("serve")
 
 _CLIENT_GONE = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
 _FID_RE = re.compile(r"^/match/(\d+)$")
+_AGENT_WORKBENCH_RE = re.compile(r"^/match/(\d+)/agents$")
 _SHARE_RE = re.compile(r"^/share/match/(\d+)$")
 _API_FID_RE = re.compile(r"^/api/match/(\d+)/timeline$")
 _API_RECOMMEND_RE = re.compile(r"^/api/match/(\d+)/recommend$")
 _API_DEEP_RE = re.compile(r"^/api/match/(\d+)/deep-analyze$")
+_API_AGENT_BOARD_RE = re.compile(r"^/api/match/(\d+)/agent-board$")
+_API_CHIEF_AGENT_RE = re.compile(r"^/api/match/(\d+)/chief-agent$")
+_API_AGENT_WORKFLOW_RE = re.compile(r"^/api/match/(\d+)/agent-workflow$")
 _API_SCORE_RE = re.compile(r"^/api/match/(\d+)/score-recommend$")
 _API_SWEET_RE = re.compile(r"^/api/match/(\d+)/sweet-spot$")
 _API_CHAT_RE = re.compile(r"^/api/match/(\d+)/chat-stream$")
@@ -578,6 +582,36 @@ class Handler(BaseHTTPRequestHandler):
                 )
             return
 
+        wb = _AGENT_WORKBENCH_RE.match(path)
+        if wb:
+            fid = wb.group(1)
+            idx = _load_match_index(root, fid)
+            if idx is None:
+                self._send_html(
+                    _error_html(f"<p>暂无该比赛历史（FID {html.escape(fid)}）</p>"),
+                    404,
+                )
+                return
+            pred = _load_latest_pred(root, fid)
+            _ensure_similarity_analysis(pred, root)
+            _ensure_quant_analysis(pred, idx)
+            _ensure_post_recommendation(pred)
+            ai_records = load_ai_records(root, fid)
+            deep_records = load_deep_analyses(root, fid)
+            from match_agents.chief import load_latest_agent_board, load_latest_chief_report
+            from match_agents.workflow import build_agent_workflow
+
+            self._send_html(html_agent_workbench(
+                idx,
+                prediction=pred,
+                agent_board=load_latest_agent_board(root, fid),
+                chief_report=load_latest_chief_report(root, fid),
+                agent_workflow=build_agent_workflow(root, fid),
+                ai_records=ai_records,
+                deep_records=deep_records,
+            ))
+            return
+
         m = _FID_RE.match(path)
         if m:
             fid = m.group(1)
@@ -594,11 +628,18 @@ class Handler(BaseHTTPRequestHandler):
             _ensure_post_recommendation(pred)
             ai_records = load_ai_records(root, fid)
             deep_records = load_deep_analyses(root, fid)
+            from match_agents.chief import load_latest_agent_board, load_latest_chief_report
+            from match_agents.workflow import build_agent_workflow
+            agent_board = load_latest_agent_board(root, fid)
+            chief_report = load_latest_chief_report(root, fid)
+            agent_workflow = build_agent_workflow(root, fid)
             from match_settlement import load_settled_map
             settled = load_settled_map(root).get(fid)
             self._send_html(html_match_detail(
                 idx, prediction=pred, ai_records=ai_records,
-                deep_records=deep_records, settled=settled,
+                deep_records=deep_records, agent_board=agent_board,
+                chief_report=chief_report, agent_workflow=agent_workflow,
+                settled=settled,
                 output_root=root,
             ))
             return
@@ -610,6 +651,44 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "not found"}, 404)
             else:
                 self._send_json(idx)
+            return
+
+        abm = _API_AGENT_BOARD_RE.match(path)
+        if abm:
+            fid = abm.group(1)
+            qs = parse_qs(urlparse(self.path).query)
+            profile = qs.get("profile", [None])[0]
+            pred = _load_latest_pred(root, fid)
+            if pred is None:
+                self._send_json({"ok": False, "error": "not found"}, 404)
+                return
+            idx = _load_match_index(root, fid) or {}
+            _ensure_similarity_analysis(pred, root)
+            _ensure_quant_analysis(pred, idx)
+            _ensure_post_recommendation(pred)
+            from match_agents import build_and_archive_agent_board
+
+            board = build_and_archive_agent_board(root, fid, pred, index=idx, profile=profile)
+            self._send_json(board)
+            return
+
+        cam_get = _API_CHIEF_AGENT_RE.match(path)
+        if cam_get:
+            fid = cam_get.group(1)
+            from match_agents.chief import load_latest_chief_report
+
+            rec = load_latest_chief_report(root, fid)
+            if not rec:
+                self._send_json({"ok": False, "error": "not found"}, 404)
+                return
+            self._send_json(rec)
+            return
+
+        awm = _API_AGENT_WORKFLOW_RE.match(path)
+        if awm:
+            from match_agents.workflow import build_agent_workflow
+
+            self._send_json(build_agent_workflow(root, awm.group(1)))
             return
 
         sm = _API_SCORE_RE.match(path)
@@ -1065,6 +1144,51 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "请求体须为 JSON"}, 400)
             except Exception as exc:
                 log.exception("AI 连通测试失败")
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        cam = _API_CHIEF_AGENT_RE.match(path)
+        if cam:
+            fid = cam.group(1)
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b"{}"
+                payload = json.loads(raw.decode("utf-8"))
+                pred = _load_latest_pred(self.output_root, fid)
+                if pred is None:
+                    self._send_json({"ok": False, "error": "not found"}, 404)
+                    return
+                idx = _load_match_index(self.output_root, fid) or {}
+                _ensure_similarity_analysis(pred, self.output_root)
+                _ensure_quant_analysis(pred, idx)
+                _ensure_post_recommendation(pred)
+                from match_agents import build_and_archive_agent_board, run_chief_match_agent
+
+                profile = payload.get("profile") or qs.get("profile", [None])[0]
+                board = build_and_archive_agent_board(self.output_root, fid, pred, index=idx, profile=profile)
+                record = run_chief_match_agent(
+                    self.output_root,
+                    fid,
+                    pred,
+                    index=idx,
+                    board=board,
+                    provider=payload.get("provider"),
+                    model=payload.get("model") or self.ai_model,
+                    base_url=payload.get("base_url") or self.ai_base_url,
+                    profile=profile,
+                )
+                self._send_json({
+                    "ok": True,
+                    "fixture_id": fid,
+                    "match_name": record.get("match_name"),
+                    "ts": record.get("ts"),
+                    "provider": record.get("provider"),
+                    "model": record.get("model"),
+                    "analysis": record.get("analysis"),
+                })
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "请求体须为 JSON"}, 400)
+            except Exception as exc:
+                log.exception("多 Agent 总分析失败 fid=%s", fid)
                 self._send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/kelly/calc":

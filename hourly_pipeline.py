@@ -410,6 +410,12 @@ def run_single_match_ai(
             run_id=run_id,
             ts=payload["generated_at"],
         )
+        try:
+            from match_agents import build_and_archive_agent_board
+
+            build_and_archive_agent_board(root, fid, pred, run_id=run_id)
+        except Exception as exc:
+            log.warning("手动 AI 多 Agent 证据板归档失败 %s: %s", dl.match_name, exc)
         record_ai_run(root, ai_called=len(profiles), run_id=run_id)
         log.info(
             "手动 AI 完成 %s → %s（%d 模型）",
@@ -536,6 +542,12 @@ def run_hourly_job(
                     summary.predict_ok += 1
                     summary.predict_skipped += 1
                     fp_store[fid] = fp
+                    try:
+                        from match_agents import build_and_archive_agent_board
+
+                        build_and_archive_agent_board(root, fid, pred, run_id=run_id)
+                    except Exception as exc:
+                        log.warning("多 Agent 证据板归档失败 %s: %s", dl.match_name, exc)
                     log.info("跳过 %s：赔率文件未变动，复用上次结果", dl.match_name)
                     continue
 
@@ -584,6 +596,24 @@ def run_hourly_job(
                         ts=summary.started_at,
                         match_name=dl.match_name,
                     )
+                    try:
+                        from match_agents import build_and_archive_agent_board, run_chief_match_agent
+                        from match_agents.board import board_is_cup_context
+
+                        board = build_and_archive_agent_board(root, fid, pred, run_id=run_id)
+                        if ai_for_match and board_is_cup_context(board):
+                            run_chief_match_agent(
+                                root,
+                                fid,
+                                pred,
+                                board=board,
+                                model=ai_model,
+                                base_url=ai_base_url,
+                                run_id=run_id,
+                            )
+                            summary.ai_called += 1
+                    except Exception as exc:
+                        log.warning("多 Agent 分析归档失败 %s: %s", dl.match_name, exc)
                     if ai_for_match:
                         append_ai_record(
                             root, dl.fixture_id, pred,

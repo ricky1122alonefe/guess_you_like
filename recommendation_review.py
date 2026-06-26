@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from match_settlement import load_settled_map
 from prediction_archive import load_best_prediction
+from review_agent import build_review_agent_report
 from time_utils import now_beijing_str
 from worldcup_analytics import compute_accuracy_report
 from user_final_picks import enrich_settled_with_user_pick, list_locked_picks, user_pick_accuracy
@@ -16,6 +19,113 @@ from user_final_picks import enrich_settled_with_user_pick, list_locked_picks, u
 log = logging.getLogger(__name__)
 
 SKIP_PICKS = frozenset({"—", "观望", "", None, "暂无竞彩"})
+
+
+def _pick_market(pick_cn: str | None, row: dict | None = None) -> str:
+    pick = str(pick_cn or "")
+    market = str((row or {}).get("竞彩玩法") or "")
+    if "让球" in pick or "让球" in market:
+        return "rqsp"
+    if pick and pick not in SKIP_PICKS:
+        return "sp"
+    return "none"
+
+
+def _handicap_from_pick(pick_cn: str | None) -> int | None:
+    m = re.search(r"让球\(([+\-]?\d+)\)", str(pick_cn or ""))
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
+
+
+def _hours_between_run_and_kickoff(run_id: str | None, kickoff_at: str | None) -> float | None:
+    if not run_id or not kickoff_at or len(run_id) < 16:
+        return None
+    try:
+        run_dt = datetime.strptime(run_id[:16], "%Y-%m-%d_%H%M")
+        ko_dt = datetime.strptime(str(kickoff_at)[:16], "%Y-%m-%d %H:%M")
+    except ValueError:
+        return None
+    return round((ko_dt - run_dt).total_seconds() / 3600, 1)
+
+
+def _error_review_item(r: dict) -> dict[str, Any]:
+    """Explain why a missed recommendation was risky."""
+    pick = r.get("pick_jingcai_cn") or "—"
+    ref = r.get("reference_result_1x2_cn") or ""
+    open_cn = r.get("open_result_1x2_cn") or ""
+    market = r.get("jingcai_market") or _pick_market(pick)
+    handicap = r.get("jingcai_handicap")
+    if handicap is None:
+        handicap = _handicap_from_pick(pick)
+    lead_hours = _hours_between_run_and_kickoff(r.get("run_id"), r.get("kickoff_at"))
+
+    reasons: list[str] = []
+    actions: list[str] = []
+    category = "方向判断失误"
+
+    if market == "rqsp":
+        category = "让球胜平负失误"
+        reasons.append("只卖让球胜平负，推荐依赖净胜球判断，波动大于普通胜平负")
+        actions.append("RQSP 不进 2 串 1；大让球默认观望")
+        if handicap is not None and abs(int(handicap)) >= 2:
+            reasons.append(f"大让球 {handicap:+d}，一球差就可能从让胜变让平/让负")
+            actions.append("让球绝对值 >=2 需 AI/人工二次确认")
+        if ref and ref not in pick:
+            reasons.append(f"自然赛果参考为 {ref}，但竞彩让球方向为 {pick}")
+            actions.append("让球方向与自然赛果参考分离时降级")
+
+    if r.get("confidence_cn") == "低":
+        reasons.append("低置信仍给出可买方向")
+        actions.append("低置信不入串关，只能单场观察")
+
+    if r.get("risk_level_cn") in ("显著升高", "升高"):
+        reasons.append(f"风险等级 {r.get('risk_level_cn')}")
+        actions.append("风险升高场次降档或跳过")
+
+    if r.get("control_level_cn") == "高":
+        reasons.append("高控盘场次临盘噪声大")
+        actions.append("高控盘 + 非高置信直接观望")
+
+    if r.get("buy_tier") in ("B", "C"):
+        reasons.append(f"购买档位为 {r.get('buy_tier_cn') or r.get('buy_tier')}，不适合作为稳健串关")
+        actions.append("daily picks 只允许 A 档 / parlay_eligible")
+
+    if lead_hours is not None and lead_hours >= 3:
+        reasons.append(f"推荐快照距开球约 {lead_hours:g} 小时，可能未吸收临盘变化")
+        actions.append("开球前 3 小时内强制重算")
+
+    if not reasons:
+        if ref and ref != r.get("result_1x2_cn"):
+            reasons.append(f"参考研判 {ref} 未打出")
+        if open_cn and open_cn != r.get("result_1x2_cn"):
+            reasons.append(f"初盘倾向 {open_cn} 未打出")
+        if not reasons:
+            reasons.append("常规方向判断失败，样本不足以解释")
+        actions.append("累计同类样本后调整权重")
+
+    # Preserve order while removing duplicates.
+    dedup_actions = list(dict.fromkeys(actions))
+    dedup_reasons = list(dict.fromkeys(reasons))
+    return {
+        "fixture_id": r.get("fixture_id"),
+        "match_name": r.get("match_name"),
+        "kickoff_at": r.get("kickoff_at"),
+        "score_text": r.get("score_text"),
+        "result_1x2_cn": r.get("result_1x2_cn"),
+        "pick_jingcai_cn": pick,
+        "buy_tier_cn": r.get("buy_tier_cn"),
+        "confidence_cn": r.get("confidence_cn"),
+        "category": category,
+        "market": market,
+        "handicap": handicap,
+        "lead_hours": lead_hours,
+        "reasons": dedup_reasons[:5],
+        "actions": dedup_actions[:4],
+    }
 
 
 def _compare_summary(*, pick_cn: str, result_cn: str, hit: bool | None) -> str:
@@ -88,6 +198,10 @@ def _row_from_settled(settled: dict, *, output_root: Path) -> dict[str, Any]:
             or pred.get("recommendation_source")
         ),
         "run_id": payload.get("run_id") or pred_snap.get("run_id") or pred.get("run_id"),
+        "jingcai_market": pred_snap.get("jingcai_market") or row.get("竞彩玩法"),
+        "jingcai_handicap": (pred.get("jingcai_snapshot") or {}).get("handicap"),
+        "risk_level_cn": pred_snap.get("risk_level_cn") or pred.get("risk_level_cn"),
+        "control_level_cn": pred_snap.get("control_level_cn") or pred.get("control_level_cn"),
         "hit_1x2": settled.get("hit_1x2"),
         "hit_score": settled.get("hit_score"),
         "hit_ah": settled.get("hit_ah"),
@@ -151,6 +265,11 @@ def build_recommendation_review(output_root: str | Path) -> dict[str, Any]:
         key = f"{pick}→{actual}"
         miss_patterns[key] = miss_patterns.get(key, 0) + 1
     top_misses = sorted(miss_patterns.items(), key=lambda x: -x[1])[:8]
+    error_items = [_error_review_item(r) for r in misses]
+    error_categories: dict[str, int] = {}
+    for item in error_items:
+        cat = item.get("category") or "未分类"
+        error_categories[cat] = error_categories.get(cat, 0) + 1
     user_locked = list_locked_picks(root)
     user_acc = user_pick_accuracy(records)
 
@@ -159,7 +278,16 @@ def build_recommendation_review(output_root: str | Path) -> dict[str, Any]:
         "total_settled": len(records),
         "with_recommendation": len(judged),
         "accuracy": accuracy,
+        "review_agent": build_review_agent_report(records),
         "miss_patterns": [{"pattern": k, "count": v} for k, v in top_misses],
+        "error_review": {
+            "count": len(error_items),
+            "categories": [
+                {"category": k, "count": v}
+                for k, v in sorted(error_categories.items(), key=lambda x: -x[1])
+            ],
+            "items": error_items[:12],
+        },
         "user_locked_count": len(user_locked),
         "user_pick_accuracy": user_acc,
         "records": records,

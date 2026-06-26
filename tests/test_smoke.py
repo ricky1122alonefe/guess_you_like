@@ -1358,6 +1358,54 @@ def test_recommendation_review_builder():
         assert "compare_summary" in row
 
 
+def test_review_agent_diagnosis_and_page_render():
+    from review_agent import build_review_agent_report
+    from web_ui import html_recommendation_review
+
+    records = [
+        {
+            "fixture_id": "999",
+            "match_name": "A vs B",
+            "kickoff_at": "2026-06-25 06:00:00",
+            "run_id": "2026-06-24_1900",
+            "pick_jingcai_cn": "让球(-2) 负",
+            "hit_1x2": False,
+            "score_text": "4-2",
+            "result_1x2_cn": "主胜",
+            "jingcai_market": "让球(-2)",
+            "jingcai_handicap": -2,
+            "confidence_cn": "低",
+            "risk_level_cn": "升高",
+            "control_level_cn": "高",
+            "buy_tier": "C",
+            "buy_tier_cn": "仅参考",
+            "reference_result_1x2_cn": "主胜",
+            "line_move": -0.5,
+        }
+    ]
+
+    agent = build_review_agent_report(records)
+    assert agent["miss_count"] == 1
+    tags = {x["tag"] for x in agent["tag_counts"]}
+    assert {"RQSP", "大让球", "低置信", "临终盘波动"} <= tags
+    assert agent["policy_suggestions"]
+    assert "错误样本 JSON" in agent["prompt"]
+
+    html = html_recommendation_review(
+        {
+            "updated_at": "x",
+            "total_settled": 1,
+            "with_recommendation": 1,
+            "accuracy": {},
+            "review_agent": agent,
+            "error_review": {"items": []},
+            "records": records,
+        }
+    )
+    assert "诊断智能体" in html
+    assert "诊断 Prompt" in html
+
+
 def test_sweet_spot_analysis():
     from accuracy_pick import (
         attach_accuracy_pick,

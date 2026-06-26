@@ -4303,6 +4303,110 @@ def _review_row(r: dict) -> str:
     )
 
 
+def _error_review_block(error_review: dict) -> str:
+    items = error_review.get("items") or []
+    if not items:
+        return """
+<div class="card error-review-card">
+  <h2>错误复盘</h2>
+  <p class="meta">暂无已判定失误，继续积累样本后自动生成。</p>
+</div>"""
+
+    cat_tags = "".join(
+        f"<span class='tag tag-acc-warn'>{_e(c.get('category'))} × {c.get('count', 0)}</span>"
+        for c in (error_review.get("categories") or [])
+    )
+    cards = ""
+    for item in items[:8]:
+        fid = item.get("fixture_id") or ""
+        name = item.get("match_name") or fid or "—"
+        link = f'<a href="/match/{_e(fid)}">{_e(name)}</a>' if fid else _e(name)
+        reasons = "".join(f"<li>{_e(x)}</li>" for x in (item.get("reasons") or []))
+        actions = "".join(f"<li>{_e(x)}</li>" for x in (item.get("actions") or []))
+        lead = item.get("lead_hours")
+        lead_txt = f" · 快照提前 {lead:g}h" if lead is not None else ""
+        cards += f"""
+<div class="error-review-item">
+  <div class="error-review-head">
+    <strong>{link}</strong>
+    <span class="tag tag-warn">{_e(item.get('category') or '失误')}</span>
+  </div>
+  <p class="error-review-line">
+    推 <strong>{_e(item.get('pick_jingcai_cn') or '—')}</strong>
+    → 开 <strong>{_e(item.get('score_text') or '—')} {_e(item.get('result_1x2_cn') or '')}</strong>
+    · {_e(item.get('buy_tier_cn') or '—')} · 置信 {_e(item.get('confidence_cn') or '—')}{lead_txt}
+  </p>
+  <div class="error-review-cols">
+    <div><h4>问题点</h4><ul>{reasons or '<li>暂无</li>'}</ul></div>
+    <div><h4>下次规避</h4><ul>{actions or '<li>继续积累样本</li>'}</ul></div>
+  </div>
+</div>"""
+
+    return f"""
+<div class="card error-review-card">
+  <h2>错误复盘 <span class="tag tag-acc-warn">{error_review.get('count') or len(items)} 场</span></h2>
+  <p class="meta">只列已判定未命中的竞彩推荐，按最近场次展示。重点看“为什么不该进串/不该出手”。</p>
+  <div class="error-review-cats">{cat_tags}</div>
+  <div class="error-review-grid">{cards}</div>
+</div>"""
+
+
+def _review_agent_block(agent: dict) -> str:
+    if not agent or not agent.get("miss_count"):
+        return """
+<div class="card review-agent-card">
+  <h2>诊断智能体</h2>
+  <p class="meta">暂无可诊断的错误样本。</p>
+</div>"""
+
+    tag_bits = "".join(
+        f"<span class='tag tag-warn'>{_e(x.get('tag'))} × {x.get('count', 0)}</span>"
+        for x in (agent.get("tag_counts") or [])[:8]
+    )
+    policy_rows = ""
+    for item in (agent.get("policy_suggestions") or [])[:8]:
+        policy_rows += (
+            f"<tr><td>{_e(item.get('suggestion'))}</td>"
+            f"<td>{item.get('count', 0)}</td></tr>"
+        )
+    case_rows = ""
+    for c in (agent.get("cases") or [])[:8]:
+        tags = " ".join(f"<span class='tag'>{_e(t)}</span>" for t in (c.get("tags") or [])[:4])
+        ev = "；".join(c.get("evidence") or [])
+        case_rows += f"""
+<tr>
+  <td><a href="/match/{_e(c.get('fixture_id') or '')}">{_e(c.get('match_name') or '—')}</a></td>
+  <td>{_e(c.get('pick') or '—')}</td>
+  <td>{_e(c.get('actual') or '—')}</td>
+  <td>{tags}</td>
+  <td class="meta">{_e(ev[:180])}</td>
+</tr>"""
+
+    prompt = _e(agent.get("prompt") or "")
+    return f"""
+<div class="card review-agent-card">
+  <h2>诊断智能体 <span class="tag tag-acc-warn">{agent.get('miss_count')} 个错单</span></h2>
+  <p class="review-agent-headline">{_e(agent.get('headline') or '')}</p>
+  <div class="review-agent-tags">{tag_bits}</div>
+  <h3>策略修复建议</h3>
+  <table class="mini review-agent-policy">
+    <tr><th>建议</th><th>触发次数</th></tr>
+    {policy_rows or '<tr><td colspan="2">暂无</td></tr>'}
+  </table>
+  <h3>错单证据</h3>
+  <div class="review-table-wrap">
+  <table class="mini review-agent-cases">
+    <tr><th>比赛</th><th>推荐</th><th>实际</th><th>标签</th><th>证据</th></tr>
+    {case_rows}
+  </table>
+  </div>
+  <details class="review-agent-prompt">
+    <summary>展开诊断 Prompt（可复制给 AI 深度复盘）</summary>
+    <pre>{prompt}</pre>
+  </details>
+</div>"""
+
+
 def html_recommendation_review(report: dict) -> str:
     report = report or {}
     updated = report.get("updated_at") or now_beijing_str()
@@ -4310,6 +4414,8 @@ def html_recommendation_review(report: dict) -> str:
     purchase = acc.get("purchase_jingcai") or {}
     records = report.get("records") or []
     misses = report.get("miss_patterns") or []
+    error_review = report.get("error_review") or {}
+    review_agent = report.get("review_agent") or {}
 
     stats = _stat_grid([
         ("已结算", str(report.get("total_settled") or 0)),
@@ -4355,6 +4461,29 @@ def html_recommendation_review(report: dict) -> str:
 .review-table-wrap { overflow-x:auto; }
 table.review-table { font-size: 13px; min-width: 960px; }
 table.review-table th { white-space: nowrap; }
+.error-review-card { border-left: 4px solid #f97316; }
+.error-review-cats { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0 12px; }
+.error-review-grid { display:grid; gap:12px; }
+.error-review-item {
+  border:1px solid rgba(248,113,113,0.25); border-radius:14px;
+  background:rgba(248,113,113,0.06); padding:14px;
+}
+.error-review-head { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between; }
+.error-review-line { margin:8px 0 10px; color:#e2e8f0; line-height:1.55; }
+.error-review-cols { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr)); gap:10px; }
+.error-review-cols h4 { margin:0 0 6px; color:#ff9ec8; font-size:13px; }
+.error-review-cols ul { margin:0; padding-left:18px; color:#cbd5e1; line-height:1.6; font-size:13px; }
+.review-agent-card { border-left: 4px solid #a855f7; }
+.review-agent-headline { font-size:16px; font-weight:800; color:#f8fafc; }
+.review-agent-tags { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0 12px; }
+.review-agent-policy td:first-child { font-weight:700; color:#f1f5f9; }
+.review-agent-cases { min-width: 820px; }
+.review-agent-prompt summary { cursor:pointer; color:#ff9ec8; font-weight:700; margin-top:12px; }
+.review-agent-prompt pre {
+  white-space:pre-wrap; word-break:break-word; max-height:360px; overflow:auto;
+  background:rgba(0,0,0,0.28); border:1px solid rgba(255,255,255,0.08);
+  border-radius:12px; padding:12px; color:#e2e8f0; font-size:12px; line-height:1.6;
+}
 """)
 
     return f"""<!DOCTYPE html>
@@ -4419,6 +4548,10 @@ function sortReview(kind) {{
 </div>
 
 {user_stats}
+
+{_review_agent_block(review_agent)}
+
+{_error_review_block(error_review)}
 
 <div class="card">
   <h2>购买档位胜率</h2>

@@ -2,16 +2,17 @@
   "default_profile": "cup",
   "profiles": {
     "cup": {
-      "description": "杯赛：小组出线、跨组第三、淘汰赛路径、默契球/控分、一球杠杆。",
+      "description": "杯赛淘汰赛：对阵路径深度分析、加时/点球概率、淘汰赛战意、盘口与竞彩。",
       "agents": [
         "intel",
         "external_context",
         "schedule_venue",
         "late_confirmation",
         "opening_structure",
-        "scenario_simulator",
+        "knockout_path",
         "goal_swing",
-        "cross_group_path",
+        "extra_time_penalty",
+        "knockout_motivation",
         "market_consistency",
         "contrarian",
         "memory",
@@ -20,9 +21,7 @@
         "scoreline",
         "asian_handicap",
         "european_odds",
-        "jingcai",
-        "cup_standing",
-        "motivation"
+        "jingcai"
       ]
     },
     "league": {
@@ -40,8 +39,7 @@
         "scoreline",
         "asian_handicap",
         "european_odds",
-        "jingcai",
-        "motivation"
+        "jingcai"
       ]
     }
   },
@@ -51,9 +49,10 @@
     "schedule_venue": 1.15,
     "late_confirmation": 1.35,
     "opening_structure": 1.25,
-    "scenario_simulator": 1.45,
-    "goal_swing": 1.4,
-    "cross_group_path": 1.45,
+    "knockout_path": 1.4,
+    "goal_swing": 1.35,
+    "extra_time_penalty": 1.3,
+    "knockout_motivation": 1.35,
     "market_consistency": 1.4,
     "contrarian": 1.3,
     "memory": 1.25,
@@ -63,9 +62,7 @@
     "scoreline": 1.1,
     "asian_handicap": 1.2,
     "european_odds": 1.1,
-    "jingcai": 1.35,
-    "cup_standing": 1.25,
-    "motivation": 1.3
+    "jingcai": 1.35
   },
   "external_factors": {
     "enabled": true,

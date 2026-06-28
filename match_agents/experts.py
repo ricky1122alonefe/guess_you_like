@@ -498,92 +498,213 @@ def jingcai_agent(pred: dict, index: dict | None = None, *, output_root=None) ->
     )
 
 
-def cup_standing_agent(pred: dict, index: dict | None = None, *, output_root=None) -> AgentReport:
-    match_name = pred.get("match") or (pred.get("predict_row") or {}).get("比赛") or (index or {}).get("match_name")
+def knockout_path_agent(pred: dict, index: dict | None = None, *, output_root=None) -> AgentReport:
+    """Knockout bracket deep analysis: half strength, potential opponent chain, path difficulty."""
+    match_name = _match_name(pred, index)
     evidence: list[str] = []
     warnings: list[str] = []
     raw: dict[str, Any] = {}
-    verdict = "neutral"
-    risk = 0.4
+    risk = 0.35
     confidence = 0.35
+
     try:
-        from analysis.tournament.knockout import build_match_knockout_context
+        from analysis.tournament.knockout import (
+            build_match_knockout_context,
+            _load_bracket,
+            _bracket_half,
+            path_for_rank,
+        )
         ctx = build_match_knockout_context(match_name)
         raw["knockout_context"] = ctx
-        if ctx.get("ok") is False:
-            warnings.append("未识别到杯赛积分/出线语境")
-        else:
-            group = ctx.get("group")
-            if group:
-                evidence.append(f"杯赛小组：{group}")
+        if ctx and ctx.get("group"):
+            group = ctx["group"]
+            evidence.append(f"所属小组：{group}")
+
+            bracket = _load_bracket()
+            half = _bracket_half(group, bracket)
+            half_cn = {"upper": "上半区", "lower": "下半区"}.get(half, "未知半区")
+            evidence.append(f"所在半区：{half_cn}")
+            raw["bracket_half"] = half
+
             for side in ("home", "away"):
-                race = ((ctx.get(f"{side}_knockout") or {}).get("race") or {})
+                ko = ctx.get(f"{side}_knockout") or {}
+                team_label = "主队" if side == "home" else "客队"
+                paths = ko.get("paths") or {}
+                easiest_rank = ko.get("easiest_path_rank")
+                preferred = ko.get("preferred_path_cn") or ""
+                if preferred:
+                    evidence.append(f"{team_label}最优路径：{preferred}")
+                race = ko.get("race") or {}
                 status = race.get("status_cn") or race.get("status")
-                note = race.get("note")
                 if status:
-                    evidence.append(f"{'主队' if side == 'home' else '客队'}出线状态：{status}")
-                if note:
-                    evidence.append(str(note)[:120])
+                    evidence.append(f"{team_label}状态：{status}")
+                notes = ko.get("notes") or []
+                for n in notes[:2]:
+                    evidence.append(f"{team_label}：{str(n)[:140]}")
+
             picking = ctx.get("picking_level")
             if picking in ("high", "medium"):
                 risk = max(risk, 0.7 if picking == "high" else 0.55)
                 warnings.append("存在淘汰赛路径选择/挑对手动机，需要降低盘口直觉权重")
-            confidence = 0.6
+
+            scenarios = ctx.get("scenarios") or []
+            for sc in scenarios[:3]:
+                note = sc.get("note")
+                if note:
+                    evidence.append(f"情景：{sc.get('label')} → {str(note)[:100]}")
+
+            confidence = 0.65
+        else:
+            warnings.append("未识别到淘汰赛对阵语境")
     except Exception as exc:
         raw["error"] = str(exc)
-        warnings.append("积分出线上下文暂不可用")
+        warnings.append("淘汰赛路径分析暂不可用")
+
     return AgentReport(
-        agent_id="cup_standing",
-        name="积分出线 Agent",
-        verdict=verdict,
+        agent_id="knockout_path",
+        name="淘汰赛路径 Agent",
+        verdict="neutral",
         confidence=confidence,
         risk=risk,
-        weight=_weight("cup_standing", output_root),
-        evidence=evidence or ["未识别到明确杯赛积分/出线压力"],
+        weight=_weight("knockout_path", output_root),
+        evidence=evidence or ["未识别到明确淘汰赛对阵路径"],
         warnings=warnings,
         recommended_action="watch",
         raw=raw,
     )
 
 
-def motivation_agent(pred: dict, index: dict | None = None, *, output_root=None) -> AgentReport:
-    match_name = pred.get("match") or (pred.get("predict_row") or {}).get("比赛") or (index or {}).get("match_name")
+def extra_time_penalty_agent(pred: dict, index: dict | None = None, *, output_root=None) -> AgentReport:
+    """Analyze extra time and penalty shootout probability for knockout matches."""
+    match_name = _match_name(pred, index)
+    evidence: list[str] = []
+    warnings: list[str] = []
+    raw: dict[str, Any] = {}
+    risk = 0.35
+    confidence = 0.35
+
+    odds = _odds(pred, index)
+    eu_draw = _safe_float(odds.get("eu_draw"))
+    draw_pct = None
+    if eu_draw and eu_draw > 1:
+        try:
+            from eu_implied_metrics import compute_eu_implied
+            live = compute_eu_implied(odds.get("eu_home"), eu_draw, odds.get("eu_away"))
+            if live:
+                draw_pct = live.fair_draw_pct
+                evidence.append(f"欧赔隐含平局概率：{draw_pct:.1f}%")
+        except Exception:
+            pass
+
+    if draw_pct is not None and draw_pct >= 28:
+        risk = max(risk, 0.65)
+        evidence.append("平局概率偏高，加时赛可能性较大")
+        warnings.append("高平局概率场景，竞彩90分钟结果与最终结果可能不一致")
+    elif draw_pct is not None and draw_pct >= 24:
+        risk = max(risk, 0.5)
+        evidence.append("平局概率中等，存在加时赛可能")
+
+    sim = pred.get("similarity_analysis") or {}
+    for pool_name, pool in (("亚盘样本", sim.get("asian")), ("欧赔样本", sim.get("european"))):
+        if not pool:
+            continue
+        cnt = int(pool.get("count") or 0)
+        rates = pool.get("result_rates") or {}
+        draw_rate = _safe_float(rates.get("draw"))
+        if cnt >= 10 and draw_rate is not None and draw_rate >= 0.28:
+            evidence.append(f"{pool_name} {cnt} 场历史平局率 {draw_rate*100:.1f}%，加时赛参考")
+            raw[f"{pool_name}_draw_rate"] = draw_rate
+
+    raw["extra_time_data"] = {
+        "draw_pct": draw_pct,
+        "high_draw": draw_pct is not None and draw_pct >= 28,
+    }
+
+    if draw_pct is not None and draw_pct >= 30:
+        warnings.append("平局概率超过30%，需重点考虑加时赛/点球对竞彩结算的影响")
+        risk = max(risk, 0.75)
+
+    if not evidence:
+        evidence.append("暂无明确加时/点球高概率信号")
+
+    return AgentReport(
+        agent_id="extra_time_penalty",
+        name="加时点球 Agent",
+        verdict="lean_draw" if (draw_pct is not None and draw_pct >= 30) else "neutral",
+        confidence=0.6 if risk >= 0.5 else 0.4,
+        risk=risk,
+        weight=_weight("extra_time_penalty", output_root),
+        evidence=evidence[:5],
+        warnings=warnings[:4],
+        recommended_action="watch",
+        raw=raw,
+    )
+
+
+def knockout_motivation_agent(pred: dict, index: dict | None = None, *, output_root=None) -> AgentReport:
+    """Knockout stage motivation: conservative vs aggressive strategy, first-leg caution."""
+    match_name = _match_name(pred, index)
     evidence: list[str] = []
     warnings: list[str] = []
     raw: dict[str, Any] = {}
     verdict = "neutral"
     risk = 0.4
     confidence = 0.35
+
     try:
-        from group_stage_model import analyze_match_from_name
-        ma = analyze_match_from_name(match_name)
-        raw["motivation"] = ma
-        if ma:
-            mt = ma.get("match_type_cn") or ma.get("match_type")
-            if mt:
-                evidence.append(f"战意类型：{mt}")
-            evidence.extend(str(x)[:140] for x in (ma.get("reasoning") or [])[:4])
-            hint = ma.get("model_pick_hint")
-            verdict = OUTCOME_TO_VERDICT.get(hint, "neutral")
-            if ma.get("draw_bias"):
+        from analysis.tournament.knockout import build_match_knockout_context
+        ctx = build_match_knockout_context(match_name)
+        raw["knockout_context"] = ctx
+        if ctx:
+            motivation = ctx.get("motivation") or {}
+            raw["motivation"] = motivation
+
+            picking = ctx.get("picking_level")
+            picking_cn = ctx.get("picking_level_cn") or "低"
+            evidence.append(f"挑对手/控分级别：{picking_cn}")
+
+            if picking in ("medium", "high"):
+                risk = max(risk, 0.65 if picking == "medium" else 0.75)
+                warnings.append("淘汰赛存在控分/保守策略动机，可能影响比赛节奏和进球数")
                 verdict = "lean_draw"
-                warnings.append("战意模型提示平局友好/默契球观察")
-            if ma.get("match_type") in ("collusion_watch", "draw_friendly", "dead_rubber"):
-                risk = max(risk, 0.75)
+
+            for side in ("home", "away"):
+                ko = ctx.get(f"{side}_knockout") or {}
+                team_label = "主队" if side == "home" else "客队"
+                easiest = ko.get("easiest_path_rank")
+                preferred = ko.get("preferred_path_cn") or ""
+                if easiest and preferred:
+                    evidence.append(f"{team_label}最优排名策略：{preferred}")
+
+            scenarios = ctx.get("scenarios") or []
+            for sc in scenarios[:3]:
+                label = sc.get("label")
+                note = sc.get("note")
+                if note:
+                    evidence.append(f"{label}：{str(note)[:120]}")
+
+            prediction_hint = ctx.get("prediction_hint") or {}
+            if prediction_hint.get("picking_note"):
+                evidence.append(f"预测提示：{prediction_hint['picking_note']}")
+            if prediction_hint.get("draw_bias") and float(prediction_hint.get("draw_bias") or 0) > 0.05:
+                verdict = "lean_draw"
+                warnings.append("淘汰赛路径分析提示平局概率上升")
+
             confidence = 0.6
         else:
-            warnings.append("战意模型未匹配该场比赛")
+            warnings.append("未识别到淘汰赛战意语境")
     except Exception as exc:
         raw["error"] = str(exc)
-        warnings.append("战意分析暂不可用")
+        warnings.append("淘汰赛战意分析暂不可用")
+
     return AgentReport(
-        agent_id="motivation",
-        name="战意 Agent",
+        agent_id="knockout_motivation",
+        name="淘汰赛战意 Agent",
         verdict=verdict,
         confidence=confidence,
         risk=risk,
-        weight=_weight("motivation", output_root),
-        evidence=evidence or ["暂无明确战意信号"],
+        weight=_weight("knockout_motivation", output_root),
+        evidence=evidence or ["暂无明确淘汰赛战意信号"],
         warnings=warnings,
         recommended_action="watch" if risk < 0.75 else "skip",
         raw=raw,
@@ -690,7 +811,7 @@ def _recommended_score_margins(pred: dict) -> list[int]:
 
 
 def goal_swing_agent(pred: dict, index: dict | None = None, *, output_root=None) -> AgentReport:
-    """Detect one-goal leverage in qualification and handicap markets."""
+    """Detect one-goal leverage in handicap markets for knockout matches."""
     evidence: list[str] = []
     warnings: list[str] = []
     raw: dict[str, Any] = {}
@@ -714,43 +835,22 @@ def goal_swing_agent(pred: dict, index: dict | None = None, *, output_root=None)
 
     try:
         match_name = _match_name(pred, index)
-        from group_stage_model import analyze_match_from_name
-        ma = analyze_match_from_name(match_name)
-        raw["motivation"] = ma
-        if ma:
-            mt = ma.get("match_type")
-            mt_cn = ma.get("match_type_cn") or mt
-            reasoning = "；".join(str(x) for x in (ma.get("reasoning") or [])[:4])
-            if mt in ("gd_race", "must_win", "open_race", "collusion_watch", "draw_friendly"):
-                risk = max(risk, 0.75)
-                evidence.append(f"杯赛战意类型 {mt_cn}，净胜球/平局价值敏感")
-            if "净胜球" in reasoning or "最佳" in reasoning or "第三" in reasoning:
-                risk = max(risk, 0.82)
-                warnings.append("出线条件涉及净胜球/最佳第三，1球可能改变晋级排序或战术选择")
-                evidence.append(reasoning[:180])
+        from analysis.tournament.knockout import build_match_knockout_context
+        ctx = build_match_knockout_context(match_name)
+        raw["knockout_context"] = ctx
+        if ctx:
+            scenarios = ctx.get("scenarios") or []
+            for sc in scenarios[:3]:
+                note = sc.get("note")
+                if note and ("控节奏" in str(note) or "抢分" in str(note) or "告急" in str(note)):
+                    risk = max(risk, 0.65)
+                    evidence.append(f"淘汰赛情景：{sc.get('label')} → {str(note)[:100]}")
+            picking = ctx.get("picking_level")
+            if picking in ("medium", "high"):
+                risk = max(risk, 0.7)
+                evidence.append("淘汰赛路径差异可能诱发控分，一球差改变后续对阵")
     except Exception as exc:
-        raw["motivation_error"] = str(exc)
-
-    try:
-        from analysis.tournament.group_knockout_outlook import outlook_for_match
-        om = outlook_for_match(_match_name(pred, index))
-        raw["outlook"] = om
-        best = om.get("best_third_live") or {}
-        rows = best.get("rows") or []
-        if rows:
-            cutoff = f"{best.get('cutoff_points')}分 净{best.get('cutoff_gd'):+d}" if best.get("cutoff_gd") is not None else ""
-            evidence.append(f"最佳第三实时线：{cutoff or '有排名数据'}")
-            near_rows = [
-                r for r in rows
-                if r.get("third_rank") in (7, 8, 9, 10)
-                or (best.get("cutoff_points") is not None and r.get("points") == best.get("cutoff_points"))
-            ][:4]
-            if near_rows:
-                risk = max(risk, 0.78)
-                warnings.append("最佳第三边界附近，净胜球/进球数的一球变化可能改变跨组排名")
-                raw["best_third_boundary"] = near_rows
-    except Exception as exc:
-        raw["outlook_error"] = str(exc)
+        raw["knockout_error"] = str(exc)
 
     if not evidence:
         evidence.append("未识别到明显一球杠杆场景")
@@ -770,104 +870,18 @@ def goal_swing_agent(pred: dict, index: dict | None = None, *, output_root=None)
 
 
 def cross_group_path_agent(pred: dict, index: dict | None = None, *, output_root=None) -> AgentReport:
-    """Read dynamic best-third ranking and knockout path incentives."""
-    match_name = _match_name(pred, index)
-    evidence: list[str] = []
-    warnings: list[str] = []
-    raw: dict[str, Any] = {}
-    risk = 0.35
-    confidence = 0.35
-
-    try:
-        from analysis.tournament.group_knockout_outlook import outlook_for_match
-        om = outlook_for_match(match_name)
-        raw["outlook_for_match"] = om
-        if om.get("ok"):
-            group = om.get("group")
-            if group:
-                evidence.append(f"当前比赛属于 {group} 组，需同时参考 12 个小组第三横向排名")
-            best = om.get("best_third_live") or {}
-            rows = best.get("rows") or []
-            if best:
-                cutoff = []
-                if best.get("cutoff_points") is not None:
-                    cutoff.append(f"{best.get('cutoff_points')}分")
-                if best.get("cutoff_gd") is not None:
-                    cutoff.append(f"净{best.get('cutoff_gd'):+d}")
-                evidence.append("最佳第三实时切线：" + (" / ".join(cutoff) if cutoff else "已有动态排名"))
-            boundary = [
-                r for r in rows
-                if r.get("third_rank") in (7, 8, 9, 10)
-                or (best.get("cutoff_points") is not None and r.get("points") == best.get("cutoff_points"))
-            ][:6]
-            if boundary:
-                risk = max(risk, 0.72)
-                raw["best_third_boundary"] = boundary
-                txt = "；".join(
-                    f"{r.get('group')}组{r.get('team')} 第{r.get('third_rank')} "
-                    f"{r.get('points')}分 净{r.get('gd'):+d}"
-                    for r in boundary if r.get("gd") is not None
-                )
-                evidence.append("最佳第三边界：" + txt[:220])
-                warnings.append("最佳第三边界附近，一球净胜球/进球数可能改变跨组出线")
-
-            grp = om.get("group_outlook") or {}
-            team_bits = []
-            for t in grp.get("teams") or []:
-                scenarios = t.get("rank_scenarios") or []
-                if not scenarios:
-                    continue
-                sc_txt = " / ".join(
-                    f"第{s.get('rank')}→{s.get('r32_summary')}"
-                    for s in scenarios[:3]
-                )
-                team_bits.append(f"{t.get('team')}：{sc_txt}")
-            if team_bits:
-                evidence.extend(x[:180] for x in team_bits[:4])
-    except Exception as exc:
-        raw["outlook_error"] = str(exc)
-        warnings.append("跨组最佳第三/出线路径读取失败")
-
-    try:
-        from analysis.tournament.knockout import build_match_knockout_context
-        ctx = build_match_knockout_context(match_name)
-        raw["knockout_context"] = ctx
-        picking = ctx.get("picking_level")
-        if picking in ("medium", "high", "watch"):
-            risk = max(risk, 0.8 if picking == "high" else 0.68)
-            warnings.append("出线路径差异可能诱发控分、保平或默契球观察")
-        for side in ("home", "away"):
-            team = "主队" if side == "home" else "客队"
-            ko = ctx.get(f"{side}_knockout") or {}
-            race = ko.get("race") or {}
-            likely = race.get("likely_r32") or ko.get("likely_r32") or {}
-            status = race.get("status_cn") or race.get("status")
-            if status:
-                evidence.append(f"{team}出线状态：{status}")
-            if isinstance(likely, dict) and likely.get("summary"):
-                evidence.append(f"{team}32强路径：{likely.get('summary')}"[:180])
-        notes = ctx.get("opponent_picking_notes") or []
-        if isinstance(notes, list) and notes:
-            evidence.extend(str(x)[:180] for x in notes[:3])
-    except Exception as exc:
-        raw["knockout_error"] = str(exc)
-
-    if not evidence:
-        evidence.append("未读取到跨组最佳第三或32强路径数据")
-        warnings.append("缺少另一侧动态排名/路径证据，不能判断默契球或挑对手动机")
-        risk = max(risk, 0.6)
-
+    """Legacy cross-group path agent — now disabled in knockout phase."""
     return AgentReport(
         agent_id="cross_group_path",
-        name="跨组出线路径 Agent",
-        verdict="risk" if risk >= 0.7 else "neutral",
-        confidence=0.65 if evidence and risk >= 0.7 else confidence,
-        risk=risk,
-        weight=_weight("cross_group_path", output_root),
-        evidence=evidence[:8],
-        warnings=warnings[:5],
-        recommended_action="watch" if risk < 0.8 else "skip",
-        raw=raw,
+        name="跨组出线路径 Agent（已停用）",
+        verdict="neutral",
+        confidence=0.0,
+        risk=0.0,
+        weight=0.0,
+        evidence=["小组赛已结束，此 Agent 在淘汰赛阶段停用"],
+        warnings=[],
+        recommended_action="watch",
+        raw={"disabled": True, "reason": "knockout_phase"},
     )
 
 
@@ -970,75 +984,18 @@ def late_confirmation_agent(pred: dict, index: dict | None = None, *, output_roo
 
 
 def scenario_simulator_agent(pred: dict, index: dict | None = None, *, output_root=None) -> AgentReport:
-    """Cup scenario simulator for group/cross-group knock-on effects."""
-    match_name = _match_name(pred, index)
-    evidence: list[str] = []
-    warnings: list[str] = []
-    raw: dict[str, Any] = {}
-    risk = 0.35
-    confidence = 0.35
-    try:
-        from analysis.tournament.group_knockout_outlook import outlook_for_match
-        outlook = outlook_for_match(match_name)
-        raw["outlook"] = outlook
-        if outlook.get("ok"):
-            group = outlook.get("group")
-            if group:
-                evidence.append(f"{group}组场景：需联动同组另一场与跨组第三排名")
-            best = outlook.get("best_third_live") or {}
-            rows = best.get("rows") or []
-            boundary = [r for r in rows if r.get("third_rank") in (7, 8, 9, 10)][:5]
-            if boundary:
-                risk = max(risk, 0.75)
-                warnings.append("最佳第三边界队伍接近，胜/平/净胜球变化会影响多队决策")
-                evidence.append("边界第三：" + "；".join(
-                    f"{r.get('group')}组{r.get('team')}第{r.get('third_rank')}"
-                    for r in boundary
-                ))
-            grp = outlook.get("group_outlook") or {}
-            team_lines = []
-            for team in grp.get("teams") or []:
-                scenarios = team.get("rank_scenarios") or []
-                if scenarios:
-                    risk = max(risk, 0.68)
-                    team_lines.append(
-                        f"{team.get('team')}：" + " / ".join(
-                            f"第{s.get('rank')}→{s.get('r32_summary')}" for s in scenarios[:3]
-                        )
-                    )
-            if team_lines:
-                evidence.extend(x[:180] for x in team_lines[:4])
-                confidence = max(confidence, 0.62)
-    except Exception as exc:
-        raw["outlook_error"] = str(exc)
-        warnings.append("场景模拟读取出线/签位数据失败")
-
-    try:
-        from group_stage_model import analyze_match_from_name
-        ma = analyze_match_from_name(match_name)
-        raw["motivation"] = ma
-        if ma and ma.get("match_type") in ("must_win", "gd_race", "draw_friendly", "collusion_watch"):
-            risk = max(risk, 0.78)
-            evidence.append("战意场景：" + "；".join(str(x) for x in (ma.get("reasoning") or [])[:3])[:180])
-            warnings.append("不同比分场景下战术目标可能改变，不能只用单一赛果预测")
-    except Exception as exc:
-        raw["motivation_error"] = str(exc)
-
-    if not evidence:
-        evidence.append("未读取到可模拟的杯赛联动场景")
-        warnings.append("缺少同组/跨组场景数据，出线压力只能低置信参考")
-        risk = max(risk, 0.55)
+    """Legacy group-stage scenario simulator — now disabled in knockout phase."""
     return AgentReport(
         agent_id="scenario_simulator",
-        name="杯赛场景模拟 Agent",
-        verdict="risk" if risk >= 0.7 else "neutral",
-        confidence=confidence,
-        risk=risk,
-        weight=_weight("scenario_simulator", output_root),
-        evidence=evidence[:8],
-        warnings=warnings[:5],
-        recommended_action="watch" if risk < 0.8 else "skip",
-        raw=raw,
+        name="杯赛场景模拟 Agent（已停用）",
+        verdict="neutral",
+        confidence=0.0,
+        risk=0.0,
+        weight=0.0,
+        evidence=["小组赛已结束，此 Agent 在淘汰赛阶段停用"],
+        warnings=[],
+        recommended_action="watch",
+        raw={"disabled": True, "reason": "knockout_phase"},
     )
 
 
@@ -1373,9 +1330,10 @@ DEFAULT_EXPERTS = (
     schedule_venue_agent,
     late_confirmation_agent,
     opening_structure_agent,
-    scenario_simulator_agent,
+    knockout_path_agent,
     goal_swing_agent,
-    cross_group_path_agent,
+    extra_time_penalty_agent,
+    knockout_motivation_agent,
     market_consistency_agent,
     contrarian_agent,
     memory_agent,
@@ -1383,6 +1341,4 @@ DEFAULT_EXPERTS = (
     asian_handicap_agent,
     european_odds_agent,
     jingcai_agent,
-    cup_standing_agent,
-    motivation_agent,
 )

@@ -34,14 +34,14 @@ def _hard_guards(agents: list[AgentReport]) -> list[str]:
     by_id = {a.agent_id: a for a in agents}
     jc = by_id.get("jingcai")
     ah = by_id.get("asian_handicap")
-    motivation = by_id.get("motivation")
+    knockout_motivation = by_id.get("knockout_motivation")
     intel = by_id.get("intel")
     external = by_id.get("external_context")
     goal_swing = by_id.get("goal_swing")
     schedule_venue = by_id.get("schedule_venue")
-    cross_group = by_id.get("cross_group_path")
+    knockout_path = by_id.get("knockout_path")
     late = by_id.get("late_confirmation")
-    scenario = by_id.get("scenario_simulator")
+    extra_time = by_id.get("extra_time_penalty")
     market_consistency = by_id.get("market_consistency")
     contrarian = by_id.get("contrarian")
     memory = by_id.get("memory")
@@ -50,16 +50,16 @@ def _hard_guards(agents: list[AgentReport]) -> list[str]:
         guards.append("竞彩 Agent 识别到仅让球/大让球硬风险，禁止升级为稳健串关")
     if ah and ah.risk >= 0.85:
         guards.append("亚盘 Agent 识别到大让球或盘口剧烈变化，必须降级或观望")
-    if motivation and motivation.risk >= 0.75:
-        guards.append("战意 Agent 识别到默契球/平局友好/无战意风险，不能只按盘口强弱判断")
+    if knockout_motivation and knockout_motivation.risk >= 0.75:
+        guards.append("淘汰赛战意 Agent 识别到保守/激进策略分歧，不能只按盘口强弱判断")
     if goal_swing and goal_swing.risk >= 0.85:
-        guards.append("一球杠杆 Agent 识别到 1 个进球可能改变出线/让球结算，禁止升级为稳健串关")
-    if cross_group and cross_group.risk >= 0.8:
-        guards.append("跨组出线路径 Agent 识别到最佳第三/32强路径/默契球风险，必须降级或观望")
+        guards.append("一球杠杆 Agent 识别到 1 个进球可能改变让球结算，禁止升级为稳健串关")
+    if knockout_path and knockout_path.risk >= 0.8:
+        guards.append("淘汰赛路径 Agent 识别到半区强弱悬殊或潜在对手链风险，必须降级或观望")
     if late and late.risk >= 0.7:
         guards.append("临场确认 Agent 识别到首发/终盘/时间窗口缺口，当前报告不能当作最终临场版")
-    if scenario and scenario.risk >= 0.78:
-        guards.append("杯赛场景模拟 Agent 识别到同组/跨组结果联动，必须解释不同比分场景")
+    if extra_time and extra_time.risk >= 0.78:
+        guards.append("加时点球 Agent 识别到高概率加时/点球场景，必须解释平局价值和加时赛风险")
     if market_consistency and market_consistency.risk >= 0.8:
         guards.append("欧亚一致性 Agent 识别到欧赔与亚盘态度不一致，必须降级或观望")
     if contrarian and contrarian.risk >= 0.82:
@@ -95,16 +95,18 @@ def _summary(agents: list[AgentReport]) -> dict[str, Any]:
 
 
 def board_is_cup_context(board: dict[str, Any]) -> bool:
-    """True when cup/tournament agents found meaningful context."""
+    """True when cup/tournament agents found meaningful knockout context."""
     for a in board.get("agents") or []:
-        if a.get("agent_id") not in ("cup_standing", "motivation"):
+        if a.get("agent_id") not in ("knockout_path", "knockout_motivation", "extra_time_penalty"):
             continue
         raw = a.get("raw") or {}
-        if raw.get("knockout_context", {}).get("ok") is not False and a.get("agent_id") == "cup_standing":
+        if a.get("agent_id") == "knockout_path" and raw.get("knockout_context"):
             evidence = " ".join(a.get("evidence") or [])
             if "未识别" not in evidence:
                 return True
-        if raw.get("motivation"):
+        if a.get("agent_id") == "knockout_motivation" and raw.get("motivation"):
+            return True
+        if a.get("agent_id") == "extra_time_penalty" and raw.get("extra_time_data"):
             return True
     return False
 

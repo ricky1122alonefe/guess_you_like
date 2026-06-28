@@ -15,9 +15,10 @@ AGENT_REGISTRY: dict[str, AgentFn] = {
     "schedule_venue": experts.schedule_venue_agent,
     "late_confirmation": experts.late_confirmation_agent,
     "opening_structure": experts.opening_structure_agent,
-    "scenario_simulator": experts.scenario_simulator_agent,
+    "knockout_path": experts.knockout_path_agent,
     "goal_swing": experts.goal_swing_agent,
-    "cross_group_path": experts.cross_group_path_agent,
+    "extra_time_penalty": experts.extra_time_penalty_agent,
+    "knockout_motivation": experts.knockout_motivation_agent,
     "market_consistency": experts.market_consistency_agent,
     "contrarian": experts.contrarian_agent,
     "memory": experts.memory_agent,
@@ -27,8 +28,6 @@ AGENT_REGISTRY: dict[str, AgentFn] = {
     "asian_handicap": experts.asian_handicap_agent,
     "european_odds": experts.european_odds_agent,
     "jingcai": experts.jingcai_agent,
-    "cup_standing": experts.cup_standing_agent,
-    "motivation": experts.motivation_agent,
     "league_pressure": experts.league_pressure_agent,
 }
 

@@ -106,14 +106,15 @@ def _chief_messages(
     profile = board.get("scope") or (board.get("summary") or {}).get("profile") or "cup"
     profile_label = "杯赛" if profile == "cup" else "联赛"
     system = (
-        f"你是足球{profile_label}多 Agent 总分析师。你必须基于输入的专家证据板做最终研判，"
+        f"你是足球{profile_label}多 Agent 总分析师（淘汰赛阶段）。你必须基于输入的专家证据板做最终研判，"
         "不得编造未提供的伤停、天气、首发、新闻或盘口数据。"
         "如果情报 Agent 标记 insufficient_data，必须在报告中说明暂无可靠情报数据。"
         "你的目标不是强行给单，而是输出可执行的风险决策：可串、可单关、仅参考、跳过。"
+        "淘汰赛阶段重点关注：对阵路径、加时/点球概率、保守vs激进策略、半区强弱。"
         "只返回 JSON，不要 markdown 代码块。"
     )
     user = {
-        "task": f"综合多个专家 Agent 的证据，输出最终中文深度报告与结构化决策。当前 profile={profile}",
+        "task": f"综合多个专家 Agent 的证据，输出最终中文深度报告与结构化决策。当前 profile={profile}（淘汰赛阶段）",
         "hard_constraints": [
             "只基于 expert_board 和 compact_prediction 分析，不得臆测外部消息。",
             "如果 hard_guards 非空，不能输出 A 可串；必须解释降级原因。",
@@ -124,9 +125,10 @@ def _chief_messages(
             "如果 schedule_venue 缺少球馆/天气/海拔，必须写明这些维度未参与判断。",
             "late_confirmation Agent 是临场确认闸门：若首发、伤停、终盘或时间窗口缺失，不能把报告表述为最终临场版。",
             "如果 profile=cup：opening_structure 是本届杯赛整体开盘环境，需作为宏观背景纳入最终报告。",
-            "如果 profile=cup：scenario_simulator 必须说明同组另一场、跨组第三、不同比分场景如何改变战意和结果价值。",
-            "如果 profile=cup：goal_swing 代表一球杠杆风险，必须解释 1 个进球是否会改变出线、净胜球排序或让球结算。",
-            "如果 profile=cup：cross_group_path 代表另一侧数据，必须分析小组第三动态排名、32强路径和默契球/控分动机。",
+            "如果 profile=cup：knockout_path 必须分析对阵路径深度、半区强弱、潜在对手链、挑对手动机。",
+            "如果 profile=cup：extra_time_penalty 必须分析加时赛/点球概率，解释平局价值和90分钟vs最终结果差异。",
+            "如果 profile=cup：knockout_motivation 必须分析淘汰赛战意：保守vs激进策略、首回合保守度、控分可能。",
+            "如果 profile=cup：goal_swing 代表一球杠杆风险，必须解释 1 个进球是否会改变让球结算或后续对阵。",
             "market_consistency 代表欧赔与亚盘态度是否一致；若不一致，必须降级并解释诱盘/分歧风险。",
             "contrarian 是强制反方辩手；必须逐条回应其不买理由，不能忽略。",
             "memory 若命中历史相似翻车模式，必须解释本场与历史错因的差异，否则降级。",
@@ -134,7 +136,7 @@ def _chief_messages(
             "external_context 若无数据，必须写明新闻/天气/场地/海拔未接入，不得编造。",
         ],
         "required_json_schema": {
-            "final_report_md": "完整中文报告；cup 需覆盖临场确认/场景模拟/跨组第三/出线路径/一球杠杆/欧亚一致性/反方理由/成长记忆，league 需覆盖赛程密度/多线压力/联赛战意",
+            "final_report_md": "完整中文报告；cup 淘汰赛需覆盖临场确认/对阵路径/半区强弱/加时点球概率/淘汰赛战意/一球杠杆/欧亚一致性/反方理由/成长记忆，league 需覆盖赛程密度/多线压力/联赛战意",
             "final_pick": {
                 "sp": "主胜|平局|客胜|观望",
                 "rqsp": "胜|平|负|观望",

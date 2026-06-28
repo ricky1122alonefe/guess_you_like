@@ -17,9 +17,10 @@ AGENT_LABELS: dict[str, str] = {
     "schedule_venue": "赛程球馆 Agent",
     "late_confirmation": "临场确认 Agent",
     "opening_structure": "开盘结构 Agent",
-    "scenario_simulator": "杯赛场景模拟 Agent",
+    "knockout_path": "淘汰赛路径 Agent",
     "goal_swing": "一球杠杆 Agent",
-    "cross_group_path": "跨组出线路径 Agent",
+    "extra_time_penalty": "加时点球 Agent",
+    "knockout_motivation": "淘汰赛战意 Agent",
     "market_consistency": "欧亚一致性 Agent",
     "contrarian": "反方辩手 Agent",
     "memory": "成长记忆库 Agent",
@@ -29,8 +30,6 @@ AGENT_LABELS: dict[str, str] = {
     "asian_handicap": "亚洲盘口 Agent",
     "european_odds": "欧洲盘口 Agent",
     "jingcai": "竞彩 Agent",
-    "cup_standing": "积分出线 Agent",
-    "motivation": "战意 Agent",
     "league_pressure": "联赛压力 Agent",
 }
 

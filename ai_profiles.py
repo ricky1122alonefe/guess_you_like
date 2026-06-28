@@ -51,6 +51,12 @@ class AiProfile:
     api_key_env: str
     alt_api_key_envs: tuple[str, ...] = field(default_factory=tuple)
     client: str = "openai"
+    temperature: float = 0.2
+    max_tokens: int = 4096
+    timeout: int = 180
+    top_p: float | None = None
+    json_mode: bool = True
+    system_prompt_extra: str = ""
 
     def resolve_api_key(self) -> str | None:
         env_names = [self.api_key_env, *self.alt_api_key_envs]
@@ -109,6 +115,12 @@ def profile_from_entry(entry: dict) -> AiProfile:
         api_key_env=str(entry.get("api_key_env") or ""),
         alt_api_key_envs=tuple(str(x) for x in alts),
         client=str(entry.get("client") or "openai"),
+        temperature=float(entry.get("temperature", 0.2)),
+        max_tokens=int(entry.get("max_tokens", 4096)),
+        timeout=int(entry.get("timeout", 180)),
+        top_p=float(entry["top_p"]) if entry.get("top_p") is not None else None,
+        json_mode=bool(entry.get("json_mode", True)) if entry.get("json_mode") is not None else True,
+        system_prompt_extra=str(entry.get("system_prompt_extra") or ""),
     )
 
 
@@ -128,6 +140,12 @@ def _apply_overrides(
         api_key_env=prof.api_key_env,
         alt_api_key_envs=prof.alt_api_key_envs,
         client=prof.client,
+        temperature=prof.temperature,
+        max_tokens=prof.max_tokens,
+        timeout=prof.timeout,
+        top_p=prof.top_p,
+        json_mode=prof.json_mode,
+        system_prompt_extra=prof.system_prompt_extra,
     )
 
 

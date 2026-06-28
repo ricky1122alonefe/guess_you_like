@@ -27,44 +27,6 @@ def _open_hist_favors(hist_rates: dict[str, float], hist_best: str) -> bool:
     return rate >= cfg.OPEN_HIST_LOCK_MIN_RATE and (rate - second) >= cfg.OPEN_HIST_LOCK_MIN_MARGIN
 
 
-def _resolve_group_stage_pick(
-    rule_key: str,
-    combined: dict[str, float],
-    hist_rates: dict[str, float],
-    hist_best: str,
-    gs_analysis: dict,
-) -> tuple[str, list[str]]:
-    """Apply group motivation without forcing draw when open history is clear."""
-    extra_notes: list[str] = []
-    ordered = sorted(combined.items(), key=lambda x: -x[1])
-    new_key = ordered[0][0]
-    mt = gs_analysis.get("match_type")
-    hist_locked = _open_hist_favors(hist_rates, hist_best)
-
-    if mt == "must_win":
-        hs = gs_analysis.get("home_situation") or {}
-        aws = gs_analysis.get("away_situation") or {}
-        if hs.get("pressure") == "high" and aws.get("pressure") != "high":
-            if combined.get("home", 0) >= combined.get("away", 0) - 0.03:
-                new_key = "home"
-        elif aws.get("pressure") == "high" and hs.get("pressure") != "high":
-            if combined.get("away", 0) >= combined.get("home", 0) - 0.03:
-                new_key = "away"
-
-    if new_key == "draw" and hist_locked and hist_best in ("home", "away"):
-        new_key = rule_key if rule_key != "draw" else hist_best
-        extra_notes.append("【小组战意】初盘单项倾向明确，仅提示防平，不改推胜平负")
-    elif (
-        new_key == "draw"
-        and mt in ("collusion_watch", "draw_friendly", "open_race", "conservative_favorite")
-    ):
-        runner_up = max(combined.get("home", 0), combined.get("away", 0))
-        if combined.get("draw", 0) - runner_up < cfg.GROUP_STAGE_DRAW_FLIP_MIN_LEAD:
-            new_key = rule_key
-
-    return new_key, extra_notes
-
-
 def _get_hist_rates(stats: dict, eu_stats: dict) -> tuple[dict[str, float], str] | None:
     ah_count = stats.get("count") or 0
     eu_count = eu_stats.get("count") or 0
@@ -515,32 +477,17 @@ def build_recommendation(payload: dict) -> Recommendation:
                 reference_key, combined_ref, jingcai,
             )
 
-    gs_notes: list[str] = []
-    gs_analysis = None
-    qual_alert: dict | None = None
+    ko_notes: list[str] = []
     alert_tags: list[str] = []
     if pick is not None and match_name:
         try:
-            from analysis.tournament.group_stage import analyze_match_from_name, adjust_rates_for_group_stage
-
-            gs_analysis = analyze_match_from_name(match_name)
-            if gs_analysis and not gs_analysis.get("is_finished"):
-                result, result_cn, hist_rates, combined, hist_best = pick
-                rule_key = result
-                combined, gs_notes = adjust_rates_for_group_stage(combined, gs_analysis)
-                new_key, gs_extra = _resolve_group_stage_pick(
-                    rule_key, combined, hist_rates, hist_best, gs_analysis,
-                )
-                gs_notes.extend(gs_extra)
-                result, result_cn = new_key, RESULT_CN[new_key]
-                pick = (result, result_cn, hist_rates, combined, hist_best)
-
             from analysis.tournament.knockout import build_match_knockout_context
 
             kctx = build_match_knockout_context(match_name)
-            if kctx and kctx.get("same_group") and not (kctx.get("motivation") or {}).get("is_finished"):
+            if kctx:
                 hint = kctx.get("prediction_hint") or {}
-                if kctx.get("picking_level") in ("watch", "medium", "high"):
+                picking = kctx.get("picking_level")
+                if picking in ("watch", "medium", "high"):
                     result, result_cn, hist_rates, combined, hist_best = pick
                     bias = float(hint.get("draw_bias") or 0.06) * cfg.KNOCKOUT_DRAW_BIAS_SCALE
                     combined = dict(combined)
@@ -556,25 +503,20 @@ def build_recommendation(payload: dict) -> Recommendation:
                         if draw_v >= top - 0.03:
                             result, result_cn = "draw", "平局"
                     pick = (result, result_cn, hist_rates, combined, hist_best)
-                    gs_notes.append("淘汰赛路径：存在挑对手空间，模型略抬平局权重")
-                    gs_notes.extend((hint.get("notes") or [])[:2])
+                    ko_notes.append("淘汰赛路径：存在挑对手空间，模型略抬平局权重")
+                    ko_notes.extend((hint.get("notes") or [])[:2])
                 elif hint.get("picking_note"):
-                    gs_notes.append(hint["picking_note"])
+                    ko_notes.append(hint["picking_note"])
 
-            from analysis.signals.qualification_alert import build_qualification_divergence_alert
+                # 淘汰赛加时/点球风险提示
+                ko_round = kctx.get("knockout_round") or ""
+                if ko_round in ("r16", "qf", "sf", "final"):
+                    round_cn = {"r16": "16强", "qf": "8强", "sf": "4强", "final": "决赛"}.get(ko_round, ko_round)
+                    ko_notes.append(f"当前为淘汰赛{round_cn}，加时/点球概率需纳入考量")
 
-            qual_alert = build_qualification_divergence_alert(
-                cur,
-                gs_analysis,
-                match_name=match_name,
-                fixture_id=str(payload.get("fixture_id") or ""),
-            )
-            if qual_alert:
-                alert_tags.extend(qual_alert.get("alert_tags") or [])
-                gs_notes.insert(0, qual_alert["advice"])
             if jingcai_div:
                 alert_tags.append("竞彩·参考分歧")
-                gs_notes.insert(0, jingcai_div["note"])
+                ko_notes.insert(0, jingcai_div["note"])
         except Exception:
             pass
 
@@ -661,8 +603,8 @@ def build_recommendation(payload: dict) -> Recommendation:
     mp_names = [p.get("name") for p in (getattr(mp, "patterns", None) or []) if p.get("name")]
     funds_txt = "；".join(trap.notes) if trap.notes else "临盘走势与初盘规律基本一致"
     all_notes = list(control.notes) + [n for n in trap.notes if n not in control.notes]
-    if gs_notes:
-        all_notes.extend(gs_notes)
+    if ko_notes:
+        all_notes.extend(ko_notes)
 
     jc_sp_txt = ""
     if jingcai_div and jingcai_div.get("jingcai_sp_summary"):
@@ -683,8 +625,6 @@ def build_recommendation(payload: dict) -> Recommendation:
         summary += f"（初盘单项最高 {RESULT_CN[hist_best]}，临盘风控调整后参考 {reference_cn or result_cn}）"
     if auto_relaxed:
         summary += "（已自动放宽匹配条件）"
-    if gs_analysis:
-        summary += f"【小组战意】{gs_analysis.get('match_type_cn')}：{gs_analysis.get('likely_direction_cn')}。"
 
     return Recommendation(
         match=match_name,
@@ -723,7 +663,7 @@ def build_recommendation(payload: dict) -> Recommendation:
         reference_blend_summary=reference_blend_summary,
         jingcai_divergence=jingcai_div,
         alert_tags=alert_tags or None,
-        qualification_divergence=qual_alert,
-        eu_ah_divergence_score=(qual_alert or {}).get("divergence_score"),
+        qualification_divergence=None,
+        eu_ah_divergence_score=None,
     )
 

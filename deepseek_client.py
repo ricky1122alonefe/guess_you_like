@@ -170,6 +170,8 @@ def chat(
     temperature: float = 0.3,
     timeout: int = 120,
     max_tokens: int = 4096,
+    top_p: float | None = None,
+    json_mode: bool = True,
 ) -> str:
     key = _get_api_key(api_key, base_url=base_url)
     if (base_url or "").lower() == "cursor-sdk":
@@ -181,21 +183,32 @@ def chat(
         )
 
     url = f"{base_url.rstrip('/')}/chat/completions"
-    resp = requests.post(
-        url,
-        headers={
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-        },
-        json={
+
+    def _post(with_json_mode: bool) -> requests.Response:
+        body: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
-            "response_format": {"type": "json_object"},
-        },
-        timeout=timeout,
-    )
+        }
+        if top_p is not None:
+            body["top_p"] = top_p
+        if with_json_mode:
+            body["response_format"] = {"type": "json_object"}
+        return requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=timeout,
+        )
+
+    resp = _post(with_json_mode=json_mode)
+    if resp.status_code >= 400 and json_mode:
+        # 部分模型/接入点不支持 response_format，关闭 JSON 模式重试一次
+        resp = _post(with_json_mode=False)
     if resp.status_code >= 400:
         raise DeepSeekError(f"DeepSeek API 错误 {resp.status_code}: {resp.text[:500]}")
 

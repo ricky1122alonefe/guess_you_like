@@ -987,9 +987,15 @@ def build_user_prompt(payload: dict, baseline: dict, *, mode: str = "expert") ->
 
 def _extract_json_text(content: str) -> str:
     text = content.strip()
-    if text.startswith("```"):
+    if text.startswith("`" * 3):
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
+    text = text.strip()
+    # 模型可能在 JSON 前后加解释，尝试定位最外层对象/数组
+    if not (text.startswith("{") or text.startswith("[")):
+        m = re.search(r"(\{[\s\S]*\}|\[[\s\S]*\])", text)
+        if m:
+            text = m.group(1)
     return text
 
 

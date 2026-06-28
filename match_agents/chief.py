@@ -16,6 +16,56 @@ from .storage import append_agent_artifact, load_latest_artifact
 
 CHIEF_FILE = "chief_report.jsonl"
 
+KNOCKOUT_GLOSSARY = (
+    "淘汰赛术语速查："
+    "「挑对手」=为获得更优淘汰赛签位而控分；"
+    "「加时/点球」=90分钟平局后进入30分钟加时及点球大战；"
+    "「半区」=决定潜在对手链的淘汰赛上下半区；"
+    "「一球杠杆」=一个进球可能改变亚盘让球结算。"
+)
+
+
+def _provider_json_hint(provider_id: str) -> str:
+    """Provider-specific JSON reliability hint appended to system prompt."""
+    hints = {
+        "cursor": (
+            " Cursor SDK 不强制 JSON 模式，你必须严格输出符合 required_json_schema 的纯 JSON，"
+            "禁止 Markdown 代码块与额外解释。"
+        ),
+        "doubao": (
+            " 豆包模型请严格按 required_json_schema 返回纯 JSON，不要额外解释，"
+            "不要输出 schema 以外的字段。"
+        ),
+        "kimi": (
+            " Kimi 模型请严格按 required_json_schema 返回纯 JSON，不要额外解释。"
+        ),
+    }
+    return hints.get(provider_id, "")
+
+
+def _compact_expert_board(board: dict[str, Any], max_evidence: int = 3) -> dict[str, Any]:
+    """Return a context-size-friendly copy of the expert board for the prompt.
+
+    The original full board is still archived; this compact copy is what the
+    Chief AI model sees. Evidence lists are truncated and oversized raw dicts
+    are summarized to avoid blowing up the context window after switching models.
+    """
+    out = dict(board)
+    agents: list[dict[str, Any]] = []
+    for a in board.get("agents") or []:
+        ca = dict(a)
+        ca["evidence"] = (a.get("evidence") or [])[:max_evidence]
+        raw = a.get("raw")
+        if isinstance(raw, dict) and len(str(raw)) > 2000:
+            ca["raw"] = {
+                "truncated": True,
+                "keys": list(raw.keys()),
+                "note": "raw 数据过大已截断，完整数据已归档。",
+            }
+        agents.append(ca)
+    out["agents"] = agents
+    return out
+
 
 def load_latest_chief_report(output_root: str | Path, fixture_id: str) -> dict[str, Any] | None:
     return load_latest_artifact(output_root, fixture_id, CHIEF_FILE)
@@ -88,6 +138,8 @@ def _chief_messages(
     prediction: dict | None = None,
     *,
     output_root: str | Path | None = None,
+    provider_id: str = "",
+    system_prompt_extra: str = "",
 ) -> list[dict[str, str]]:
     compact_pred = {}
     if prediction:
@@ -113,6 +165,12 @@ def _chief_messages(
         "淘汰赛阶段重点关注：对阵路径、加时/点球概率、保守vs激进策略、半区强弱。"
         "只返回 JSON，不要 markdown 代码块。"
     )
+    system += _provider_json_hint(provider_id)
+    if system_prompt_extra:
+        system += " " + system_prompt_extra
+    if profile == "cup":
+        system += " " + KNOCKOUT_GLOSSARY
+
     user = {
         "task": f"综合多个专家 Agent 的证据，输出最终中文深度报告与结构化决策。当前 profile={profile}（淘汰赛阶段）",
         "hard_constraints": [
@@ -150,10 +208,11 @@ def _chief_messages(
             "watch_points": ["开球前需复核的信息"],
             "summary": "一句话结论",
         },
+        "hard_guards": board.get("hard_guards") or [],
         "agent_config": load_match_agent_config(output_root),
         "profile": profile,
         "compact_prediction": compact_pred,
-        "expert_board": board,
+        "expert_board": _compact_expert_board(board),
     }
     return [
         {"role": "system", "content": system},
@@ -182,15 +241,23 @@ def run_chief_match_agent(
     if not api_key:
         raise RuntimeError(f"未配置 {prof.api_key_env}")
 
-    prompt_messages = _chief_messages(board, prediction, output_root=root)
+    prompt_messages = _chief_messages(
+        board,
+        prediction,
+        output_root=root,
+        provider_id=prof.provider_id,
+        system_prompt_extra=prof.system_prompt_extra,
+    )
     raw_text = chat(
         prompt_messages,
         api_key=api_key,
         model=prof.model,
         base_url=prof.base_url,
-        temperature=0.2,
-        timeout=180,
-        max_tokens=4096,
+        temperature=prof.temperature,
+        timeout=prof.timeout,
+        max_tokens=prof.max_tokens,
+        top_p=prof.top_p,
+        json_mode=prof.json_mode,
     )
     data = _normalize_ai_json(raw_text)
     data = _guardrail_downgrade(data, board.get("hard_guards") or [])

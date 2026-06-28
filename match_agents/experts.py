@@ -516,28 +516,28 @@ def knockout_path_agent(pred: dict, index: dict | None = None, *, output_root=No
         )
         ctx = build_match_knockout_context(match_name)
         raw["knockout_context"] = ctx
-        if ctx and ctx.get("group"):
-            group = ctx["group"]
-            evidence.append(f"所属小组：{group}")
-
-            bracket = _load_bracket()
-            half = _bracket_half(group, bracket)
-            half_cn = {"upper": "上半区", "lower": "下半区"}.get(half, "未知半区")
-            evidence.append(f"所在半区：{half_cn}")
-            raw["bracket_half"] = half
+        if ctx and ctx.get("knockout_round"):
+            round_cn = ctx.get("knockout_round_cn") or ctx.get("knockout_round")
+            evidence.append(f"淘汰赛轮次：{round_cn}")
 
             for side in ("home", "away"):
                 ko = ctx.get(f"{side}_knockout") or {}
                 team_label = "主队" if side == "home" else "客队"
-                paths = ko.get("paths") or {}
-                easiest_rank = ko.get("easiest_path_rank")
+                group = ko.get("group") or ""
+                if group:
+                    evidence.append(f"{team_label}原小组：{group}")
+                    bracket = _load_bracket()
+                    half = _bracket_half(group, bracket)
+                    half_cn = {"upper": "上半区", "lower": "下半区"}.get(half, "未知半区")
+                    evidence.append(f"{team_label}所在半区：{half_cn}")
+                    raw[f"{side}_bracket_half"] = half
+
                 preferred = ko.get("preferred_path_cn") or ""
                 if preferred:
                     evidence.append(f"{team_label}最优路径：{preferred}")
-                race = ko.get("race") or {}
-                status = race.get("status_cn") or race.get("status")
-                if status:
-                    evidence.append(f"{team_label}状态：{status}")
+                tier = ko.get("tier") or ""
+                if tier:
+                    evidence.append(f"{team_label}实力档位：{tier}")
                 notes = ko.get("notes") or []
                 for n in notes[:2]:
                     evidence.append(f"{team_label}：{str(n)[:140]}")
@@ -546,6 +546,10 @@ def knockout_path_agent(pred: dict, index: dict | None = None, *, output_root=No
             if picking in ("high", "medium"):
                 risk = max(risk, 0.7 if picking == "high" else 0.55)
                 warnings.append("存在淘汰赛路径选择/挑对手动机，需要降低盘口直觉权重")
+
+            picking_notes = ctx.get("picking_notes") or []
+            for pn in picking_notes[:2]:
+                evidence.append(f"路径提示：{str(pn)[:120]}")
 
             scenarios = ctx.get("scenarios") or []
             for sc in scenarios[:3]:
@@ -655,9 +659,10 @@ def knockout_motivation_agent(pred: dict, index: dict | None = None, *, output_r
         from analysis.tournament.knockout import build_match_knockout_context
         ctx = build_match_knockout_context(match_name)
         raw["knockout_context"] = ctx
-        if ctx:
-            motivation = ctx.get("motivation") or {}
-            raw["motivation"] = motivation
+        if ctx and ctx.get("knockout_round"):
+            round_cn = ctx.get("knockout_round_cn") or ctx.get("knockout_round")
+            evidence.append(f"淘汰赛轮次：{round_cn}")
+            raw["knockout_round"] = ctx.get("knockout_round")
 
             picking = ctx.get("picking_level")
             picking_cn = ctx.get("picking_level_cn") or "低"
@@ -671,10 +676,16 @@ def knockout_motivation_agent(pred: dict, index: dict | None = None, *, output_r
             for side in ("home", "away"):
                 ko = ctx.get(f"{side}_knockout") or {}
                 team_label = "主队" if side == "home" else "客队"
-                easiest = ko.get("easiest_path_rank")
                 preferred = ko.get("preferred_path_cn") or ""
-                if easiest and preferred:
-                    evidence.append(f"{team_label}最优排名策略：{preferred}")
+                tier = ko.get("tier") or ""
+                if preferred:
+                    evidence.append(f"{team_label}最优路径策略：{preferred}")
+                if tier:
+                    evidence.append(f"{team_label}实力档位：{tier}")
+
+            picking_notes = ctx.get("picking_notes") or []
+            for pn in picking_notes[:2]:
+                evidence.append(f"路径提示：{str(pn)[:120]}")
 
             scenarios = ctx.get("scenarios") or []
             for sc in scenarios[:3]:
@@ -838,11 +849,15 @@ def goal_swing_agent(pred: dict, index: dict | None = None, *, output_root=None)
         from analysis.tournament.knockout import build_match_knockout_context
         ctx = build_match_knockout_context(match_name)
         raw["knockout_context"] = ctx
-        if ctx:
+        if ctx and ctx.get("knockout_round"):
+            round_cn = ctx.get("knockout_round_cn") or ctx.get("knockout_round")
+            evidence.append(f"淘汰赛{round_cn}，一球差直接决定晋级/淘汰")
+            risk = max(risk, 0.55)
+
             scenarios = ctx.get("scenarios") or []
             for sc in scenarios[:3]:
                 note = sc.get("note")
-                if note and ("控节奏" in str(note) or "抢分" in str(note) or "告急" in str(note)):
+                if note and ("加时" in str(note) or "点球" in str(note) or "体能" in str(note)):
                     risk = max(risk, 0.65)
                     evidence.append(f"淘汰赛情景：{sc.get('label')} → {str(note)[:100]}")
             picking = ctx.get("picking_level")

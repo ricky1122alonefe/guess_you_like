@@ -104,7 +104,7 @@ def board_is_cup_context(board: dict[str, Any]) -> bool:
             evidence = " ".join(a.get("evidence") or [])
             if "未识别" not in evidence:
                 return True
-        if a.get("agent_id") == "knockout_motivation" and raw.get("motivation"):
+        if a.get("agent_id") == "knockout_motivation" and raw.get("knockout_context"):
             return True
         if a.get("agent_id") == "extra_time_penalty" and raw.get("extra_time_data"):
             return True

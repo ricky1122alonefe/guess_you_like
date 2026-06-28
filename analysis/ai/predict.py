@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
-"""Historical match stats + AI expert (DeepSeek/OpenAI) analysis and recommendation."""
+"""Historical match stats + AI expert (DeepSeek/OpenAI) analysis and recommendation.
+
+本模块是 AI 分析链路的第一入口：
+    - 读取亚盘/欧赔 xls 文件对，构造比赛数据 payload。
+    - 调用规则引擎生成基线推荐（baseline）。
+    - 将 payload + baseline 喂给大模型做首轮 AI 精算/论证。
+    - 解析模型输出并融合为最终预测字典。
+
+两种模式：
+    - expert（默认）：AI 作为独立精算师，自行研判并输出结论。
+    - locked：规则引擎锁定结论，AI 仅做论证（不推荐日常使用）。
+
+对外入口：
+    - `run_one_match(...)`: 单场比赛的完整 AI 分析流程。
+    - `main(...)`: CLI 入口，支持批量文件与 JSON/quiet 输出。
+"""
 
 from __future__ import annotations
 
@@ -47,6 +62,18 @@ def run_one_match(
     poll_meta: dict | None = None,
     verbose: bool = True,
 ) -> tuple[dict, dict, dict]:
+    """单场比赛的完整 AI 分析流程。
+
+    步骤：
+        1. 从 xls 文件构造 payload（历史样本 + 盘口数据）。
+        2. 规则引擎生成 baseline（参考推荐）。
+        3. 调用 LLM 做 expert/locked 模式分析。
+        4. 解析并融合结果，附加竞彩信息。
+
+    Returns:
+        (payload, prediction, artifact) 三元组。
+    """
+    # 1. 构造数据 payload 与规则引擎基线。
     payload = build_payload(
         ah_xls, eu_xls,
         sample_limit=sample_limit, relaxed=relaxed, history=history,
@@ -59,6 +86,7 @@ def run_one_match(
 
     system_prompt = EXPERT_SYSTEM_PROMPT if mode == "expert" else LOCKED_SYSTEM_PROMPT
 
+    # 2. 输出中间步骤（仅在非安静模式下）。
     if verbose:
         from pipeline_output import (
             print_step_baseline,
@@ -90,6 +118,7 @@ def run_one_match(
             file=sys.stderr,
         )
 
+    # 3. 调用大模型生成 AI 分析。
     chat_kwargs: dict = {}
     if base_url:
         chat_kwargs["base_url"] = base_url
@@ -107,6 +136,7 @@ def run_one_match(
         **chat_kwargs,
     )
 
+    # 4. 解析模型输出并融合为最终预测。
     if mode == "expert":
         analysis = parse_expert_json(content)
         result = merge_expert_prediction(
@@ -125,6 +155,7 @@ def run_one_match(
     result["ai_model"] = model
     result["recommendation_source"] = f"ai_expert_{provider_id}"
 
+    # 5. 附加竞彩玩法信息并打印最终结果。
     jc = (poll_meta or {}).get("jingcai")
     attach_jingcai_recommendation(result, jc)
 
@@ -188,8 +219,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print("正在加载历史库并匹配样本...", file=sys.stderr if args.quiet else sys.stdout)
-    history = load_all_history()
-    all_results = []
+    try:
+        history = load_all_history()
+    except Exception as exc:
+        print(f"加载历史库失败: {exc}", file=sys.stderr)
+        return 1
+
+    all_results: list[dict] = []
     recs = []
 
     for i, (ah_xls, eu_xls) in enumerate(pairs):
@@ -211,7 +247,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"AI API 错误 ({ah_xls}): {exc}", file=sys.stderr)
             return 1
         except (json.JSONDecodeError, ValueError) as exc:
-            print(f"JSON 解析/校验失败: {exc}", file=sys.stderr)
+            print(f"JSON 解析/校验失败 ({ah_xls}): {exc}", file=sys.stderr)
+            return 1
+        except FileNotFoundError as exc:
+            print(f"文件未找到 ({ah_xls} / {eu_xls}): {exc}", file=sys.stderr)
             return 1
 
         all_results.append(artifact)
@@ -223,9 +262,13 @@ def main(argv: list[str] | None = None) -> int:
             print_ai_recommendation(result)
 
     if args.save:
-        with open(args.save, "w", encoding="utf-8") as f:
-            out = all_results[0] if len(all_results) == 1 else all_results
-            json.dump(out, f, ensure_ascii=False, indent=2, default=str)
+        try:
+            with open(args.save, "w", encoding="utf-8") as f:
+                out = all_results[0] if len(all_results) == 1 else all_results
+                json.dump(out, f, ensure_ascii=False, indent=2, default=str)
+        except OSError as exc:
+            print(f"保存结果失败: {exc}", file=sys.stderr)
+            return 1
 
     if args.json:
         out = all_results[0]["prediction"] if len(all_results) == 1 else [r["prediction"] for r in all_results]

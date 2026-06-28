@@ -1,4 +1,19 @@
-"""Second-pass deep AI analysis built on prior first-pass AI results."""
+"""Second-pass deep AI analysis built on prior first-pass AI results.
+
+核心职责：
+    - 基于首轮 AI 分析（`analysis/ai/predict.py` 输出）做二次深度研判。
+    - 聚合历史预测、赔率变化、规则引擎基线，生成更完整的结构化报告。
+    - 对同一场比赛做并发互斥，防止用户重复点击导致多次 API 调用。
+
+对外入口：
+    - `run_deep_match_analysis(...)`: 执行完整深度分析并写入时间线。
+    - `build_deep_analysis_bundle(...)`: 仅构造输入 bundle，可用于调试 prompt。
+    - `has_prior_ai_analysis(...)`: 判断是否存在可用于深研的首轮 AI 结果。
+
+注意：
+    - 本模块不直接做首轮 AI 推理；如果缺少首轮结果会明确报错。
+    - 锁表 `_deep_locks` 会限制最大条目数，避免长期运行后内存无限增长。
+"""
 
 from __future__ import annotations
 
@@ -15,19 +30,33 @@ from ai_prompt import (
     build_deep_analysis_user_prompt,
     parse_deep_analysis_json,
 )
-from deepseek_client import chat
+from deepseek_client import DeepSeekError, chat
 from jingcai_pick import final_recommendation_cn
 from match_timeline import append_deep_analysis, load_match_index
 from time_utils import now_beijing_str
 
 log = logging.getLogger(__name__)
 
+# 比赛级互斥锁：防止同一 fixture 被同时触发多次深度分析。
+# 考虑到 Web 服务长期运行，锁表会限制容量并在超限时做清理。
 _deep_locks: dict[str, threading.Lock] = {}
 _deep_locks_guard = threading.Lock()
+_MAX_DEEP_LOCKS = 256
 
 
 def _lock_for_deep(fixture_id: str) -> threading.Lock:
+    """获取/创建指定比赛的深度分析锁，并做简单的 LRU 式清理。"""
     with _deep_locks_guard:
+        # 简单 LRU 清理：当锁表过大时，移除当前未被持有的旧锁。
+        if len(_deep_locks) >= _MAX_DEEP_LOCKS and fixture_id not in _deep_locks:
+            still_locked: list[str] = []
+            for fid, lock in _deep_locks.items():
+                if lock.locked():
+                    still_locked.append(fid)
+            _deep_locks.clear()
+            for fid in still_locked[:_MAX_DEEP_LOCKS // 2]:
+                _deep_locks[fid] = threading.Lock()
+
         if fixture_id not in _deep_locks:
             _deep_locks[fixture_id] = threading.Lock()
         return _deep_locks[fixture_id]
@@ -266,38 +295,80 @@ def run_deep_match_analysis(
     prediction: dict | None = None,
     index: dict | None = None,
     ai_records: list[dict] | None = None,
+    temperature: float = 0.35,
+    max_tokens: int = 4096,
 ) -> dict[str, Any]:
-    """Run second-pass deep analysis using prior AI output."""
+    """执行基于首轮 AI 输出的二次深度分析。
+
+    流程：
+        1. 获取比赛级互斥锁，避免并发重复执行。
+        2. 构造分析输入 bundle（历史预测 + 赔率变化 + 规则基线）。
+        3. 调用 LLM 生成深度研判报告。
+        4. 解析结构化 JSON 并写入比赛时间线。
+
+    Args:
+        output_root: 输出目录根路径。
+        fixture_id: 比赛唯一标识。
+        prediction: 可选的预测字典；不传时会从 `latest.json` / `runs/` 自动查找。
+        index: 可选的比赛时间线索引。
+        ai_records: 可选的 AI 分析记录列表。
+        temperature: LLM 温度，默认 0.35（兼顾稳定与创造性）。
+        max_tokens: 最大输出 token 数。
+
+    Returns:
+        包含 `analysis`、`run_id`、`ai_model` 等字段的记录字典。
+
+    Raises:
+        RuntimeError: 缺少首轮 AI 数据、API 密钥未配置或正在并发执行。
+        DeepSeekError: 大模型 API 调用失败。
+        ValueError: 返回内容无法解析为有效 JSON。
+    """
     fid = str(fixture_id)
     lock = _lock_for_deep(fid)
-    if not lock.acquire(blocking=False):
+    acquired = lock.acquire(blocking=False)
+    if not acquired:
         raise RuntimeError(f"比赛 {fid} 的 AI 分析正在进行中，请稍候")
 
     root = Path(output_root)
     run_id = now_beijing_str("%Y-%m-%d_%H%M") + f"_deep_{fid}"
     try:
+        # 1. 构造分析输入：优先用传入数据，否则从磁盘恢复最丰富的预测。
         bundle = build_deep_analysis_bundle(
             root, fid, prediction=prediction, index=index,
             ai_records=ai_records,
         )
+
+        # 2. 解析模型配置并校验 API 密钥。
         profile = _deepseek_profile(ai_model)
         api_key = profile.resolve_api_key()
         if not api_key:
             raise RuntimeError("未配置 DEEPSEEK_API_KEY，无法进行深度分析")
 
-        chat_kwargs: dict[str, Any] = {"base_url": ai_base_url or profile.base_url, "api_key": api_key}
-        log.info("深度 AI 分析 fid=%s (%s)", fid, bundle.get("match"))
+        chat_kwargs: dict[str, Any] = {
+            "base_url": ai_base_url or profile.base_url,
+            "api_key": api_key,
+        }
+
+        # 3. 调用大模型生成深度研判。
+        log.info("深度 AI 分析开始 fid=%s model=%s match=%s", fid, profile.model, bundle.get("match"))
         content = chat(
             [
                 {"role": "system", "content": DEEP_ANALYSIS_SYSTEM_PROMPT},
                 {"role": "user", "content": build_deep_analysis_user_prompt(bundle)},
             ],
             model=profile.model,
-            temperature=0.35,
-            max_tokens=4096,
+            temperature=temperature,
+            max_tokens=max_tokens,
             **chat_kwargs,
         )
-        analysis = parse_deep_analysis_json(content)
+
+        # 4. 解析并持久化结果。
+        try:
+            analysis = parse_deep_analysis_json(content)
+        except (json.JSONDecodeError, ValueError) as exc:
+            log.warning("深度分析 JSON 解析失败 fid=%s: %s", fid, exc)
+            raise ValueError(f"深度分析结果解析失败：{exc}") from exc
+
         record = {
             "ts": now_beijing_str(),
             "run_id": run_id,
@@ -313,5 +384,11 @@ def run_deep_match_analysis(
             bundle.get("match"), analysis.get("headline"),
         )
         return record
+    except DeepSeekError:
+        # 向上抛出原始异常，保留调用栈与状态码信息。
+        log.exception("深度 AI API 调用失败 fid=%s", fid)
+        raise
     finally:
-        lock.release()
+        # 只有成功获取锁才释放，避免 release 未 acquired 的锁报错。
+        if acquired:
+            lock.release()

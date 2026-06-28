@@ -40,7 +40,7 @@ from share_card import (
     html_share_parlay,
     html_share_posters_batch,
 )
-from web_ui import html_agent_pipeline_settings, html_agent_workbench, html_ah_analytics, html_ai_settings, html_daily_picks, html_dashboard, html_eu_ah_divergence, html_group_final_copy, html_group_knockout_outlook, html_group_stage, html_kelly_calculator, html_match_detail, html_quant_analytics, html_recommendation_review, html_worldcup_ledger
+from web_ui import html_agent_pipeline_settings, html_agent_workbench, html_ah_analytics, html_ai_settings, html_daily_picks, html_dashboard, html_eu_ah_divergence, html_group_final_copy, html_group_knockout_outlook, html_kelly_calculator, html_match_detail, html_quant_analytics, html_recommendation_review, html_worldcup_ledger
 
 
 def _error_html(body: str) -> str:
@@ -956,16 +956,41 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
         if path == "/worldcup/groups":
-            from group_stage_model import build_group_stage_report
-            qs = parse_qs(urlparse(self.path).query)
-            force = qs.get("refresh", ["0"])[0] in ("1", "true", "yes")
-            self._send_html(html_group_stage(build_group_stage_report(force_refresh=force)))
+            # 小组赛已结束，重定向到淘汰赛分析页面
+            self.send_response(302)
+            self.send_header("Location", "/worldcup/knockout")
+            self.end_headers()
             return
         if path == "/api/worldcup/groups":
-            from group_stage_model import build_group_stage_report
+            # 小组赛已结束，返回提示信息
+            self._send_json({
+                "ok": False,
+                "error": "小组赛已结束，请使用淘汰赛分析接口",
+                "redirect": "/api/worldcup/knockout",
+            })
+            return
+        if path == "/worldcup/knockout":
+            # 淘汰赛分析页面（暂时重定向到开盘套路，后续可扩展）
+            self.send_response(302)
+            self.send_header("Location", "/worldcup")
+            self.end_headers()
+            return
+        if path == "/api/worldcup/knockout":
+            # 淘汰赛分析 API
+            from analysis.tournament.knockout import build_match_knockout_context
             qs = parse_qs(urlparse(self.path).query)
-            force = qs.get("refresh", ["0"])[0] in ("1", "true", "yes")
-            self._send_json(build_group_stage_report(force_refresh=force))
+            match_name = qs.get("match", [""])[0]
+            if not match_name:
+                self._send_json({
+                    "ok": False,
+                    "error": "缺少 match 参数",
+                })
+                return
+            ctx = build_match_knockout_context(match_name)
+            self._send_json({
+                "ok": ctx is not None,
+                "data": ctx,
+            })
             return
         if path == "/worldcup/groups/outlook":
             from analysis.tournament.group_knockout_outlook import build_group_knockout_outlook_report

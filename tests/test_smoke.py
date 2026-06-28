@@ -349,27 +349,6 @@ def test_user_final_picks_lock_immutable(tmp_path):
     assert get_locked_pick(tmp_path, "fx1")["pick"] == "home"
 
 
-def test_group_stage_does_not_flip_clear_open_home():
-    from analysis.rules.engine import _open_hist_favors, _resolve_group_stage_pick
-    from analysis.tournament.group_stage import adjust_rates_for_group_stage
-
-    hist_rates = {"home": 0.505, "draw": 0.291, "away": 0.204}
-    assert _open_hist_favors(hist_rates, "home") is True
-
-    combined = {"home": 0.159, "draw": 0.092, "away": 0.064}
-    gs = {
-        "match_type": "collusion_watch",
-        "match_type_cn": "默契球观察",
-        "draw_bias": 0.14,
-        "home_bias": -0.04,
-        "away_bias": -0.04,
-        "likely_direction_cn": "平局或小比分",
-    }
-    adjusted, _ = adjust_rates_for_group_stage(combined, gs)
-    new_key, notes = _resolve_group_stage_pick("home", adjusted, hist_rates, "home", gs)
-    assert new_key == "home"
-
-
 def test_odds_reference_blend():
     from analysis.signals.odds_probs import blend_reference_1x2, check_jingcai_reference_divergence
 

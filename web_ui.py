@@ -1625,7 +1625,7 @@ def html_dashboard(
 <h1 class="text-gradient">⚽ 盘口分析</h1>
 <nav class="page-nav meta" style="margin-bottom:14px">
   <a href="/daily">📋 当日 2串1</a> · <a href="/worldcup">🏆 开盘套路</a>
-  · <a href="/worldcup/groups">⚔️ 小组战意</a>
+  · <a href="/worldcup/knockout">⚔️ 淘汰赛分析</a>
   · <a href="/handicap">📊 亚盘赢盘</a>
   · <a href="/divergence">⚡ 欧亚分歧</a>
   · <a href="/quant">📈 量化回测</a>
@@ -3097,8 +3097,8 @@ function switchAiWorkbenchTab(fid, idx) {{
 </section>
 <div id="agent-workbench-export-root" data-export-base="{_e(export_fname)}" data-export-bg="#0a0c18">
 <section class="card agent-douyin-wrap">
-  <h3>📱 抖音总结 · 战意 + 胜负</h3>
-  <p class="meta">战意卡片仅含小组出线、积分、胜负关系；点「保存抖音总结图」下载 PNG（无水位/盘口/竞彩）。</p>
+  <h3>📱 抖音总结 · 淘汰赛战意 + 胜负</h3>
+  <p class="meta">战意卡片含淘汰赛对阵路径、加时点球概率、保守/激进策略；点「保存抖音总结图」下载 PNG（无水位/盘口/竞彩）。</p>
   {social_panel}
 </section>
 </div>
@@ -3186,7 +3186,7 @@ def _worldcup_teaser(output_root: Path) -> str:
     return f"""
 <div class="card" style="border-left:4px solid #2563eb">
   <p style="margin:0"><a href="/worldcup"><strong>🏆 开盘套路</strong></a>
-  · <a href="/worldcup/groups"><strong>⚔️ 小组战意</strong></a>
+  · <a href="/worldcup/knockout"><strong>⚔️ 淘汰赛分析</strong></a>
   · <a href="/review"><strong>📋 推荐复盘</strong></a>
   · <a href="/handicap"><strong>📊 亚盘赢盘</strong></a>
   · <a href="/quant"><strong>📈 量化回测</strong></a>
@@ -3727,7 +3727,7 @@ function analyzeWorldcupMatch(fid, btn) {{
   <div class="export-hero">
     <h1 class="text-gradient">🏆 本届世界杯 · 开盘套路</h1>
     <p class="meta">结论由完场赛果 + 初/终盘自动归纳 · 更新 {_e(updated)}</p>
-    <p><a class="btn" href="/worldcup/groups">⚔️ 小组战意 · 默契球/拼命球</a></p>
+    <p><a class="btn" href="/worldcup/knockout">⚔️ 淘汰赛分析 · 对阵路径/加时点球</a></p>
   </div>
 
 {upcoming_html}
@@ -4286,7 +4286,7 @@ def html_group_knockout_outlook(report: dict) -> str:
         return f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>出线签位 outlook</title></head><body>
-<p class="back page-nav"><a href="/">← 返回</a> · <a href="/worldcup/groups">小组战意</a></p>
+<p class="back page-nav"><a href="/">← 返回</a> · <a href="/worldcup/knockout">淘汰赛分析</a></p>
 <p>加载失败：{_e(err)}</p></body></html>"""
 
     updated = report.get("updated_at") or now_beijing_str()
@@ -4371,7 +4371,7 @@ def html_group_knockout_outlook(report: dict) -> str:
 <style>{css}</style>
 {outlook_export}
 </head><body>
-<p class="back page-nav"><a href="/">← 返回首页</a> · <a href="/worldcup/groups">⚔️ 小组战意</a> · <a href="/worldcup">开盘套路</a></p>
+<p class="back page-nav"><a href="/">← 返回首页</a> · <a href="/worldcup/knockout">⚔️ 淘汰赛分析</a> · <a href="/worldcup">开盘套路</a></p>
 
 <div id="outlook-export-root" data-export-base="wc-outlook" data-export-bg="#0a0c18">
 <div class="card hero-outlook">
@@ -4599,7 +4599,7 @@ def html_group_final_copy(report: dict) -> str:
         err = report.get("error") or "无法生成文案"
         return f"""<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"/>
 <title>末轮出线文案</title></head><body>
-<p><a href="/worldcup/groups">← 返回小组战意</a></p>
+<p><a href="/worldcup/knockout">← 返回淘汰赛分析</a></p>
 <p>加载失败：{_e(err)}</p></body></html>"""
 
     rs = report.get("round_summary") or {}
@@ -4879,7 +4879,7 @@ function finalizeUserPicks(btn) {
 <script>{js}</script>
 </head><body>
 <p class="back page-nav">
-  <a href="/">← 返回首页</a> · <a href="/worldcup/groups">⚔️ 小组战意</a> · <a href="/worldcup">🏆 开盘套路</a>
+  <a href="/">← 返回首页</a> · <a href="/worldcup/knockout">⚔️ 淘汰赛分析</a> · <a href="/worldcup">🏆 开盘套路</a>
 </p>
 
 <div id="gfc-export-root" data-export-base="wc-final-copy" data-export-bg="#0a0c18">
@@ -6531,20 +6531,13 @@ renderProviders();
 
 
 def _build_match_strategy_panel(match_name: str, prediction: dict | None = None) -> str:
-    from knockout_path import build_match_knockout_context
+    from analysis.tournament.knockout import build_match_knockout_context
 
     ctx = build_match_knockout_context(match_name)
-    if not ctx or not ctx.get("same_group"):
+    if not ctx or not ctx.get("knockout_round"):
         return ""
 
-    group = ctx.get("group")
-    standings = ctx.get("standings") or []
-    st_rows = ""
-    for r in standings:
-        st_rows += (
-            f"<tr><td>{r.get('rank')}</td><td><strong>{_e(r.get('team'))}</strong></td>"
-            f"<td>{r.get('points')}</td><td>{r.get('gd'):+d}</td><td>{r.get('played')}</td></tr>"
-        )
+    round_cn = ctx.get("knockout_round_cn") or ctx.get("knockout_round")
 
     home = (ctx.get("home_knockout") or {}).get("team") or ""
     away = (ctx.get("away_knockout") or {}).get("team") or ""
@@ -6561,14 +6554,11 @@ def _build_match_strategy_panel(match_name: str, prediction: dict | None = None)
     for s in ctx.get("scenarios") or []:
         sc_rows += (
             f"<tr><td>{_e(s.get('label'))}</td>"
-            f"<td>{_e(s.get('score_effect'))}</td>"
             f"<td class='meta'>{_e(s.get('note'))}</td></tr>"
         )
 
     hint = ctx.get("prediction_hint") or {}
-    mot = ctx.get("motivation") or {}
-    mt = hint.get("match_type_cn") or mot.get("match_type_cn") or "—"
-    tag_cls = _motivation_tag(mot.get("match_type") or "normal")
+    picking_cn = ctx.get("picking_level_cn") or "低"
 
     pred_1x2 = {"home": "主胜", "away": "客胜", "draw": "平局", "none": "观望"}.get(
         hint.get("model_1x2_hint") or "none", "—",
@@ -6579,86 +6569,60 @@ def _build_match_strategy_panel(match_name: str, prediction: dict | None = None)
 
     bracket_notes = "".join(f"<li>{_e(x)}</li>" for x in (ctx.get("bracket_notes") or [])[:2])
 
-    from knockout_path import build_group_bracket_overview
-
-    go = build_group_bracket_overview(group)
-    g1, g2 = go.get("first") or {}, go.get("second") or {}
-    group_strip = f"""
-<div class="group-bracket-strip">
-  <span class="meta">{_e(group)}组固定签位：</span>
-  <span class="bracket-chip r32">头名 → {_e(g1.get('r32_summary') or '—')}</span>
-  <span class="bracket-chip r32">第二 → {_e(g2.get('r32_summary') or '—')}</span>
-  <span class="meta">（同组两队末轮可能为争/让名次而控分）</span>
-</div>"""
-
     home_pref = (ctx.get("home_knockout") or {}).get("preferred_path_cn") or "—"
     away_pref = (ctx.get("away_knockout") or {}).get("preferred_path_cn") or "—"
+    home_tier = (ctx.get("home_knockout") or {}).get("tier") or "—"
+    away_tier = (ctx.get("away_knockout") or {}).get("tier") or "—"
     pick_compare = ""
     if home_pref != away_pref and ctx.get("picking_level") in ("watch", "medium", "high"):
         pick_compare = (
-            f"<p class='meta picking-warn'>⚠ 同组路径分化：{_e(home)} 更优为<strong>{_e(home_pref)}</strong>，"
-            f"{_e(away)} 更优为<strong>{_e(away_pref)}</strong>——平局或小胜可能同时满足双方「挑对手」动机。</p>"
+            f"<p class='meta picking-warn'>⚠ 路径分化：{_e(home)} 更优为<strong>{_e(home_pref)}</strong>，"
+            f"{_e(away)} 更优为<strong>{_e(away_pref)}</strong>——保守策略可能影响比赛节奏。</p>"
         )
 
-    rs = ctx.get("round_summary") or {}
-    stage = rs.get("stage_label") or ""
-    gr = ctx.get("group_race") or {}
-    chaos = gr.get("chaos") or {}
-    chaos_banner = ""
-    if chaos.get("summary"):
-        cls = "chaos-high" if chaos.get("chaos_level") == "high" else "chaos-med"
-        chaos_banner = (
-            f"<div class='group-chaos-banner {cls}'>"
-            f"<strong>{_e(chaos.get('chaos_level_cn') or '小组形势')}</strong> "
-            f"{_e(chaos.get('summary'))}</div>"
-        )
+    picking_notes = ctx.get("picking_notes") or []
+    picking_p = "".join(f"<p class='meta picking-warn'>{_e(x)}</p>" for x in picking_notes[:2])
 
     return f"""
 <div class="card strategy-card">
   <div class="strategy-head">
-    <h3>⚔️ 小组形势 · 淘汰赛路径</h3>
-    <span class="chip chip-grp">{_e(group)} 组</span>
-    <span class="meta">{_e(stage)}</span>
-    <a class="btn btn-sm" href="/worldcup/groups">全组看板 →</a>
+    <h3>⚔️ 淘汰赛分析 · {round_cn}</h3>
+    <span class="chip chip-grp">挑对手 {picking_cn}</span>
   </div>
-{chaos_banner}
 
   <div class="strategy-grid">
     <div class="strategy-col">
-      <h4>{_e(group)} 组积分榜</h4>
+      <h4>对阵信息</h4>
       <table class="mini">
-        <tr><th>#</th><th>球队</th><th>分</th><th>净</th><th>赛</th></tr>
-        {st_rows}
+        <tr><th>球队</th><th>实力档位</th><th>最优路径</th></tr>
+        <tr><td><strong>{_e(home)}</strong></td><td>{_e(home_tier)}</td><td>{_e(home_pref)}</td></tr>
+        <tr><td><strong>{_e(away)}</strong></td><td>{_e(away_tier)}</td><td>{_e(away_pref)}</td></tr>
       </table>
     </div>
     <div class="strategy-col prediction-col">
       <h4>战意预测</h4>
-      <p><span class="tag {tag_cls}">{_e(mt)}</span>
-         <span class="tag">挑对手 {_e(ctx.get('picking_level_cn'))}</span></p>
-      <p><strong>倾向</strong> {_e(hint.get('likely_direction_cn'))}
-         · <strong>模型方向</strong> {_e(pred_1x2)}
-         · <strong>亚盘</strong> {_e(hint.get('ah_hint') or '—')}</p>
+      <p><span class="tag">挑对手 {picking_cn}</span>
+         <span class="tag">模型方向 {pred_1x2}</span></p>
       {note_p}
       {pick_compare}
+      {picking_p}
       <p class="meta picking-warn">{_e(hint.get('picking_note') or '')}</p>
     </div>
   </div>
-
-  {group_strip}
 
   <div class="path-grid">
     {home_path}
     {away_path}
   </div>
 
-  <h4>本场赛果推演（积分）</h4>
+  <h4>淘汰赛情景推演</h4>
   <table class="mini">
-    <tr><th>赛果</th><th>赛后积分</th><th>战意解读</th></tr>
+    <tr><th>情景</th><th>分析</th></tr>
     {sc_rows}
   </table>
 
   <details class="bracket-notes">
-    <summary>32强签位说明（FIFA 固定路径 + 第三待定）</summary>
+    <summary>淘汰赛签位说明</summary>
     <ul class="meta">{bracket_notes}</ul>
   </details>
 </div>"""

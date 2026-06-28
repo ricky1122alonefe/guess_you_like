@@ -313,8 +313,80 @@ def _scenario_note(home: str, away: str, hp: int, ap: int, played: int) -> str:
 
 
 def build_match_knockout_context(match_name: str) -> dict[str, Any] | None:
-    """Full knockout + group context for match detail page."""
-    from analysis.tournament.group_stage import analyze_match_from_name, fetch_live_snapshot
+    """Knockout stage context for match analysis (no group-stage dependencies)."""
+    from share_card import split_teams
+    from wc_standings_fetch import normalize_team
+
+    home_raw, away_raw = split_teams(match_name or "")
+    if not home_raw:
+        return None
+
+    home = normalize_team(home_raw)
+    away = normalize_team(away_raw)
+
+    bracket = _load_bracket()
+    
+    # 识别淘汰赛轮次
+    knockout_round = _detect_knockout_round(match_name, bracket)
+    if not knockout_round:
+        return None
+
+    # 获取两队的淘汰赛路径信息
+    home_path = _team_knockout_path(home, bracket)
+    away_path = _team_knockout_path(away, bracket)
+
+    # 分析对阵双方的路径差异和挑对手动机
+    picking_level = "low"
+    picking_notes: list[str] = []
+    
+    if home_path and away_path:
+        home_diff = home_path.get("difficulty_score", 3.0)
+        away_diff = away_path.get("difficulty_score", 3.0)
+        diff_gap = abs(home_diff - away_diff)
+        
+        if diff_gap >= 1.5:
+            picking_level = "high"
+            easier_team = home if home_diff < away_diff else away
+            picking_notes.append(f"{easier_team}的淘汰赛路径明显更容易，存在控分/挑对手动机")
+        elif diff_gap >= 0.8:
+            picking_level = "medium"
+            picking_notes.append("双方路径难度有差异，需关注战术选择")
+
+    # 生成预测提示
+    prediction_hint = _knockout_prediction_hint(
+        home_path, away_path, picking_level, knockout_round
+    )
+
+    # 构建情景分析（淘汰赛版本）
+    scenarios = _knockout_scenarios(home, away, knockout_round)
+
+    return {
+        "knockout_round": knockout_round,
+        "knockout_round_cn": {
+            "r32": "32强", "r16": "16强", "qf": "8强", 
+            "sf": "4强", "final": "决赛", "third": "季军赛"
+        }.get(knockout_round, knockout_round),
+        "home_knockout": home_path,
+        "away_knockout": away_path,
+        "picking_level": picking_level,
+        "picking_level_cn": {
+            "low": "低", "watch": "观察", "medium": "中等", "high": "较高"
+        }.get(picking_level, "低"),
+        "picking_notes": picking_notes,
+        "prediction_hint": prediction_hint,
+        "scenarios": scenarios,
+        "bracket_notes": bracket.get("notes") or [],
+    }
+
+
+def _detect_knockout_round(match_name: str, bracket: dict) -> str | None:
+    """Detect which knockout round this match belongs to.
+    
+    match_name is like "巴西 VS 阿根廷" (team names).
+    bracket uses slot labels like "2A", "1C", "W73" etc.
+    We match by finding teams' group slots in R32, or by
+    checking if both teams exist in the tournament config.
+    """
     from share_card import split_teams
     from wc_standings_fetch import normalize_team
 
@@ -326,91 +398,160 @@ def build_match_knockout_context(match_name: str) -> dict[str, Any] | None:
     away = normalize_team(away_raw)
 
     cfg = _load_groups_config()
-    team_to_group = {}
+    team_to_group: dict[str, str] = {}
     for g, teams in (cfg.get("groups") or {}).items():
         for t in teams:
             team_to_group[t] = g
 
-    group = team_to_group.get(home) or team_to_group.get(away)
-    if not group:
+    home_group = team_to_group.get(home)
+    away_group = team_to_group.get(away)
+
+    # 如果两队都不在小组赛配置中，不是世界杯比赛
+    if not home_group and not away_group:
         return None
 
-    snap = fetch_live_snapshot()
-    standings = (snap.get("standings") or {}).get(group) or []
-    table = {r["team"]: r for r in standings}
+    # 尝试通过小组签位匹配 R32
+    for m in bracket.get("r32") or []:
+        h_slot = m.get("home") or ""
+        a_slot = m.get("away") or ""
+        # 检查主队签位是否匹配
+        home_match = False
+        away_match = False
+        if home_group:
+            for rank in (1, 2, 3):
+                sl = slot_label(home_group, rank)
+                if sl == h_slot or (rank == 3 and home_group in (m.get("third_pool") or []) and "3rd" in h_slot):
+                    home_match = True
+                if sl == a_slot or (rank == 3 and home_group in (m.get("third_pool") or []) and "3rd" in a_slot):
+                    home_match = True
+        if away_group:
+            for rank in (1, 2, 3):
+                sl = slot_label(away_group, rank)
+                if sl == h_slot or (rank == 3 and away_group in (m.get("third_pool") or []) and "3rd" in h_slot):
+                    away_match = True
+                if sl == a_slot or (rank == 3 and away_group in (m.get("third_pool") or []) and "3rd" in a_slot):
+                    away_match = True
+        if home_match and away_match:
+            return "r32"
 
-    motivation = analyze_match_from_name(match_name)
-    bracket = _load_bracket()
-    all_standings = snap.get("standings") or {}
-    all_fixtures = snap.get("fixtures") or []
-    round_num = int((motivation or {}).get("round") or 2)
+    # 两队都在锦标赛中但不在 R32 直接匹配 → 可能是 R16 及以后的轮次
+    # 尝试通过 fixture 数据或 match_name 中的轮次关键词推断
+    name_lower = (match_name or "").lower()
+    if any(kw in name_lower for kw in ("决赛", "final")):
+        return "final"
+    if any(kw in name_lower for kw in ("季军", "third")):
+        return "third"
+    if any(kw in name_lower for kw in ("半决赛", "semi")):
+        return "sf"
+    if any(kw in name_lower for kw in ("1/4", "四分之一", "quarter")):
+        return "qf"
+    if any(kw in name_lower for kw in ("1/8", "八分之一", "round of 16")):
+        return "r16"
 
-    from analysis.tournament.group_race import (
-        analyze_team_race,
-        build_group_race_context,
-        enrich_knockout_paths,
-        likely_r32_opponents_for_team,
-    )
+    # 两队都是参赛队伍但无法精确匹配轮次 → 默认 R16（最常见的淘汰赛分析场景）
+    if home_group and away_group:
+        return "r16"
 
-    grp_fx = [f for f in all_fixtures if f.get("group") == group]
-    group_race = build_group_race_context(
-        group, all_standings, round_num=round_num, fixtures=grp_fx or None,
-    )
-    from analysis.tournament.group_stage import rank_best_third_places as _rank_thirds
-    bt = _rank_thirds(all_standings, fixtures=all_fixtures)
-    home_race = analyze_team_race(home, standings, best_thirds=bt, fixtures=grp_fx or None)
-    away_race = analyze_team_race(away, standings, best_thirds=bt, fixtures=grp_fx or None)
+    return None
 
-    home_pick = analyze_opponent_picking(
-        home, group, standings_row=table.get(home), remaining_rounds=3 - (table.get(home) or {}).get("played", 0),
-    )
-    away_pick = analyze_opponent_picking(
-        away, group, standings_row=table.get(away), remaining_rounds=3 - (table.get(away) or {}).get("played", 0),
-    )
-    if home_race.get("locked_first"):
-        prev = likely_r32_opponents_for_team(home, group, assumed_rank=1, all_standings=all_standings)
-        home_pick["notes"] = [home_race.get("note", ""), prev.get("summary", "")] + (home_pick.get("notes") or [])
-        home_pick["likely_r32"] = prev
-    home_pick["race"] = home_race
-    if away_race.get("locked_first"):
-        prev = likely_r32_opponents_for_team(away, group, assumed_rank=1, all_standings=all_standings)
-        away_pick["notes"] = [away_race.get("note", ""), prev.get("summary", "")] + (away_pick.get("notes") or [])
-        away_pick["likely_r32"] = prev
-    away_pick["race"] = away_race
-    enrich_knockout_paths(home_pick, group, all_standings)
-    enrich_knockout_paths(away_pick, group, all_standings)
 
-    scenarios = project_scenarios(
-        home, away, group,
-        home_pts=(table.get(home) or {}).get("points", 0),
-        away_pts=(table.get(away) or {}).get("points", 0),
-        home_played=(table.get(home) or {}).get("played", 0),
-        away_played=(table.get(away) or {}).get("played", 0),
-    )
-
-    combined_picking = "watch" if (
-        home_pick.get("picking_level") in ("medium", "high")
-        or away_pick.get("picking_level") in ("medium", "high")
-        or (motivation or {}).get("match_type") in ("collusion_watch", "draw_friendly")
-    ) else home_pick.get("picking_level", "low")
-
-    prediction_hint = _combined_prediction_hint(motivation, home_pick, away_pick, combined_picking)
-
+def _team_knockout_path(team: str, bracket: dict) -> dict[str, Any] | None:
+    """Get knockout path info for a team (simplified for knockout phase)."""
+    cfg = _load_groups_config()
+    tiers = cfg.get("team_strength_tiers") or {}
+    tier = tiers.get(team, "mid")
+    
+    # 查找队伍所在小组
+    team_group = None
+    for g, teams in (cfg.get("groups") or {}).items():
+        if team in teams:
+            team_group = g
+            break
+    
+    if not team_group:
+        return None
+    
+    # 获取该小组各排名的路径
+    p1 = path_for_rank(team_group, 1, bracket=bracket)
+    p2 = path_for_rank(team_group, 2, bracket=bracket)
+    p3 = path_for_rank(team_group, 3, bracket=bracket)
+    
+    # 判断最可能路径
+    scores = {1: p1["difficulty_score"], 2: p2["difficulty_score"], 3: p3["difficulty_score"]}
+    easiest = min(scores, key=scores.get)
+    
+    notes = []
+    if scores[1] > scores[2] + 0.8:
+        notes.append("小组第二路径优于第一，可能存在控分动机")
+    elif scores[2] > scores[1] + 0.8:
+        notes.append("小组第一路径更优，确保头名是优先策略")
+    
     return {
-        "group": group,
-        "same_group": team_to_group.get(home) == team_to_group.get(away),
-        "standings": standings,
-        "round_summary": snap.get("round_summary"),
-        "motivation": motivation,
-        "home_knockout": home_pick,
-        "away_knockout": away_pick,
-        "scenarios": scenarios,
-        "bracket_notes": bracket.get("notes") or [],
-        "picking_level": combined_picking,
-        "picking_level_cn": {"low": "低", "watch": "观察", "medium": "中等", "high": "较高"}.get(combined_picking, "低"),
-        "prediction_hint": prediction_hint,
-        "group_race": group_race,
+        "team": team,
+        "group": team_group,
+        "tier": tier,
+        "paths": {"first": p1, "second": p2, "third": p3},
+        "easiest_path_rank": easiest,
+        "preferred_path_cn": {1: "小组第一", 2: "小组第二", 3: "小组第三(若进最佳8)"}.get(easiest),
+        "difficulty_score": scores[easiest],
+        "notes": notes or ["路径差异不大，按正常节奏比赛"],
     }
+
+
+def _knockout_prediction_hint(
+    home_path: dict | None,
+    away_path: dict | None,
+    picking_level: str,
+    knockout_round: str,
+) -> dict[str, Any]:
+    """Generate prediction hints for knockout matches."""
+    notes = []
+    
+    if picking_level in ("medium", "high"):
+        notes.append("淘汰赛路径差异可能影响战术选择，关注保守/激进策略")
+    
+    if knockout_round in ("r16", "qf"):
+        notes.append("淘汰赛早期轮次，加时/点球概率较高")
+    elif knockout_round in ("sf", "final"):
+        notes.append("淘汰赛关键轮次，双方都会全力以赴")
+    
+    draw_bias = 0.0
+    if picking_level in ("medium", "high"):
+        draw_bias = 0.06 if picking_level == "medium" else 0.08
+    
+    return {
+        "model_1x2_hint": "draw" if draw_bias > 0.05 else "none",
+        "draw_bias": draw_bias,
+        "picking_note": "存在挑对手/控分可能，优先防平局与小比分" if picking_level in ("medium", "high") else "",
+        "notes": notes[:3],
+    }
+
+
+def _knockout_scenarios(home: str, away: str, knockout_round: str) -> list[dict[str, Any]]:
+    """Generate knockout-specific scenarios."""
+    scenarios = []
+    
+    round_cn = {
+        "r32": "32强", "r16": "16强", "qf": "8强", 
+        "sf": "4强", "final": "决赛"
+    }.get(knockout_round, knockout_round)
+    
+    scenarios.append({
+        "label": "常规时间",
+        "note": f"淘汰赛{round_cn}，90分钟内解决战斗是首选",
+    })
+    
+    scenarios.append({
+        "label": "加时赛",
+        "note": "淘汰赛加时概率约30-35%，需关注体能和替补深度",
+    })
+    
+    scenarios.append({
+        "label": "点球大战",
+        "note": "若进入点球，心理素质和门将表现成为关键",
+    })
+    
+    return scenarios
 
 
 def _combined_prediction_hint(

@@ -12,7 +12,12 @@
       "api_key_env": "DEEPSEEK_API_KEY",
       "client": "openai",
       "roles": ["predict", "chat", "parlay", "daily", "watch"],
-      "order": 10
+      "order": 10,
+      "temperature": 0.2,
+      "max_tokens": 4096,
+      "timeout": 180,
+      "json_mode": true,
+      "system_prompt_extra": ""
     },
     {
       "id": "doubao",
@@ -24,7 +29,12 @@
       "alt_api_key_envs": ["DOUBAO_API_KEY"],
       "client": "openai",
       "roles": ["predict", "watch"],
-      "order": 20
+      "order": 20,
+      "temperature": 0.2,
+      "max_tokens": 4096,
+      "timeout": 180,
+      "json_mode": true,
+      "system_prompt_extra": ""
     },
     {
       "id": "cursor",
@@ -35,7 +45,12 @@
       "api_key_env": "CURSOR_API_KEY",
       "client": "cursor",
       "roles": ["predict", "chat", "parlay"],
-      "order": 30
+      "order": 30,
+      "temperature": 0.2,
+      "max_tokens": 4096,
+      "timeout": 180,
+      "json_mode": false,
+      "system_prompt_extra": ""
     },
     {
       "id": "kimi",
@@ -48,7 +63,12 @@
       "client": "openai",
       "roles": ["predict"],
       "requires_env": ["AI_ENABLE_KIMI"],
-      "order": 40
+      "order": 40,
+      "temperature": 0.2,
+      "max_tokens": 4096,
+      "timeout": 180,
+      "json_mode": true,
+      "system_prompt_extra": ""
     }
   ],
   "multi": {

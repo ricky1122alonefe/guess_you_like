@@ -182,6 +182,12 @@ def list_provider_entries(
             "configured": configured,
             "api_key_env": entry.get("api_key_env"),
             "order": entry.get("order", 999),
+            "temperature": entry.get("temperature"),
+            "max_tokens": entry.get("max_tokens"),
+            "timeout": entry.get("timeout"),
+            "top_p": entry.get("top_p"),
+            "json_mode": entry.get("json_mode"),
+            "system_prompt_extra": entry.get("system_prompt_extra"),
         })
     rows.sort(key=lambda r: (r.get("order", 999), str(r.get("id"))))
     return rows

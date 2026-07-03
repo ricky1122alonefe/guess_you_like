@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import html
+import logging
 import re
 from datetime import datetime, timedelta
 from typing import Any
+
+from pathlib import Path
 
 from daily_picks import load_kickoff_map
 from jingcai_pick import (
@@ -19,6 +22,8 @@ from jingcai_pick import (
 )
 from time_utils import format_beijing, to_beijing
 from ui_theme import poster_batch_page_css, poster_css, share_match_page_css
+
+log = logging.getLogger(__name__)
 
 _WEEKDAYS = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 _SCORE_SNIP_RE = re.compile(
@@ -177,28 +182,71 @@ def _sanitize_jingcai_text(text: str) -> str:
     return out[:280]
 
 
+_GAMBLING_TERM_PATTERNS: list[tuple[str, str]] = [
+    (r"博彩(?:公司|平台|行业|用语)?|赌博|赌球|赌钱|彩票(?:站)?|足彩|购彩|洗码|追号", ""),
+    (r"投注|下注|庄家|滚球|仓位|Kelly", ""),
+    (r"竞彩(?:足球|可购|推荐|SP|方向)?|公益体彩|体彩", ""),
+    (r"串关|可串|可单关|单关|[23]串1|2串1", ""),
+    (r"SP(?:\s*[\d.]+)?", ""),
+    (r"[\d.]+\s*倍(?:赔率)?", ""),
+    (r"胜平负", "走势"),
+    (r"赔率|欧赔|亚盘|盘口|水位|让球|大小球|上盘|下盘|降水|升水|诱盘|走盘|封盘|初盘|临盘", "走势"),
+    (r"购彩建议|不构成(?:任何)?投注建议", ""),
+    (r"公益体彩[^。]*", ""),
+]
+
+
+def _strip_gambling_terms(text: str) -> str:
+    """Remove or neutralize gambling/lottery jargon for social export."""
+    if not text:
+        return ""
+    out = str(text)
+    for pat, repl in _GAMBLING_TERM_PATTERNS:
+        out = re.sub(pat, repl, out, flags=re.IGNORECASE)
+    out = re.sub(r"[（(]\s*[）)]", "", out)
+    return out
+
+
 def _sanitize_export_text(text: str) -> str:
     """Strip betting/lottery terms for social-media PNG export."""
     if not text:
         return ""
-    out = str(text)
-    replacements = [
-        (r"竞彩(?:足球|可购|推荐|SP|方向)?", "AI"),
-        (r"SP(?:\s*[\d.]+)?", ""),
-        (r"[\d.]+\s*倍(?:赔率)?", ""),
-        (r"胜平负", "走势"),
-        (r"仓位|投注|可购|购彩|体彩|下注|串关|Kelly", ""),
-        (r"赔率|欧赔|亚盘|盘口|水位", "走势"),
-        (r"购彩建议", "分析参考"),
-        (r"推荐", "分析"),
-        (r"公益体彩[^。]*", ""),
-        (r"不构成投注建议", ""),
-    ]
-    for pat, repl in replacements:
+    out = _strip_gambling_terms(text)
+    out = re.sub(r"推荐", "分析", out)
+    out = re.sub(r"\s{2,}", " ", out)
+    return out.strip()
+
+
+def _sanitize_personal_note(text: str, *, max_len: int = 500) -> str:
+    """Personal note for PNG — tactical fan tone only."""
+    out = _strip_viewing_compliance_terms(str(text or ""))
+    out = re.sub(r"\s{2,}", " ", out).strip()
+    return out[:max_len]
+
+
+_VIEWING_COMPLIANCE_PATTERNS: list[tuple[str, str]] = [
+    (r"\d+(?:\.\d+)?\s*[%％]", ""),
+    (r"(?:胜率|赢率|概率|机会概率|走势倾向|一致程度)", ""),
+    (r"看好(?:主队|客队|主|客|巴西|日本)?|主机会|客队机会", ""),
+    (r"主胜|客胜|预测(?:平局|主胜|客胜|胜负)?", ""),
+    (r"综合倾向|胜负推荐|投注引导|购彩|买(?:主|客|平|球)", ""),
+    (r"分流资金|盘赔|阈值|\bEV\b|\bedge\b", ""),
+    (r"临盘|走势|方向|拿捏|稳(?:胆|单)?", ""),
+    (r"赢球|必赢|必胜|稳赢|必出", ""),
+    (r"购彩|体彩|下注|投注|串关|Kelly|赔率|盘口|水位|亚盘|欧赔|让球|竞彩|博彩|赌博|彩票|足彩|庄家", ""),
+]
+
+
+def _strip_viewing_compliance_terms(text: str) -> str:
+    """Douyin-safe viewing poster — drop win/loss bias and platform-sensitive words."""
+    if not text:
+        return ""
+    out = _strip_gambling_terms(text)
+    for pat, repl in _VIEWING_COMPLIANCE_PATTERNS:
         out = re.sub(pat, repl, out, flags=re.IGNORECASE)
     out = re.sub(r"[（(]\s*[）)]", "", out)
     out = re.sub(r"\s{2,}", " ", out)
-    return out.strip()
+    return out.strip(" ·，,。；;")
 
 
 def _pick_to_trend_cn(pick: str) -> str:
@@ -320,9 +368,11 @@ def _risk_to_safe_cn(risk: str) -> str:
 
 def _contains_market_terms(text: str) -> bool:
     bad = (
+        "博彩", "赌博", "赌球", "彩票", "足彩", "购彩",
+        "看好", "主胜", "客胜", "预测", "走势", "方向", "拿捏",
         "水位", "盘口", "亚盘", "欧赔", "让球", "竞彩", "上盘", "下盘", "大小球",
         "降水", "升水", "诱盘", "走盘", "封盘", "初盘", "临盘", "SP", "Kelly", "串关",
-        "购彩", "体彩", "下注", "投注", "赔率",
+        "购彩", "体彩", "下注", "投注", "赔率", "庄家", "滚球", "EV", "edge", "阈值",
     )
     blob = str(text or "")
     return any(x in blob for x in bad)
@@ -575,6 +625,1188 @@ def html_agent_workbench_social_panel(ctx: dict[str, Any], *, slug: str = "agent
         f'<div class="export-module export-module-poster agent-douyin-module" data-export-slug="{_e(slug)}">'
         f'<div class="export-poster-actions">{btn}{hint}</div>'
         f'<div class="export-poster export-poster-screen export-hide">{poster}</div>'
+        f'<div class="export-poster export-poster-safe">{poster}</div>'
+        f"</div>"
+    )
+
+
+VIEWING_NOTES_FONT = (
+    '<link rel="preconnect" href="https://fonts.googleapis.com"/>'
+    '<link href="https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&family=Noto+Sans+SC:wght@400;700;900&display=swap" rel="stylesheet"/>'
+)
+
+
+def viewing_notes_poster_css() -> str:
+    return """
+.vn-poster.vn-cute {
+  width: 430px; max-width: 100%; margin: 0 auto; padding: 22px 18px 24px;
+  background: linear-gradient(145deg, #fff5f8 0%, #f3f0ff 42%, #eef9ff 100%);
+  color: #5a4a6a;
+  font-family: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", sans-serif;
+  border: 3px solid #ffc8dd;
+  border-radius: 28px;
+  box-shadow: 0 10px 28px rgba(255, 143, 171, .22), 0 2px 0 #fff inset;
+  position: relative; overflow: hidden;
+}
+.vn-poster.vn-cute::before {
+  content: ""; position: absolute; inset: 10px; border: 2px dashed rgba(255, 182, 193, .45);
+  border-radius: 22px; pointer-events: none;
+}
+.vn-deco {
+  position: absolute; z-index: 2; font-size: 18px; line-height: 1; opacity: .85;
+  filter: drop-shadow(0 1px 2px rgba(255, 143, 171, .35));
+}
+.vn-deco-tl { top: 12px; left: 14px; }
+.vn-deco-tr { top: 12px; right: 14px; }
+.vn-deco-bl { bottom: 14px; left: 16px; font-size: 16px; }
+.vn-deco-br { bottom: 14px; right: 16px; font-size: 16px; }
+.vn-title {
+  position: relative; z-index: 1; text-align: center; margin: 0 0 12px;
+  font-size: 22px; line-height: 1.35; font-weight: 900; letter-spacing: .02em;
+  color: #ff6b9d;
+  text-shadow: 0 2px 0 #fff, 0 0 12px rgba(255, 143, 171, .35);
+}
+.vn-title small {
+  display: block; font-size: 13px; font-weight: 700; color: #9b8ab8; margin-top: 4px;
+}
+.vn-chars {
+  position: relative; z-index: 1; display: grid; grid-template-columns: 1fr auto 1fr auto 1fr;
+  align-items: end; gap: 6px; margin: 10px 0 14px;
+}
+.vn-char { text-align: center; }
+.vn-char-avatar {
+  width: 56px; height: 56px; margin: 0 auto 6px; border-radius: 50%;
+  border: 3px solid #fff; background: linear-gradient(135deg, #ffe3ef, #dceeff);
+  font-size: 28px; line-height: 50px;
+  box-shadow: 0 4px 10px rgba(255, 143, 171, .25);
+}
+.vn-char-name { font-size: 11px; font-weight: 800; color: #7a6a8a; }
+.vn-vs-mini {
+  font-weight: 900; color: #ff8fab; font-size: 12px; padding-bottom: 20px;
+  background: #fff; border-radius: 999px; padding: 4px 8px 20px; line-height: 1;
+}
+.vn-match {
+  position: relative; z-index: 1; text-align: center; margin-bottom: 12px;
+  padding: 12px 10px; background: rgba(255,255,255,.72);
+  border: 2px solid #ffd6e7; border-radius: 20px;
+  box-shadow: 0 4px 12px rgba(255, 182, 193, .18);
+}
+.vn-match-teams { font-size: 21px; font-weight: 900; line-height: 1.35; color: #4a3a5a; }
+.vn-vs-pill {
+  display: inline-block; margin: 0 4px; padding: 2px 10px; border-radius: 999px;
+  background: linear-gradient(90deg, #ffb3c6, #c9b6ff); color: #fff; font-size: 14px;
+  vertical-align: middle; box-shadow: 0 2px 6px rgba(255, 143, 171, .35);
+}
+.vn-match-meta { font-size: 11px; color: #9b8ab8; margin-top: 6px; line-height: 1.5; }
+.vn-compliance {
+  position: relative; z-index: 1; margin-bottom: 10px; padding: 10px 12px;
+  background: linear-gradient(180deg, #fff9db, #fff3bf);
+  border: 2px solid #f5d565; border-radius: 16px;
+  font-size: 9px; line-height: 1.55; font-weight: 700; color: #7a5a00;
+  box-shadow: 0 2px 8px rgba(245, 213, 101, .25);
+}
+.vn-predict-row {
+  position: relative; z-index: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px;
+}
+.vn-predict-card {
+  background: #fff; border: 2px solid #e8d9ff; border-radius: 16px;
+  padding: 10px 6px; text-align: center; min-height: 74px;
+  box-shadow: 0 3px 8px rgba(201, 182, 255, .15);
+}
+.vn-predict-card strong { display: block; font-size: 11px; font-weight: 900; color: #6a5a8a; }
+.vn-predict-card span { display: block; font-size: 10px; color: #5a4a6a; margin-top: 5px; line-height: 1.45; }
+.vn-grid {
+  position: relative; z-index: 1; display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 10px;
+}
+.vn-section {
+  background: rgba(255,255,255,.78); border: 2px solid #d4eaff; border-radius: 16px;
+  padding: 10px 8px; min-height: 96px;
+}
+.vn-section-hd {
+  font-size: 12px; font-weight: 900; margin-bottom: 6px; color: #6a5a8a;
+  border-bottom: 2px dotted rgba(201, 182, 255, .45); padding-bottom: 4px;
+}
+.vn-section ul { margin: 0; padding-left: 16px; font-size: 10px; line-height: 1.45; color: #5a4a6a; }
+.vn-section li { margin-bottom: 3px; }
+.vn-form-bar {
+  position: relative; z-index: 1; background: linear-gradient(90deg, #d4f1ff, #e8d9ff);
+  border: 2px solid #b8e0ff; border-radius: 16px; padding: 10px 12px;
+  font-size: 10px; line-height: 1.5; color: #4a5a7a; margin-bottom: 10px;
+}
+.vn-recent-form {
+  position: relative; z-index: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px;
+}
+.vn-recent-col {
+  background: rgba(255,255,255,.82); border: 2px solid #ffd6e7; border-radius: 16px; padding: 8px 6px;
+}
+.vn-recent-hd { font-size: 11px; font-weight: 900; color: #6a5a8a; margin-bottom: 4px; text-align: center; }
+.vn-recent-summary {
+  font-size: 9px; font-weight: 700; color: #9b8ab8; text-align: center; margin-bottom: 6px;
+  padding-bottom: 4px; border-bottom: 1px dashed rgba(201, 182, 255, .35);
+}
+.vn-recent-list { list-style: none; margin: 0; padding: 0; }
+.vn-recent-row {
+  display: grid; grid-template-columns: 38px 14px 1fr 32px 14px; gap: 2px; align-items: center;
+  font-size: 8px; line-height: 1.3; color: #5a4a6a; padding: 2px 0;
+  border-bottom: 1px dotted rgba(201, 182, 255, .25);
+}
+.vn-recent-row:last-child { border-bottom: none; }
+.vn-recent-badge {
+  display: inline-block; width: 13px; height: 13px; border-radius: 999px;
+  font-size: 8px; font-weight: 900; text-align: center; line-height: 13px; color: #fff;
+}
+.vn-recent-badge.r-win { background: #7ed6a5; }
+.vn-recent-badge.r-draw { background: #ffd166; }
+.vn-recent-badge.r-loss { background: #ff9eb5; }
+.vn-recent-src { font-size: 8px; color: #b0a0c0; text-align: center; margin-top: 6px; grid-column: 1 / -1; }
+.vn-h2h {
+  position: relative; z-index: 1; background: rgba(212, 241, 255, .55); border: 2px solid #b8e0ff;
+  border-radius: 14px; padding: 8px 10px; font-size: 9px; color: #4a5a7a; margin-bottom: 10px; line-height: 1.45;
+}
+.vn-choice {
+  position: relative; z-index: 1; text-align: center; padding: 12px 10px 8px;
+  background: #fff; border: 2px solid #ffc8dd; border-radius: 22px;
+  box-shadow: 0 4px 14px rgba(255, 143, 171, .16);
+}
+.vn-choice-label { font-size: 13px; font-weight: 900; color: #8a7a9a; }
+.vn-choice-val {
+  display: inline-block; margin-top: 8px; font-size: 26px; font-weight: 900; color: #ff6b9d;
+  border: 2px dashed #ffb3c6; border-radius: 16px; padding: 6px 18px; min-width: 120px;
+  background: linear-gradient(180deg, #fff, #fff5f8);
+}
+.vn-choice-sub { font-size: 11px; color: #9b8ab8; margin-top: 8px; }
+.vn-foot {
+  position: relative; z-index: 1; text-align: center; margin-top: 12px;
+  font-size: 15px; font-weight: 800; color: #ff8fab;
+}
+.vn-tips {
+  position: relative; z-index: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px;
+}
+.vn-tip-box {
+  font-size: 9px; line-height: 1.4; color: #8a7a9a; background: rgba(255,255,255,.65);
+  border: 1px dashed rgba(255, 182, 193, .55); border-radius: 12px; padding: 8px;
+}
+.vn-tip-box strong { display: block; font-size: 10px; margin-bottom: 2px; color: #ff8fab; }
+.vn-module .export-poster { background: linear-gradient(180deg, #fff0f5, #f3f0ff); padding: 14px 0; border-radius: 20px; }
+.vn-teammods { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
+.vn-teammod {
+  background: rgba(255,255,255,.78); border: 2px solid #e8d9ff; border-radius: 18px; padding: 10px 8px 8px;
+}
+.vn-teammod-hd {
+  font-size: 12px; font-weight: 900; color: #6a5a8a; margin-bottom: 8px; text-align: center;
+  border-bottom: 2px dotted rgba(201, 182, 255, .4); padding-bottom: 5px;
+}
+.vn-teammod-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.vn-teammod-col {
+  background: #fff; border: 2px solid #f0e6ff; border-radius: 14px;
+  padding: 8px 6px; min-height: 52px;
+}
+.vn-teammod-col.is-home { border-top: 4px solid #8ecae6; }
+.vn-teammod-col.is-away { border-top: 4px solid #ff9eb5; }
+.vn-teammod-team { font-size: 10px; font-weight: 900; color: #6a5a8a; margin-bottom: 5px; text-align: center; }
+.vn-teammod-list { margin: 0; padding-left: 14px; font-size: 9px; line-height: 1.42; color: #5a4a6a; }
+.vn-teammod-list li { margin-bottom: 2px; }
+.vn-teammod-empty { font-size: 9px; color: #b0a0c0; text-align: center; line-height: 1.4; padding: 4px 2px; }
+.vn-lineup-row { margin-bottom: 5px; }
+.vn-lineup-row:last-child { margin-bottom: 0; }
+.vn-lineup-label { font-size: 8px; font-weight: 900; color: #9b8ab8; margin-bottom: 2px; }
+.vn-lineup-players { display: flex; flex-wrap: wrap; gap: 4px; }
+.vn-lineup-chip {
+  font-size: 8px; line-height: 1.2; padding: 3px 6px; border-radius: 999px;
+  background: #fff5f8; border: 1px solid #ffc8dd; color: #6a5a8a;
+}
+.vn-teammod-src { font-size: 8px; color: #b0a0c0; text-align: center; margin-top: 5px; }
+.vn-personal-note {
+  position: relative; z-index: 1; background: #fff9c4;
+  border: 2px solid #ffe066; border-radius: 4px 18px 18px 18px;
+  padding: 12px 12px 10px; margin-bottom: 12px;
+  box-shadow: 3px 4px 0 rgba(255, 209, 102, .35);
+  transform: rotate(-.6deg);
+}
+.vn-personal-note-off { display: none !important; }
+.vn-personal-note::before {
+  content: "📌"; position: absolute; top: -8px; left: 14px; font-size: 16px;
+}
+.vn-personal-note-hd { font-size: 12px; font-weight: 900; color: #c47f17; margin-bottom: 6px; }
+.vn-personal-note-body { font-size: 11px; line-height: 1.6; color: #5a4a2a; white-space: pre-wrap; min-height: 1.2em; }
+.vn-note-form {
+  margin: 10px 0 0; padding: 12px; background: rgba(255,255,255,.72);
+  border-radius: 16px; border: 2px dashed rgba(255, 182, 193, .45);
+}
+.vn-note-form label { display: block; font-size: 12px; font-weight: 700; margin-bottom: 6px; color: #8a7a9a; }
+.vn-note-form textarea {
+  width: 100%; box-sizing: border-box; border: 2px solid #ffd6e7; border-radius: 14px;
+  padding: 10px; font-size: 13px; resize: vertical; min-height: 72px; background: #fff;
+}
+.vn-note-form-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; align-items: center; }
+"""
+
+
+VIEWING_NOTES_POSTER_CSS = viewing_notes_poster_css()
+
+_BAD_VIEWING_LINE_RE = re.compile(
+    r"http|github|Contribute to|伤停名单：.*球探|"
+    r"已尝试\s*500|暂无可靠结构化|未解析到|情报页|网页搜索|"
+    r"查询[：:]|500\.com|DuckDuckGo|命中\s*\d+\s*条|数据查询",
+    re.I,
+)
+_INJURY_LINE_RE = re.compile(
+    r"伤停|缺阵|受伤|复出|怀疑|停赛|红牌|黄牌累积|injur|doubtful|ruled out|suspend|unavail|miss(?:ing)?",
+    re.I,
+)
+_VERDICT_ONLY_RE = re.compile(
+    r"^(当前(?:分析|推荐)|主胜|客胜|平局|胜|平|负|待研判)[：:\s]*.*$",
+    re.I,
+)
+_VENUE_LINE_RE = re.compile(
+    r"Super Bowl|NFL|MLS|主场馆|球场.*(?:19|20)\d{2}|opened in|Host City|"
+    r"体育场.*(?:举办|主办|opened)|赛事主办",
+    re.I,
+)
+
+
+def _strip_score_snippets(text: str) -> str:
+    out = _SCORE_SNIP_RE.sub("", str(text or ""))
+    out = re.sub(r"\d+\s*[-:：]\s*\d+", "", out)
+    out = re.sub(r"\s{2,}", " ", out)
+    return out.strip(" ·，,；;。 ")
+
+
+def _normalize_1x2_cn(raw: str | None) -> str:
+    r = str(raw or "").strip()
+    if r in ("主胜", "平局", "客胜"):
+        return r
+    if "平" in r:
+        return "平局"
+    if "客" in r or r.endswith("负"):
+        return "客胜"
+    if "主" in r or (r.endswith("胜") and "客" not in r):
+        return "主胜"
+    return "待研判"
+
+
+def _verdict_to_fan_cn(raw: str | None) -> str:
+    """Legacy helper — viewing poster no longer shows win/loss labels."""
+    _ = raw
+    return ""
+
+
+def _viewing_oracle_topic(label: str, idx: int) -> str:
+    label = str(label or "").strip()
+    if label in ("综合", "Chief", "chief"):
+        return "综合观察"
+    topics = ("战术风格", "阵容观察", "临场要点")
+    if "战意" in label or "积分" in label:
+        return "战意背景"
+    return topics[idx % len(topics)]
+
+
+def _viewing_oracle_fallback(home: str, away: str, idx: int) -> str:
+    home = home or "主队"
+    away = away or "客队"
+    fallbacks = (
+        f"关注{home}与{away}在中前场的风格碰撞",
+        "可从压迫强度与转换速度切入观察",
+        "阵容深度与轮换值得赛前留意",
+    )
+    return fallbacks[idx % len(fallbacks)]
+
+
+def _viewing_oracle_comment(raw: str, *, home: str = "", away: str = "", idx: int = 0) -> str:
+    clean = _sanitize_viewing_notes_text(raw)
+    if clean:
+        return clean[:72]
+    return _viewing_oracle_fallback(home, away, idx)
+
+
+def _is_verdict_only_line(text: str) -> bool:
+    clean = str(text or "").strip()
+    if not clean:
+        return True
+    if _VERDICT_ONLY_RE.match(clean):
+        return True
+    if clean in ("主胜", "客胜", "平局", "胜", "平", "负", "待研判"):
+        return True
+    if re.fullmatch(r"当前(?:分析|推荐)[：:]\s*(主胜|客胜|平局|胜|平|负)", clean):
+        return True
+    return False
+
+
+def _is_venue_or_stadium_line(text: str) -> bool:
+    clean = str(text or "").strip()
+    if not clean:
+        return False
+    if _VENUE_LINE_RE.search(clean):
+        return True
+    if "体育场" in clean and any(x in clean for x in ("举办", "主办", "opened", "NFL", "Texans")):
+        return True
+    return False
+
+
+def _is_internal_agent_log(text: str) -> bool:
+    return bool(_BAD_VIEWING_LINE_RE.search(str(text or "")))
+
+
+def _sanitize_viewing_notes_text(text: str) -> str:
+    """Strip scores, betting jargon, and venue noise for Douyin OCR safety."""
+    if _is_internal_agent_log(text):
+        return ""
+    out = _strip_score_snippets(_strip_viewing_compliance_terms(_sanitize_agent_export_text(str(text or ""))))
+    extra = [
+        (r"Agent(?:\s*研判)?", "综合"),
+        (r"推荐", "观察"),
+        (r"反方观点[：:]", "需注意："),
+    ]
+    for pat, repl in extra:
+        out = re.sub(pat, repl, out, flags=re.IGNORECASE)
+    out = re.sub(r"\s{2,}", " ", out).strip(" ·，,。；;")
+    if _is_venue_or_stadium_line(out):
+        return ""
+    if _is_verdict_only_line(out):
+        return ""
+    if _contains_market_terms(out):
+        return ""
+    if len(out) < 4:
+        return ""
+    return out[:120]
+
+
+def _viewing_notes_line_ok(text: str) -> bool:
+    clean = _sanitize_viewing_notes_text(text)
+    return len(clean) >= 6
+
+
+def _viewing_notes_kickoff_line(index: dict | None, prediction: dict | None) -> str:
+    """Only trusted kickoff — never agent-scraped venue/stadium."""
+    ko = str((index or {}).get("kickoff_at") or (prediction or {}).get("kickoff_at") or "").strip()
+    if not ko:
+        return "开赛时间以官方赛程为准"
+    try:
+        bj = to_beijing(ko)
+        if bj:
+            return f"北京时间 {format_beijing(bj, '%m-%d %H:%M')} 开球"
+    except Exception:
+        pass
+    return f"开球 {ko[:16]}"
+
+
+def _agent_evidence_lines(agent_board: dict | None, agent_id: str, *, limit: int = 3) -> list[str]:
+    lines: list[str] = []
+    for agent in (agent_board or {}).get("agents") or []:
+        if str(agent.get("agent_id") or "") != agent_id:
+            continue
+        for ev in agent.get("evidence") or []:
+            clean = _sanitize_viewing_notes_text(str(ev))
+            if clean and clean not in lines:
+                lines.append(clean)
+            if len(lines) >= limit:
+                return lines
+    return lines
+
+
+def _agent_warning_lines(agent_board: dict | None, agent_id: str, *, limit: int = 3) -> list[str]:
+    lines: list[str] = []
+    for agent in (agent_board or {}).get("agents") or []:
+        if str(agent.get("agent_id") or "") != agent_id:
+            continue
+        for w in agent.get("warnings") or []:
+            clean = _sanitize_viewing_notes_text(str(w))
+            if clean and clean not in lines:
+                lines.append(clean)
+            if len(lines) >= limit:
+                return lines
+    return lines
+
+
+def _injury_evidence_lines(agent_board: dict | None, *, limit: int = 8) -> list[str]:
+    lines: list[str] = []
+    for agent in (agent_board or {}).get("agents") or []:
+        if str(agent.get("agent_id") or "") not in ("intel", "external_context", "late_confirmation"):
+            continue
+        for ev in agent.get("evidence") or []:
+            raw = str(ev)
+            if not _INJURY_LINE_RE.search(raw):
+                continue
+            clean = _sanitize_viewing_notes_text(raw)
+            if not clean:
+                continue
+            if clean not in lines:
+                lines.append(clean[:120])
+            if len(lines) >= limit:
+                return lines
+    return lines
+
+
+def _assign_injury_lines(
+    lines: list[str],
+    *,
+    home_cn: str,
+    away_cn: str,
+) -> tuple[list[str], list[str]]:
+    try:
+        from fifa_preview import team_en_name
+
+        home_en = team_en_name(home_cn)
+        away_en = team_en_name(away_cn)
+    except Exception:
+        home_en = away_en = ""
+    home_out: list[str] = []
+    away_out: list[str] = []
+    for line in lines:
+        low = line.lower()
+        home_hit = home_cn in line or (home_en and home_en.lower() in low)
+        away_hit = away_cn in line or (away_en and away_en.lower() in low)
+        if home_hit and not away_hit:
+            home_out.append(line)
+        elif away_hit and not home_hit:
+            away_out.append(line)
+        elif not home_hit and not away_hit:
+            if _is_internal_agent_log(line):
+                continue
+            continue
+    return home_out[:4], away_out[:4]
+
+
+def _apply_sporttery_side(side: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    out = dict(side)
+    if patch.get("injuries"):
+        out["injuries"] = list(patch["injuries"])
+        out["has_injuries"] = True
+    if patch.get("key_players"):
+        out["key_players"] = list(patch["key_players"])
+        out["has_key_players"] = True
+    if patch.get("tactics_lines"):
+        out["tactics_lines"] = list(patch["tactics_lines"])
+        out["has_tactics"] = True
+    return out
+
+
+def _build_team_modules(
+    *,
+    home_cn: str,
+    away_cn: str,
+    fifa_overlay: dict[str, Any],
+    sporttery_overlay: dict[str, Any] | None = None,
+    agent_board: dict | None,
+) -> dict[str, Any]:
+    empty_side = {
+        "team": "",
+        "key_players": [],
+        "tactics_lines": [],
+        "lineup_rows": [],
+        "injuries": [],
+        "has_lineup": False,
+        "has_key_players": False,
+        "has_tactics": False,
+        "has_injuries": False,
+    }
+    fifa_tm = (fifa_overlay or {}).get("team_modules") or {}
+    home_mod = dict(fifa_tm.get("home") or empty_side)
+    away_mod = dict(fifa_tm.get("away") or empty_side)
+    home_mod["team"] = home_mod.get("team") or home_cn
+    away_mod["team"] = away_mod.get("team") or away_cn
+
+    st_tm = (sporttery_overlay or {}).get("team_modules") or {}
+    home_mod = _apply_sporttery_side(home_mod, st_tm.get("home") or {})
+    away_mod = _apply_sporttery_side(away_mod, st_tm.get("away") or {})
+
+    if not (st_tm.get("home") or {}).get("injuries") and not (st_tm.get("away") or {}).get("injuries"):
+        inj_home, inj_away = _assign_injury_lines(
+            _injury_evidence_lines(agent_board),
+            home_cn=home_cn,
+            away_cn=away_cn,
+        )
+        inj_home = [x for x in inj_home if not _is_internal_agent_log(x)]
+        inj_away = [x for x in inj_away if not _is_internal_agent_log(x)]
+        try:
+            from fifa_translate import translate_en_to_zh, needs_zh_translate
+
+            inj_home = [translate_en_to_zh(x) if needs_zh_translate(x) else x for x in inj_home]
+            inj_away = [translate_en_to_zh(x) if needs_zh_translate(x) else x for x in inj_away]
+        except Exception:
+            pass
+        inj_home = [x for x in inj_home if x.strip() and not _is_internal_agent_log(x)]
+        inj_away = [x for x in inj_away if x.strip() and not _is_internal_agent_log(x)]
+        if inj_home and not home_mod.get("has_injuries"):
+            home_mod["injuries"] = inj_home
+            home_mod["has_injuries"] = True
+        if inj_away and not away_mod.get("has_injuries"):
+            away_mod["injuries"] = inj_away
+            away_mod["has_injuries"] = True
+
+    modules = {"home": home_mod, "away": away_mod}
+    has_any = any(
+        side.get("has_lineup") or side.get("has_key_players") or side.get("has_tactics") or side.get("has_injuries")
+        for side in modules.values()
+    )
+    return {
+        "available": has_any,
+        "home": home_mod,
+        "away": away_mod,
+        "sporttery_source_url": (sporttery_overlay or {}).get("source_url") or "",
+    }
+
+
+def _viewing_notes_team_side_col(side: dict[str, Any], *, css_class: str) -> str:
+    team = _e(side.get("team") or "—")
+    body = ""
+    if side.get("has_key_players"):
+        lis = "".join(f"<li>{_e(x)}</li>" for x in (side.get("key_players") or [])[:4])
+        body += f'<ul class="vn-teammod-list">{lis}</ul>'
+    else:
+        body += '<div class="vn-teammod-empty">暂无核心球员描述</div>'
+    return f'<div class="vn-teammod-col {css_class}"><div class="vn-teammod-team">{team}</div>{body}</div>'
+
+
+def _viewing_notes_lineup_col(side: dict[str, Any], *, css_class: str) -> str:
+    team = _e(side.get("team") or "—")
+    rows_html = ""
+    for row in side.get("lineup_rows") or []:
+        chips = "".join(
+            f'<span class="vn-lineup-chip">{_e(p)}</span>'
+            for p in (row.get("players") or [])[:8]
+        )
+        rows_html += (
+            f'<div class="vn-lineup-row">'
+            f'<div class="vn-lineup-label">{_e(row.get("label") or "位置")}</div>'
+            f'<div class="vn-lineup-players">{chips}</div></div>'
+        )
+    if not rows_html:
+        rows_html = '<div class="vn-teammod-empty">暂无 FIFA 预测首发</div>'
+    return f'<div class="vn-teammod-col {css_class}"><div class="vn-teammod-team">{team}</div>{rows_html}</div>'
+
+
+def _viewing_notes_injury_col(side: dict[str, Any], *, css_class: str) -> str:
+    team = _e(side.get("team") or "—")
+    if side.get("has_injuries"):
+        lis = "".join(f"<li>{_e(x)}</li>" for x in (side.get("injuries") or [])[:4])
+        body = f'<ul class="vn-teammod-list">{lis}</ul>'
+    else:
+        body = '<div class="vn-teammod-empty">暂无可靠伤停情报</div>'
+    return f'<div class="vn-teammod-col {css_class}"><div class="vn-teammod-team">{team}</div>{body}</div>'
+
+
+def _viewing_notes_tactics_col(side: dict[str, Any], *, css_class: str) -> str:
+    team = _e(side.get("team") or "—")
+    if side.get("has_tactics"):
+        lis = "".join(f"<li>{_e(x)}</li>" for x in (side.get("tactics_lines") or [])[:3])
+        body = f'<ul class="vn-teammod-list">{lis}</ul>'
+    else:
+        body = '<div class="vn-teammod-empty">暂无战术描述</div>'
+    return f'<div class="vn-teammod-col {css_class}"><div class="vn-teammod-team">{team}</div>{body}</div>'
+
+
+def _viewing_notes_team_modules_block(
+    modules: dict[str, Any] | None,
+    *,
+    fifa_source: str = "",
+    sporttery_source: str = "",
+) -> str:
+    tm = modules or {}
+    if not tm.get("available"):
+        return ""
+    home = tm.get("home") or {}
+    away = tm.get("away") or {}
+    src_bits: list[str] = []
+    if fifa_source:
+        src_bits.append(f'FIFA · <a href="{_e(fifa_source)}" target="_blank" rel="noopener">预览</a>')
+    st_src = sporttery_source or str(tm.get("sporttery_source_url") or "")
+    if st_src:
+        src_bits.append(f'官方 · <a href="{_e(st_src)}" target="_blank" rel="noopener">伤停/射手</a>')
+    src = f'<div class="vn-teammod-src">{" · ".join(src_bits)}</div>' if src_bits else ""
+
+    blocks = [
+        (
+            "⭐ 核心球员",
+            _viewing_notes_team_side_col(home, css_class="is-home")
+            + _viewing_notes_team_side_col(away, css_class="is-away"),
+        ),
+        (
+            "📋 预计首发",
+            _viewing_notes_lineup_col(home, css_class="is-home")
+            + _viewing_notes_lineup_col(away, css_class="is-away"),
+        ),
+        (
+            "⚔️ 风格数据",
+            _viewing_notes_tactics_col(home, css_class="is-home")
+            + _viewing_notes_tactics_col(away, css_class="is-away"),
+        ),
+        (
+            "🏥 伤停信息",
+            _viewing_notes_injury_col(home, css_class="is-home")
+            + _viewing_notes_injury_col(away, css_class="is-away"),
+        ),
+    ]
+    html_parts = ['<div class="vn-teammods">']
+    for title, cols in blocks:
+        html_parts.append(
+            f'<div class="vn-teammod"><div class="vn-teammod-hd">{_e(title)}</div>'
+            f'<div class="vn-teammod-grid">{cols}</div></div>'
+        )
+    if src:
+        html_parts.append(src)
+    html_parts.append("</div>")
+    return "".join(html_parts)
+
+
+def _latest_ai_rows(prediction: dict | None, ai_records: list | None) -> list[dict[str, str]]:
+    latest = (ai_records or [None])[0] or {}
+    analyses = latest.get("analyses") or {}
+    if not analyses:
+        analyses = (prediction or {}).get("ai_analyses") or {}
+    rows: list[dict[str, str]] = []
+    for pid, analysis in analyses.items():
+        row = analysis.get("predict_row") or {}
+        result = _normalize_1x2_cn(analysis.get("result_1x2_cn") or row.get("胜平负") or "")
+        reason = _strip_score_snippets(
+            _sanitize_agent_export_text(analysis.get("actuary_reasoning") or analysis.get("summary") or "")
+        )[:48]
+        rows.append({
+            "label": str(analysis.get("label") or analysis.get("ai_provider_label") or pid),
+            "result": result,
+            "comment": reason or result or "待补充",
+        })
+    return rows
+
+
+VIEWING_COMPLIANCE_TEXT = (
+    "纯足球爱好者赛前观赛笔记，仅交流球队战术、球员技术、赛事历史数据，"
+    "无任何投注引导、胜负推荐，理性欣赏足球赛事，请勿过度解读数据。"
+)
+
+
+def _build_viewing_oracles(
+    *,
+    picks: dict,
+    chief_report: dict | None,
+    ai_rows: list[dict[str, str]],
+    home: str = "",
+    away: str = "",
+) -> list[dict[str, str]]:
+    analysis = (chief_report or {}).get("analysis") or {}
+    agent_comment = _viewing_oracle_comment(
+        analysis.get("summary") or "",
+        home=home,
+        away=away,
+        idx=0,
+    )
+    avatars = ("🧑‍💻", "👩", "🤖")
+    oracles: list[dict[str, str]] = [{
+        "label": "综合",
+        "avatar": avatars[0],
+        "topic": _viewing_oracle_topic("综合", 0),
+        "comment": agent_comment,
+    }]
+    for i, row in enumerate(ai_rows[:2]):
+        oracles.append({
+            "label": row["label"][:8],
+            "avatar": avatars[i + 1],
+            "topic": _viewing_oracle_topic(row.get("label") or "", i + 1),
+            "comment": _viewing_oracle_comment(
+                row.get("comment") or "",
+                home=home,
+                away=away,
+                idx=i + 1,
+            ),
+        })
+    while len(oracles) < 3:
+        idx = len(oracles)
+        oracles.append({
+            "label": "待分析",
+            "avatar": avatars[idx],
+            "topic": _viewing_oracle_topic("", idx),
+            "comment": _viewing_oracle_fallback(home, away, idx),
+        })
+    return oracles[:3]
+
+
+def _viewing_notes_form_block(team_form: dict | None) -> str:
+    tf = team_form or {}
+    if not tf.get("available"):
+        return (
+            '<div class="vn-recent-form">'
+            '<div class="vn-recent-col" style="grid-column:1/-1">'
+            '<div class="vn-recent-hd">双方近期战绩</div>'
+            '<p class="vn-recent-summary">暂无近10场记录（本地库与搜索均未命中）</p>'
+            "</div></div>"
+        )
+
+    def _badge(res: str) -> str:
+        cls = {"胜": "r-win", "平": "r-draw", "负": "r-loss"}.get(res, "r-draw")
+        letter = {"胜": "W", "平": "D", "负": "L"}.get(res, "?")
+        return f'<span class="vn-recent-badge {cls}">{letter}</span>'
+
+    def _col(side: dict) -> str:
+        rows = ""
+        for m in (side.get("matches") or [])[:10]:
+            rows += (
+                f'<li class="vn-recent-row">'
+                f'<span>{_e(m.get("date"))}</span>'
+                f"<span>{_e(m.get('venue'))}</span>"
+                f'<span>{_e(m.get("opponent"))}</span>'
+                f'<span>{_e(m.get("score"))}</span>'
+                f"{_badge(str(m.get('result') or ''))}"
+                f"</li>"
+            )
+        if not rows:
+            rows = '<li class="vn-recent-row"><span colspan>暂无明细</span></li>'
+        return (
+            f'<div class="vn-recent-col">'
+            f'<div class="vn-recent-hd">{_e(side.get("team"))} · 近10场</div>'
+            f'<div class="vn-recent-summary">{_e(side.get("summary"))}</div>'
+            f'<ul class="vn-recent-list">{rows}</ul>'
+            f"</div>"
+        )
+
+    h2h = tf.get("head_to_head") or []
+    h2h_html = ""
+    if h2h:
+        bits = " · ".join(_e(h.get("match") or "") for h in h2h[:2] if h.get("match"))
+        if bits:
+            h2h_html = f'<div class="vn-h2h"><strong>交锋</strong> {bits}</div>'
+
+    src = _e(tf.get("data_source") or "")
+    return (
+        f'{h2h_html}<div class="vn-recent-form">'
+        f'{_col(tf.get("home") or {})}{_col(tf.get("away") or {})}'
+        f'<div class="vn-recent-src">数据来源：{src}</div>'
+        f"</div>"
+    )
+
+
+def build_viewing_notes_ctx(
+    *,
+    index: dict | None = None,
+    prediction: dict | None = None,
+    agent_board: dict | None = None,
+    chief_report: dict | None = None,
+    ai_records: list | None = None,
+    output_root: str | Path | None = None,
+    fixture_id: str | None = None,
+    fifa_preview: dict | None = None,
+) -> dict[str, Any]:
+    """Comic-style viewing notes poster — filled from agent + AI analysis."""
+    from match_agents.board import merge_result_and_scores, resolve_best_list_verdict
+
+    index = index or {}
+    match_name = str(
+        index.get("match_name")
+        or (prediction or {}).get("match")
+        or (chief_report or {}).get("match_name")
+        or ""
+    ).strip()
+    home, away = split_teams(match_name)
+    verdict = resolve_best_list_verdict(chief_report, board=agent_board, match=prediction)
+    picks = merge_result_and_scores(chief_report, board=agent_board, match=prediction)
+    ai_rows = _latest_ai_rows(prediction, ai_records)
+    motiv = _extract_motivation_judgment(agent_board, match_name=match_name)
+
+    ko = str(index.get("kickoff_at") or (prediction or {}).get("kickoff_at") or "")
+    day_note = ""
+    if len(ko) >= 10:
+        try:
+            dt = datetime.strptime(ko[:10], "%Y-%m-%d")
+            day_note = f"{dt.month}月{dt.day}日"
+        except ValueError:
+            day_note = ko[:10]
+
+    fifa_overlay: dict[str, Any] = {}
+    if fifa_preview is None and output_root and fixture_id and home and away:
+        try:
+            from fifa_preview import load_fifa_preview, viewing_notes_fifa_overlay
+
+            fifa_preview = load_fifa_preview(output_root, fixture_id)
+            if fifa_preview:
+                fifa_overlay = viewing_notes_fifa_overlay(
+                    fifa_preview,
+                    home_cn=home,
+                    away_cn=away,
+                    output_root=output_root,
+                    fixture_id=fixture_id,
+                )
+        except Exception as exc:
+            log.debug("FIFA preview load skipped: %s", exc)
+    elif fifa_preview and home and away:
+        try:
+            from fifa_preview import viewing_notes_fifa_overlay
+
+            fifa_overlay = viewing_notes_fifa_overlay(
+                fifa_preview,
+                home_cn=home,
+                away_cn=away,
+                output_root=output_root,
+                fixture_id=fixture_id,
+            )
+        except Exception as exc:
+            log.debug("FIFA preview overlay skipped: %s", exc)
+
+    sporttery_overlay: dict[str, Any] = {}
+    if output_root and fixture_id and home and away:
+        try:
+            from sporttery_intel import build_viewing_overlay, load_sporttery_intel
+
+            st_intel = load_sporttery_intel(output_root, fixture_id)
+            if st_intel:
+                sporttery_overlay = build_viewing_overlay(st_intel)
+        except Exception as exc:
+            log.debug("sporttery intel load skipped: %s", exc)
+
+    team_modules = _build_team_modules(
+        home_cn=home,
+        away_cn=away,
+        fifa_overlay=fifa_overlay,
+        sporttery_overlay=sporttery_overlay,
+        agent_board=agent_board,
+    )
+
+    has_fifa_modules = bool(team_modules.get("available"))
+    if has_fifa_modules:
+        raw_sections = [
+            ("① 临场风险", _agent_warning_lines(agent_board, "contrarian", limit=3)),
+            ("② 战意观察", (motiv.get("lines") or [motiv.get("headline") or ""])[:3]),
+        ]
+        fifa_section_override: dict[str, list[str]] = {}
+    else:
+        raw_sections = [
+            ("① 核心球员", _agent_evidence_lines(agent_board, "intel", limit=3)),
+            ("② 战术风格", _agent_evidence_lines(agent_board, "scenario_simulator", limit=2)),
+            ("③ 临场风险", _agent_warning_lines(agent_board, "contrarian", limit=3)),
+            ("④ 战意观察", (motiv.get("lines") or [motiv.get("headline") or ""])[:3]),
+        ]
+        fifa_section_override = {}
+    sections = []
+    for title, lines in raw_sections:
+        clean = []
+        fifa_lines = fifa_section_override.get(title) or []
+        if fifa_lines:
+            clean = [_sanitize_viewing_notes_text(str(x)) for x in fifa_lines if str(x).strip()][:3]
+            clean = [x for x in clean if x]
+        if not clean:
+            for x in lines:
+                if title.endswith("战意观察"):
+                    bit = _sanitize_viewing_notes_text(_strip_score_snippets(_sanitize_agent_export_text(x)))
+                    if _is_standings_motivation_line(bit) and bit not in clean:
+                        clean.append(bit[:100])
+                else:
+                    bit = _sanitize_viewing_notes_text(str(x))
+                    if bit and bit not in clean:
+                        clean.append(bit[:100])
+                if len(clean) >= 3:
+                    break
+        sections.append({"title": title, "lines": clean or ["暂无补充"]})
+
+    personal_note = ""
+    if output_root and fixture_id:
+        try:
+            from viewing_note_store import load_viewing_note
+
+            personal_note = load_viewing_note(output_root, fixture_id)
+        except Exception as exc:
+            log.debug("viewing note load skipped: %s", exc)
+
+    result_cn = _normalize_1x2_cn(picks.get("result_1x2_cn"))
+    motiv_line = _strip_score_snippets(motiv.get("headline") or "")
+    if not _is_standings_motivation_line(motiv_line):
+        motiv_line = ""
+
+    team_form: dict[str, Any] = {}
+    if home and away:
+        try:
+            from team_form_search import build_viewing_notes_team_form
+
+            team_form = build_viewing_notes_team_form(
+                home,
+                away,
+                limit=10,
+                use_search=True,
+                reference_date=ko or None,
+            )
+        except Exception as exc:
+            log.debug("viewing notes team form skipped: %s", exc)
+
+    kickoff_line = _viewing_notes_kickoff_line(index, prediction)
+    kickoff_extra = str(fifa_overlay.get("kickoff_extra") or "")
+    if kickoff_extra and "球馆" not in kickoff_line and "球场" not in kickoff_line:
+        kickoff_line = f"{kickoff_line}{kickoff_extra}"
+
+    return {
+        "match_name": match_name,
+        "home": home or "主队",
+        "away": away or "客队",
+        "day_note": day_note,
+        "kickoff_line": kickoff_line,
+        "oracles": _build_viewing_oracles(
+            picks=picks,
+            chief_report=chief_report,
+            ai_rows=ai_rows,
+            home=home or "主队",
+            away=away or "客队",
+        ),
+        "sections": sections,
+        "motiv_line": motiv_line[:120],
+        "team_form": team_form,
+        "team_modules": team_modules,
+        "personal_note": personal_note,
+        "fixture_id": str(fixture_id or index.get("fixture_id") or ""),
+        "fifa_preview": fifa_preview,
+        "fifa_source_url": fifa_overlay.get("source_url") or "",
+        "sporttery_source_url": sporttery_overlay.get("source_url") or team_modules.get("sporttery_source_url") or "",
+        "ready": bool(result_cn != "待研判" or motiv.get("lines") or ai_rows or fifa_overlay or personal_note),
+    }
+
+
+def html_viewing_notes_poster(ctx: dict[str, Any]) -> str:
+    home = _e(ctx.get("home") or "主队")
+    away = _e(ctx.get("away") or "客队")
+    day_note = _e(ctx.get("day_note") or "")
+    kickoff = _e(ctx.get("kickoff_line") or "")
+    oracles = ctx.get("oracles") or []
+    oracle_html = ""
+    for i, o in enumerate(oracles[:3]):
+        if i:
+            oracle_html += '<div class="vn-vs-mini">VS</div>'
+        oracle_html += (
+            f'<div class="vn-char"><div class="vn-char-avatar">{_e(o.get("avatar") or "🙂")}</div>'
+            f'<div class="vn-char-name">{_e(o.get("label") or "—")}</div></div>'
+        )
+
+    predict_html = ""
+    for o in oracles[:3]:
+        predict_html += (
+            f'<div class="vn-predict-card"><strong>{_e(o.get("topic") or "战术观察")}</strong>'
+            f'<span>{_e(o.get("comment") or "")}</span></div>'
+        )
+
+    section_html = ""
+    for sec in ctx.get("sections") or []:
+        lis = "".join(f"<li>{_e(x)}</li>" for x in (sec.get("lines") or [])[:3])
+        section_html += (
+            f'<div class="vn-section"><div class="vn-section-hd">{_e(sec.get("title") or "")}</div>'
+            f"<ul>{lis or '<li>待补充分析</li>'}</ul></div>"
+        )
+
+    motiv_line = _e(ctx.get("motiv_line") or "")
+    motiv_block = ""
+    if motiv_line:
+        motiv_block = f'<div class="vn-form-bar">{motiv_line}</div>'
+    form_block = _viewing_notes_form_block(ctx.get("team_form"))
+    team_mod_block = _viewing_notes_team_modules_block(
+        ctx.get("team_modules"),
+        fifa_source=str(ctx.get("fifa_source_url") or ""),
+        sporttery_source=str(ctx.get("sporttery_source_url") or ""),
+    )
+    personal = _sanitize_personal_note(str(ctx.get("personal_note") or ""))
+    note_cls = "" if personal else " vn-personal-note-off"
+    compliance = f'<div class="vn-compliance">{_e(VIEWING_COMPLIANCE_TEXT)}</div>'
+    personal_block = (
+        f"{compliance}"
+        f'<div class="vn-personal-note{note_cls}">'
+        f'<div class="vn-personal-note-hd">📝 我的个人看法</div>'
+        f'<div class="vn-personal-note-body">{_e(personal)}</div>'
+        f"</div>"
+    )
+    title_main = f"{home} vs {away}"
+    title_sub = f"世界杯战术观赛笔记{(' · ' + day_note) if day_note else ''}"
+
+    return f"""
+<div class="vn-poster vn-cute">
+  <div class="vn-deco vn-deco-tl">✨</div>
+  <div class="vn-deco vn-deco-tr">🌸</div>
+  <div class="vn-deco vn-deco-bl">⚽</div>
+  <div class="vn-deco vn-deco-br">💫</div>
+  <h1 class="vn-title">{title_main}<small>{title_sub}</small></h1>
+  <div class="vn-chars">{oracle_html}</div>
+  <div class="vn-match">
+    <div class="vn-match-teams">{home} <span class="vn-vs-pill">VS</span> {away}</div>
+    <div class="vn-match-meta">{kickoff}</div>
+  </div>
+  {personal_block}
+  <div class="vn-predict-row">{predict_html}</div>
+  {team_mod_block}
+  {form_block}
+  <div class="vn-grid">{section_html}</div>
+  {motiv_block}
+  <div class="vn-tips">
+    <div class="vn-tip-box"><strong>小贴士</strong>多聊战术与球员，少做胜负预判。</div>
+    <div class="vn-tip-box"><strong>温馨提示</strong>理性看球，享受比赛本身。</div>
+  </div>
+  <div class="vn-foot">仅业余球迷复盘分享，不构成任何参考建议 · 世界杯，因你更精彩 ♡</div>
+</div>"""
+
+
+def viewing_notes_panel_script() -> str:
+    return """
+<script>
+function _sanitizeNoteForExport(text) {
+  if (!text) return '';
+  var out = String(text);
+  var pats = [
+    [/博彩|赌博|赌球|彩票|足彩|购彩|投注|下注|庄家|滚球|竞彩|体彩|串关|可串|单关|Kelly/gi, ''],
+    [/盘口|亚盘|欧赔|水位|让球|大小球|赔率|2串1|3串1/gi, ''],
+    [/看好|主胜|客胜|预测|走势|方向|拿捏|稳胆|稳单|稳赢|赢球|必赢/gi, ''],
+    [/\\d+(?:\\.\\d+)?\\s*[%％]/g, '']
+  ];
+  for (var i = 0; i < pats.length; i++) {
+    out = out.replace(pats[i][0], pats[i][1]);
+  }
+  return out.replace(/\\s{2,}/g, ' ').trim().slice(0, 500);
+}
+function _syncViewingPersonalNote(mod) {
+  if (!mod || !mod.classList.contains('vn-module')) return '';
+  const ta = mod.querySelector('.vn-note-input');
+  const text = _sanitizeNoteForExport((ta && ta.value || '').trim());
+  const box = mod.querySelector('.vn-personal-note-body');
+  const wrap = mod.querySelector('.vn-personal-note');
+  if (box && wrap) {
+    if (text) {
+      box.textContent = text;
+      wrap.classList.remove('vn-personal-note-off');
+    } else {
+      box.textContent = '';
+      wrap.classList.add('vn-personal-note-off');
+    }
+  }
+  return text;
+}
+async function _persistViewingNote(mod, text) {
+  const fid = mod && mod.dataset ? mod.dataset.fixtureId : '';
+  if (!fid || !text) return;
+  try {
+    const resp = await fetch('/api/match/' + encodeURIComponent(fid) + '/viewing-note', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({personal_note: text}),
+    });
+    if (!resp.ok) throw new Error('save failed');
+  } catch (e) { /* still allow save image */ }
+}
+async function applyViewingNoteAndSave(btn, fid) {
+  const mod = btn && btn.closest ? btn.closest('.export-module') : null;
+  const ta = mod && mod.querySelector('.vn-note-input');
+  const text = _sanitizeNoteForExport((ta && ta.value || '').trim());
+  if (!text) {
+    alert('请先填写个人看法（勿含敏感词）');
+    return;
+  }
+  const oldLabel = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '写入并生成…'; }
+  try {
+    const fidUse = (mod && mod.dataset && mod.dataset.fixtureId) || fid || '';
+    if (fidUse) {
+      const resp = await fetch('/api/match/' + encodeURIComponent(fidUse) + '/viewing-note', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({personal_note: text}),
+      });
+      let data = {};
+      try { data = await resp.json(); } catch (e) { /* ignore */ }
+      if (!resp.ok || data.ok === false) {
+        alert('看法保存失败：' + (data.error || ('HTTP ' + resp.status)));
+      }
+    }
+    _syncViewingPersonalNote(mod);
+    await saveModuleImage(btn);
+  } catch (e) {
+    alert('存图失败：' + e);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = oldLabel || '📝 写入个人看法并保存图'; }
+  }
+}
+function _clonePosterForExport(mod) {
+  const poster = _exportPosterNode(mod);
+  if (!poster) return null;
+  _syncViewingPersonalNote(mod);
+  const ta = mod.querySelector('.vn-note-input');
+  const text = _sanitizeNoteForExport((ta && ta.value || '').trim());
+  const clone = poster.cloneNode(true);
+  clone.style.cssText = 'position:fixed;left:-99999px;top:0;z-index:-1;margin:0;transform:none;overflow:visible;';
+  const noteWrap = clone.querySelector('.vn-personal-note');
+  const noteBody = clone.querySelector('.vn-personal-note-body');
+  if (noteWrap && noteBody) {
+    if (text) {
+      noteBody.textContent = text;
+      noteWrap.classList.remove('vn-personal-note-off');
+      noteWrap.style.transform = 'none';
+      noteWrap.style.display = 'block';
+    } else {
+      noteWrap.classList.add('vn-personal-note-off');
+    }
+  }
+  document.body.appendChild(clone);
+  return clone;
+}
+function _exportPosterNode(mod) {
+  const safe = mod.querySelector('.export-poster-safe');
+  if (safe && safe.querySelector('.vn-poster')) return safe.querySelector('.vn-poster');
+  return mod.querySelector('.vn-poster') || safe || mod.querySelector('.export-poster') || mod;
+}
+async function _ensureHtml2Canvas() {
+  if (typeof html2canvas === 'function') return;
+  await new Promise(function(resolve, reject) {
+    var s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+    s.onload = resolve;
+    s.onerror = function() { reject(new Error('html2canvas 加载失败')); };
+    document.head.appendChild(s);
+  });
+}
+</script>
+"""
+
+
+def html_viewing_notes_panel(
+    ctx: dict[str, Any],
+    *,
+    slug: str = "viewing-notes",
+    extra_actions: str = "",
+) -> str:
+    poster = html_viewing_notes_poster(ctx)
+    fid = _e(str(ctx.get("fixture_id") or ""))
+    saved = _e(str(ctx.get("personal_note") or ""))
+    btn = (
+        '<button type="button" class="btn-poster-save export-hide" '
+        'onclick="saveModuleImage(this)">📷 仅保存图片</button>'
+    )
+    apply_btn = (
+        f'<button type="button" class="btn btn-sm export-hide" style="margin-left:8px" '
+        f"onclick=\"applyViewingNoteAndSave(this, '{fid}')\">📝 写入个人看法并保存图</button>"
+    )
+    if extra_actions:
+        btn = f"{btn}{extra_actions}{apply_btn}"
+    else:
+        btn = f"{btn}{apply_btn}"
+    note_form = (
+        f'<div class="vn-note-form export-hide">'
+        f'<label for="vn-note-input-{fid}">我的个人看法（存图时自动净化敏感词）</label>'
+        f'<textarea id="vn-note-input-{fid}" class="vn-note-input" rows="3" maxlength="500" '
+        f'placeholder="例：森保一擅长低位防反，巴西边路压迫值得重点观察…">{saved}</textarea>'
+        f'<div class="vn-note-form-actions">'
+        f'<span class="meta">先填看法 → 点「写入个人看法并保存图」</span>'
+        f"</div></div>"
+    )
+    fifa_meta = ""
+    if ctx.get("fifa_source_url") or ctx.get("sporttery_source_url"):
+        bits = []
+        if ctx.get("fifa_source_url"):
+            bits.append(
+                f'FIFA <a href="{_e(ctx.get("fifa_source_url"))}" target="_blank" rel="noopener">预览</a>'
+            )
+        if ctx.get("sporttery_source_url"):
+            bits.append(
+                f'体彩 <a href="{_e(ctx.get("sporttery_source_url"))}" target="_blank" rel="noopener">伤停</a>'
+            )
+        fifa_meta = f'<span class="meta"> · {" · ".join(bits)}</span>'
+    hint = (
+        '<p class="meta vn-hint export-hide">'
+        "粉彩风 · FIFA 首发/预览 + 体彩伤停射手/风格数据；填看法后存图。"
+        f"{fifa_meta}"
+        "</p>"
+    )
+    return (
+        f'<div class="export-module export-module-poster vn-module" '
+        f'data-export-slug="{_e(slug)}" data-fixture-id="{fid}" data-export-bg="#fff5f8">'
+        f'<div class="export-poster-actions">{btn}{hint}</div>'
+        f"{note_form}"
         f'<div class="export-poster export-poster-safe">{poster}</div>'
         f"</div>"
     )
@@ -1276,6 +2508,9 @@ async function saveModuleImage(btn) {{
     alert('未找到可导出的模块');
     return;
   }}
+  if (mod.classList.contains('vn-module') && typeof _syncViewingPersonalNote === 'function') {{
+    _syncViewingPersonalNote(mod);
+  }}
   const label = btn ? btn.textContent : '';
   if (btn) {{ btn.disabled = true; btn.textContent = '生成中…'; }}
   const slug = mod.dataset.exportSlug || 'module';
@@ -1288,11 +2523,20 @@ async function saveModuleImage(btn) {{
   let target = mod.querySelector('.export-poster-screen') || mod.querySelector('.export-poster') || mod;
   let canvasBackups = [];
   let posterSwap = null;
+  let exportClone = null;
   try {{
+    if (typeof _ensureHtml2Canvas === 'function') await _ensureHtml2Canvas();
+    else if (typeof html2canvas !== 'function') throw new Error('html2canvas 未加载');
     const swapped = _swapPosterForExport(mod);
     if (swapped.target) target = swapped.target;
     posterSwap = swapped.state;
     if (posterSwap) posterSwap.mod = mod;
+    if (mod.classList.contains('vn-module') && typeof _clonePosterForExport === 'function') {{
+      exportClone = _clonePosterForExport(mod);
+      if (exportClone) target = exportClone;
+    }} else if (typeof _exportPosterNode === 'function' && mod.classList.contains('vn-module')) {{
+      target = _exportPosterNode(mod);
+    }}
     canvasBackups = _freezeCanvases(target);
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
     const canvas = await html2canvas(target, {{
@@ -1300,8 +2544,10 @@ async function saveModuleImage(btn) {{
       useCORS: true,
       backgroundColor: _exportBgColor(target),
       logging: false,
-      scrollY: -window.scrollY,
+      scrollY: 0,
       scrollX: 0,
+      windowWidth: target.scrollWidth,
+      windowHeight: target.scrollHeight + 32,
       width: target.scrollWidth,
       height: target.scrollHeight,
     }});
@@ -1312,6 +2558,7 @@ async function saveModuleImage(btn) {{
   }} catch (e) {{
     alert('模块存图失败：' + e);
   }} finally {{
+    if (exportClone && exportClone.parentNode) exportClone.parentNode.removeChild(exportClone);
     _restorePosterSwap(posterSwap);
     _restoreCanvases(canvasBackups);
     if (detailsEl) detailsEl.open = wasOpen;

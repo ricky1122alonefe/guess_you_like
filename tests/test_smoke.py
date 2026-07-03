@@ -1451,9 +1451,10 @@ def test_match_agents_board_and_guardrail_render():
         "external_context",
         "schedule_venue",
         "late_confirmation",
-        "scenario_simulator",
+        "knockout_path",
+        "knockout_motivation",
+        "extra_time_penalty",
         "goal_swing",
-        "cross_group_path",
         "market_consistency",
         "contrarian",
         "memory",
@@ -1476,6 +1477,7 @@ def test_match_agents_board_and_guardrail_render():
     assert "contrarian" in league_ids
     assert "memory" in league_ids
     assert "cross_group_path" not in league_ids
+    assert "knockout_path" not in league_ids
     assert "scenario_simulator" not in league_ids
     assert "cup_standing" not in league_ids
 
@@ -1661,6 +1663,114 @@ def test_match_agents_board_and_guardrail_render():
     )
     card = html_agent_workbench_social_card(social)
     assert "保存抖音总结图" in workbench_html or "saveModuleImage" in workbench_html
+    assert "仅保存图片" in workbench_html or "写入个人看法并保存图" in workbench_html
+    assert "个人看球笔记" in workbench_html
+
+    from share_card import build_viewing_notes_ctx, html_viewing_notes_poster
+
+    vn = build_viewing_notes_ctx(
+        index={"match_name": "挪威VS法国", "kickoff_at": "2026-06-29 14:00:00"},
+        prediction={"result_1x2_cn": "客胜", "likely_scores": ["1-2", "0-2"]},
+        agent_board={
+            "agents": [
+                {"agent_id": "intel", "evidence": ["法国队核心姆巴佩伤疑，挪威反击速度见长"]},
+                {"agent_id": "motivation", "evidence": ["双方已出线，末轮战意偏低"]},
+            ]
+        },
+        chief_report={"analysis": {"summary": "客队实力占优", "result_1x2_cn": "客胜"}},
+        ai_records=[{
+            "analyses": {
+                "ds": {"label": "DeepSeek", "result_1x2_cn": "客胜", "likely_scores": "1-2", "actuary_reasoning": "数据倾向客队"},
+                "ark": {"label": "豆包", "result_1x2_cn": "平局", "likely_scores": "0-0", "actuary_reasoning": "末轮保守"},
+            }
+        }],
+    )
+    vn_card = html_viewing_notes_poster(vn)
+    assert "世界杯战术观赛笔记" in vn_card
+    assert "战意观察" in vn_card
+    assert "近10场" in vn_card
+    assert "挪威" in vn_card and "法国" in vn_card
+    assert "客队实力占优" in vn_card
+    assert "可能比分" not in vn_card
+    assert "球馆" not in vn_card
+    assert "盘口" not in vn_card
+
+    from fifa_preview import align_lineups_for_match, parse_fifa_preview, save_fifa_preview, viewing_notes_fifa_overlay
+
+    sample_page = {
+        "relativeUrl": "/en/tournaments/mens/worldcup/canadamexicousa2026/articles/brazil-japan-live-stream-team-news-tickets",
+        "meta": {"title": "Brazil v Japan preview"},
+        "tags": [
+            {"sourceCategory": "Team", "title": "Brazil", "id": "43924"},
+            {"sourceCategory": "Team", "title": "Japan", "id": "43819"},
+            {"sourceCategory": "Stadium", "title": "Houston Stadium", "id": "400249385"},
+            {"sourceCategory": "Match", "title": "x", "id": "400021516"},
+        ],
+        "sections": [{"entryType": "article", "entryId": "abc"}],
+    }
+    sample_article = {
+        "articleTitle": "Brazil v Japan: team news",
+        "richtext": {
+            "content": [
+                {"nodeType": "heading-3", "content": [{"nodeType": "text", "value": "Round of 32"}]},
+                {"nodeType": "paragraph", "content": [{"nodeType": "text", "value": "Monday, 29 June | Houston Stadium"}]},
+                {"nodeType": "heading-3", "content": [{"nodeType": "text", "value": "The match"}]},
+                {
+                    "nodeType": "paragraph",
+                    "content": [{
+                        "nodeType": "text",
+                        "value": "Vinicius Jr. notching four goals for Brazil. Daichi Kamada scored twice.",
+                    }],
+                },
+                {"nodeType": "heading-4", "content": [{"nodeType": "text", "value": "Brazil possible starting XI"}]},
+                {
+                    "nodeType": "paragraph",
+                    "content": [{"nodeType": "text", "value": "Alisson; Danilo, Marquinhos; Vinicius Junior"}],
+                },
+                {"nodeType": "heading-4", "content": [{"nodeType": "text", "value": "Japan possible starting XI"}]},
+                {
+                    "nodeType": "paragraph",
+                    "content": [{"nodeType": "text", "value": "Z.Suzuki; Kamada, Ueda"}],
+                },
+            ]
+        },
+    }
+    parsed = parse_fifa_preview(sample_page, sample_article, article_path=sample_page["relativeUrl"])
+    assert parsed.get("stadium") == "Houston Stadium"
+    assert "Vinicius" in (parsed.get("lineups_by_team") or {}).get("Brazil", "")
+    aligned = align_lineups_for_match(parsed["lineups_by_team"], "巴西", "日本")
+    assert "Vinicius" in aligned.get("home", "")
+    overlay = viewing_notes_fifa_overlay(parsed, home_cn="巴西", away_cn="日本")
+    home_kp = (overlay.get("team_modules") or {}).get("home", {}).get("key_players") or []
+    assert home_kp
+    assert "Houston" not in str(overlay.get("kickoff_extra") or "") or "休斯顿" in str(overlay.get("kickoff_extra") or "")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        from fifa_translate import localize_fifa_preview
+
+        save_fifa_preview(root, "777", localize_fifa_preview(parsed, home_cn="巴西", away_cn="日本"))
+        vn2 = build_viewing_notes_ctx(
+            index={"match_name": "巴西VS日本", "kickoff_at": "2026-06-29 14:00:00", "fixture_id": "777"},
+            output_root=root,
+            fixture_id="777",
+        )
+        vn2_card = html_viewing_notes_poster(vn2)
+        assert "核心球员" in vn2_card
+        assert "预计首发" in vn2_card
+        assert "休斯顿" in vn2_card or "可能首发" in vn2_card
+
+    from unittest.mock import patch
+    from team_form_search import build_viewing_notes_team_form, search_team_recent_matches
+
+    search_team_recent_matches.cache_clear()
+    with patch("match_agents.web_lookup.search_web") as mock_sw:
+        mock_sw.return_value = ([{
+            "title": "挪威近况",
+            "snippet": "2026-03-20 挪威 2-1 胜 芬兰",
+        }], [])
+        tf = build_viewing_notes_team_form("挪威", "法国", limit=10, use_search=True)
+    assert tf.get("available") or tf["home"].get("count", 0) >= 0
     assert "战意分析" in card
     assert "小组出线" in card
     assert "胜负判断" in card

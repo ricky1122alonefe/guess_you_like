@@ -109,7 +109,22 @@ _MATCH_LINE = re.compile(
 )
 
 
+def _parse_june_2026_day(line: str) -> str | None:
+    m = re.search(
+        r"(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)"
+        r"\s+June\s+(\d{1,2})\b",
+        line,
+        re.I,
+    )
+    if m:
+        return f"2026-06-{int(m.group(1)):02d}"
+    return None
+
+
 def _parse_date_prefix(line: str) -> str | None:
+    june = _parse_june_2026_day(line)
+    if june:
+        return june
     m = re.search(r"(?:Th|Fr|Sa|Su|Tu|Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(\d{1,2}/\d{1,2}/\d{2,4})", line)
     if m:
         raw = m.group(1)
@@ -118,9 +133,6 @@ def _parse_date_prefix(line: str) -> str | None:
                 return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
             except ValueError:
                 continue
-    m = re.search(r"(?:June|Jun)\s+(\d{1,2})", line)
-    if m:
-        return f"2026-06-{int(m.group(1)):02d}"
     return None
 
 
@@ -148,7 +160,12 @@ def load_openfootball_matches() -> list[dict[str, Any]]:
         except Exception as exc:
             log.warning("openfootball %s 下载失败: %s", fname, exc)
             continue
+        current_date: str | None = None
         for line in text.splitlines():
+            day = _parse_june_2026_day(line)
+            if day:
+                current_date = day
+                continue
             m = _MATCH_LINE.search(line)
             if not m:
                 continue
@@ -160,7 +177,7 @@ def load_openfootball_matches() -> list[dict[str, Any]]:
                 continue
             seen.add(key)
             rows.append({
-                "date": _parse_date_prefix(line) or "—",
+                "date": current_date or _parse_date_prefix(line) or "—",
                 "home_raw": home_raw,
                 "away_raw": away_raw,
                 "home_cn": canonical_openfootball_team(home_raw),

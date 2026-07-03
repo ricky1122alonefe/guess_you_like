@@ -128,8 +128,11 @@ AH_STRONG_BIAS = 0.05
 AH_CONFLICT_FORCE_SKIP_ON_HIGH_CONTROL = True
 AH_CONFLICT_DOWNGRADE_CONFIDENCE = True
 
+# ── 赛制阶段 ──────────────────────────────────────────
+TOURNAMENT_PHASE = "knockout"  # group=小组赛 · knockout=淘汰赛（隐藏小组战意/出线页）
+
 # ── 比分预测（全局开关）────────────────────────────────
-SCORE_PREDICTION_ENABLED = False  # False = 不做比分，聚焦竞彩 SP / 让球
+SCORE_PREDICTION_ENABLED = True  # True = 展示推荐比分与比分命中复盘
 
 # ── 相似度加权（比分）────────────────────────────────
 SCORE_SIMILARITY_DECAY = 2.5

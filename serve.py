@@ -77,6 +77,9 @@ _API_SCORE_RE = re.compile(r"^/api/match/(\d+)/score-recommend$")
 _API_SWEET_RE = re.compile(r"^/api/match/(\d+)/sweet-spot$")
 _API_CHAT_RE = re.compile(r"^/api/match/(\d+)/chat-stream$")
 _API_SIMILARITY_AI_RE = re.compile(r"^/api/match/(\d+)/similarity-ai$")
+_API_FIFA_PREVIEW_RE = re.compile(r"^/api/match/(\d+)/fifa-preview$")
+_API_SPORTTERY_INTEL_RE = re.compile(r"^/api/match/(\d+)/sporttery-intel$")
+_API_VIEWING_NOTE_RE = re.compile(r"^/api/match/(\d+)/viewing-note$")
 _daily_ai_lock = threading.Lock()
 _daily_ai_running = False
 
@@ -653,6 +656,7 @@ class Handler(BaseHTTPRequestHandler):
                 growth_report=load_latest_growth_report(root, fid),
                 ai_records=ai_records,
                 deep_records=deep_records,
+                output_root=root,
             ))
             return
 
@@ -795,6 +799,42 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(build_sweet_spot_analysis(pred))
             return
 
+        fpm = _API_FIFA_PREVIEW_RE.match(path)
+        if fpm:
+            fid = fpm.group(1)
+            from fifa_preview import load_fifa_preview
+
+            cached = load_fifa_preview(root, fid)
+            if not cached:
+                self._send_json({"ok": False, "error": "not found"}, 404)
+                return
+            self._send_json({"ok": True, "fixture_id": fid, "preview": cached})
+            return
+
+        stm = _API_SPORTTERY_INTEL_RE.match(path)
+        if stm:
+            fid = stm.group(1)
+            from sporttery_intel import load_sporttery_intel
+
+            cached = load_sporttery_intel(root, fid)
+            if not cached:
+                self._send_json({"ok": False, "error": "not found"}, 404)
+                return
+            self._send_json({"ok": True, "fixture_id": fid, "intel": cached})
+            return
+
+        vnm = _API_VIEWING_NOTE_RE.match(path)
+        if vnm:
+            fid = vnm.group(1)
+            from viewing_note_store import load_viewing_note
+
+            note = load_viewing_note(root, fid)
+            if not note:
+                self._send_json({"ok": False, "error": "not found"}, 404)
+                return
+            self._send_json({"ok": True, "fixture_id": fid, "personal_note": note})
+            return
+
         aps = _API_AGENT_PIPELINE_STREAM_RE.match(path)
         if aps:
             fid = aps.group(1)
@@ -912,6 +952,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send_html(html_share_parlay(build_parlay_share_context(analysis)))
             return
         if path == "/worldcup/groups/final":
+            from product_focus import knockout_phase
+            if knockout_phase():
+                self.send_response(302)
+                self.send_header("Location", "/worldcup")
+                self.end_headers()
+                return
             from analysis.tournament.group_final_copy import (
                 _parse_groups_param,
                 build_group_final_copy_report,
@@ -993,12 +1039,26 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
         if path == "/worldcup/groups/outlook":
+            from product_focus import knockout_phase
+            if knockout_phase():
+                self.send_response(302)
+                self.send_header("Location", "/worldcup")
+                self.end_headers()
+                return
             from analysis.tournament.group_knockout_outlook import build_group_knockout_outlook_report
             qs = parse_qs(urlparse(self.path).query)
             force = qs.get("refresh", ["0"])[0] in ("1", "true", "yes")
             self._send_html(html_group_knockout_outlook(build_group_knockout_outlook_report(force_refresh=force)))
             return
         if path == "/api/worldcup/groups/outlook":
+            from product_focus import knockout_phase
+            if knockout_phase():
+                self._send_json({
+                    "ok": False,
+                    "error": "小组赛已结束",
+                    "redirect": "/worldcup",
+                })
+                return
             from analysis.tournament.group_knockout_outlook import build_group_knockout_outlook_report
             qs = parse_qs(urlparse(self.path).query)
             force = qs.get("refresh", ["0"])[0] in ("1", "true", "yes")
@@ -1376,6 +1436,123 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(report)
             except Exception as exc:
                 log.exception("自我成长 Agent 失败 fid=%s", fid)
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        fpm_post = _API_FIFA_PREVIEW_RE.match(path)
+        if fpm_post:
+            fid = fpm_post.group(1)
+            try:
+                idx = _load_match_index(self.output_root, fid) or {}
+                pred = _load_latest_pred(self.output_root, fid) or {}
+                from share_card import split_teams
+                from fifa_preview import get_or_fetch_fifa_preview
+
+                match_name = str(
+                    idx.get("match_name") or pred.get("match") or pred.get("match_name") or ""
+                )
+                home, away = split_teams(match_name)
+                if not home or not away:
+                    self._send_json({"ok": False, "error": "无法解析主客队名称"}, 400)
+                    return
+                force = qs.get("force", ["0"])[0] in ("1", "true", "yes")
+                preview, logs = get_or_fetch_fifa_preview(
+                    home,
+                    away,
+                    fid,
+                    self.output_root,
+                    force=force,
+                    use_search=True,
+                )
+                if not preview:
+                    self._send_json({
+                        "ok": False,
+                        "error": "未找到 FIFA 官方预览",
+                        "fetch_log": logs,
+                    }, 404)
+                    return
+                self._send_json({
+                    "ok": True,
+                    "fixture_id": fid,
+                    "message": f"已保存 FIFA 预览 · {preview.get('stadium') or '球场待确认'}",
+                    "preview": preview,
+                    "fetch_log": logs,
+                })
+            except Exception as exc:
+                log.exception("FIFA 预览抓取失败 fid=%s", fid)
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        stm_post = _API_SPORTTERY_INTEL_RE.match(path)
+        if stm_post:
+            fid = stm_post.group(1)
+            try:
+                idx = _load_match_index(self.output_root, fid) or {}
+                pred = _load_latest_pred(self.output_root, fid) or {}
+                from share_card import split_teams
+                from sporttery_intel import get_or_fetch_sporttery_intel
+
+                match_name = str(
+                    idx.get("match_name") or pred.get("match") or pred.get("match_name") or ""
+                )
+                home, away = split_teams(match_name)
+                if not home or not away:
+                    self._send_json({"ok": False, "error": "无法解析主客队名称"}, 400)
+                    return
+                force = qs.get("force", ["0"])[0] in ("1", "true", "yes")
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b"{}"
+                try:
+                    body = json.loads(raw.decode("utf-8")) if raw else {}
+                except json.JSONDecodeError:
+                    body = {}
+                st_mid = str(body.get("sporttery_match_id") or qs.get("mid", [""])[0] or "")
+                intel, logs = get_or_fetch_sporttery_intel(
+                    home,
+                    away,
+                    fid,
+                    self.output_root,
+                    prediction=pred,
+                    sporttery_match_id=st_mid,
+                    force=force,
+                )
+                if not intel:
+                    self._send_json({
+                        "ok": False,
+                        "error": "未找到体彩对阵数据",
+                        "fetch_log": logs,
+                    }, 404)
+                    return
+                inj_h = len((intel.get("injury") or {}).get("home", {}).get("injuriesAndSuspensionsList") or [])
+                inj_a = len((intel.get("injury") or {}).get("away", {}).get("injuriesAndSuspensionsList") or [])
+                self._send_json({
+                    "ok": True,
+                    "fixture_id": fid,
+                    "message": f"已保存体彩情报 · 伤停 {inj_h + inj_a} 人",
+                    "intel": intel,
+                    "fetch_log": logs,
+                })
+            except Exception as exc:
+                log.exception("体彩情报抓取失败 fid=%s", fid)
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        vnm_post = _API_VIEWING_NOTE_RE.match(path)
+        if vnm_post:
+            fid = vnm_post.group(1)
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b"{}"
+                payload = json.loads(raw.decode("utf-8"))
+                from viewing_note_store import save_viewing_note
+
+                saved = save_viewing_note(
+                    self.output_root,
+                    fid,
+                    str(payload.get("personal_note") or ""),
+                )
+                self._send_json({"ok": True, **saved})
+            except json.JSONDecodeError:
+                self._send_json({"ok": False, "error": "请求体须为 JSON"}, 400)
+            except Exception as exc:
+                log.exception("保存个人看球笔记失败 fid=%s", fid)
                 self._send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/kelly/calc":

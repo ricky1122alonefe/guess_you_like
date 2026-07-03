@@ -9,6 +9,10 @@ def score_prediction_enabled() -> bool:
     return bool(getattr(cfg, "SCORE_PREDICTION_ENABLED", True))
 
 
+def knockout_phase() -> bool:
+    return getattr(cfg, "TOURNAMENT_PHASE", "group") == "knockout"
+
+
 def strip_score_fields(pred: dict) -> dict:
     """Remove score recommendation artifacts from a prediction dict."""
     if score_prediction_enabled():

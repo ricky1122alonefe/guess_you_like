@@ -10,15 +10,21 @@ from pathlib import Path
 from urllib.parse import quote
 
 from jingcai_pick import final_recommendation_cn
+from product_focus import knockout_phase as _knockout_phase
 from product_focus import score_prediction_enabled as _score_enabled
 from eu_odds_chart import build_eu_multi_chart_data
 from share_card import (
     AI_SUMMARY_POSTER_CSS,
+    VIEWING_NOTES_FONT,
+    VIEWING_NOTES_POSTER_CSS,
     build_agent_workbench_social_ctx,
     build_ai_summary_context,
+    build_viewing_notes_ctx,
     html_agent_workbench_social_panel,
     html_ai_summary_panel,
+    html_viewing_notes_panel,
     long_image_export_script,
+    viewing_notes_panel_script,
 )
 from time_utils import beijing_date, chart_time_label, format_beijing, format_ts, now_beijing_str
 from ui_theme import app_theme_css
@@ -26,6 +32,39 @@ from ui_theme import app_theme_css
 
 def _e(s) -> str:
     return html.escape(str(s) if s is not None else "")
+
+
+def _page_nav(*, extra: str = "", status: str = "", back: bool = False) -> str:
+    """Top navigation — compact during knockout phase."""
+    if _knockout_phase():
+        links = (
+            '<a href="/">首页</a>'
+            ' · <a href="/daily">当日推荐</a>'
+            ' · <a href="/worldcup">世界杯</a>'
+            ' · <a href="/review"><strong>推荐复盘</strong></a>'
+            ' · <a href="/settings/ai">AI 设置</a>'
+        )
+    else:
+        links = (
+            '<a href="/daily">📋 当日 2串1</a>'
+            ' · <a href="/worldcup">🏆 开盘套路</a>'
+            ' · <a href="/worldcup/knockout">⚔️ 淘汰赛分析</a>'
+            ' · <a href="/handicap">📊 亚盘赢盘</a>'
+            ' · <a href="/divergence">⚡ 欧亚分歧</a>'
+            ' · <a href="/quant">📈 量化回测</a>'
+            ' · <a href="/review"><strong>📋 推荐复盘</strong></a>'
+            ' · <a href="/settings/ai">🤖 AI 设置</a>'
+            ' · <a href="/settings/agent-pipeline">🔗 Agent 工作流</a>'
+            ' · <a href="/kelly">🧮 Kelly</a>'
+        )
+    if status:
+        links += f' · 状态 <strong>{_e(status)}</strong>'
+    if extra:
+        links += f" · {extra}"
+    style = 'margin-bottom:8px' if back else 'margin-bottom:14px'
+    tag = "p" if back else "nav"
+    cls = "back page-nav meta" if back else "page-nav meta"
+    return f'<{tag} class="{cls}" style="{style}">{links}</{tag}>'
 
 
 def _json_default(obj):
@@ -1489,7 +1528,7 @@ def html_dashboard(
         finished_rows = "<tr><td colspan='8'>暂无已结算完场（开球 105 分钟后自动抓取赛果）</td></tr>"
 
     wc_teaser = _worldcup_teaser(output_root)
-    div_teaser = _divergence_teaser(output_root)
+    div_teaser = "" if _knockout_phase() else _divergence_teaser(output_root)
     sweet_teaser = _sweet_spot_teaser(
         sweet_day_enriched, kickoff_map, match_date=cycle_day,
     )
@@ -1623,18 +1662,7 @@ def html_dashboard(
 <script>{_AI_BTN_JS}{_AI_CHAT_JS}{_DASH_FILTER_JS}{_PARLAY_JS}</script>
 </head><body>
 <h1 class="text-gradient">⚽ 盘口分析</h1>
-<nav class="page-nav meta" style="margin-bottom:14px">
-  <a href="/daily">📋 当日 2串1</a> · <a href="/worldcup">🏆 开盘套路</a>
-  · <a href="/worldcup/knockout">⚔️ 淘汰赛分析</a>
-  · <a href="/handicap">📊 亚盘赢盘</a>
-  · <a href="/divergence">⚡ 欧亚分歧</a>
-  · <a href="/quant">📈 量化回测</a>
-  · <a href="/review"><strong>📋 推荐复盘</strong></a>
-  · <a href="/settings/ai">🤖 AI 设置</a>
-  · <a href="/settings/agent-pipeline">🔗 Agent 工作流</a>
-  · <a href="/kelly">🧮 Kelly</a>
-  · 状态 <strong>{run_status}</strong>
-</nav>
+{_page_nav(status=run_status)}
 <button class="btn" style="margin-bottom:14px" onclick="fetch('/api/run',{{method:'POST'}}).then(r=>r.json()).then(d=>showToast(d.message||d.error||'已触发', !d.ok))">立即执行一次</button>
 <a class="btn" href="/review" style="margin-bottom:14px;background:#ca8a04">📋 推荐复盘</a>
 {div_teaser}
@@ -2857,6 +2885,7 @@ def html_agent_workbench(
     growth_report: dict | None = None,
     ai_records: list[dict] | None = None,
     deep_records: list[dict] | None = None,
+    output_root: Path | None = None,
 ) -> str:
     fid = str(index.get("fixture_id") or (prediction or {}).get("fixture_id") or "")
     name = index.get("match_name") or (prediction or {}).get("match") or fid
@@ -2898,9 +2927,41 @@ def html_agent_workbench(
         agent_board=board if board else None,
         chief_report=chief if chief else None,
     )
+    viewing_ctx = build_viewing_notes_ctx(
+        index=index,
+        prediction=prediction,
+        agent_board=board if board else None,
+        chief_report=chief if chief else None,
+        ai_records=ai_records,
+        output_root=output_root,
+        fixture_id=fid,
+    )
+    fifa_fetch_btn = ""
+    sporttery_fetch_btn = ""
+    if output_root is not None:
+        fifa_fetch_btn = (
+            f'<button type="button" class="btn btn-sm export-hide" style="margin-left:8px" '
+            f"onclick=\"fetch('/api/match/{_e(fid)}/fifa-preview', {{method:'POST'}})"
+            f".then(r=>r.json()).then(d=>{{"
+            f"showToast(d.message||d.error||'完成', !!d.ok); if(d.ok) location.reload();"
+            f"}})\">⚽ 抓取 FIFA 预览</button>"
+        )
+        sporttery_fetch_btn = (
+            f'<button type="button" class="btn btn-sm export-hide" style="margin-left:8px" '
+            f"onclick=\"fetch('/api/match/{_e(fid)}/sporttery-intel', {{method:'POST'}})"
+            f".then(r=>r.json()).then(d=>{{"
+            f"showToast(d.message||d.error||'完成', !!d.ok); if(d.ok) location.reload();"
+            f"}})\">🏥 抓取体彩伤停/射手</button>"
+        )
     social_panel = html_agent_workbench_social_panel(social_ctx, slug="agent-summary")
+    viewing_panel = html_viewing_notes_panel(
+        viewing_ctx,
+        slug="viewing-notes",
+        extra_actions=f"{fifa_fetch_btn}{sporttery_fetch_btn}",
+    )
     export_fname = re.sub(r"[^\w\u4e00-\u9fff]+", "-", str(name or fid)).strip("-") or f"agent-{fid}"
-    export_script = long_image_export_script(root_id="agent-workbench-export-root", filename=export_fname)
+    export_script = viewing_notes_panel_script()
+    export_script += long_image_export_script(root_id="agent-workbench-export-root", filename=export_fname)
     archive_body = ""
     if has_archive:
         archive_body = f"""
@@ -2922,6 +2983,7 @@ def html_agent_workbench(
 {_growth_agent_panel(growth_report, fid)}"""
     css = _shared_css(
         AI_SUMMARY_POSTER_CSS,
+        VIEWING_NOTES_POSTER_CSS,
         """
 body { max-width: min(1240px, 100%); }
 .workbench-hero { position: relative; overflow: hidden; border: 1px solid rgba(99,102,241,.22);
@@ -3058,8 +3120,8 @@ body { max-width: min(1240px, 100%); }
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>{_e(name)} · 多 Agent 工作台</title>
+{VIEWING_NOTES_FONT}
 <style>{css}</style>
-{export_script}
 <script>{_AI_BTN_JS}
 function switchAiWorkbenchTab(fid, idx) {{
   const root = document.getElementById('ai-tabs-' + fid);
@@ -3072,6 +3134,7 @@ function switchAiWorkbenchTab(fid, idx) {{
   }});
 }}
 </script>
+{export_script}
 </head><body>
 <p class="back page-nav"><a href="/match/{_e(fid)}">← 返回单场</a> · <a href="/">首页</a> · <a href="/settings/agent-pipeline">Agent 工作流</a> · <a href="/daily">当日推荐</a> · <a href="/review">推荐复盘</a></p>
 <section class="workbench-hero">
@@ -3095,11 +3158,16 @@ function switchAiWorkbenchTab(fid, idx) {{
     <a class="btn" style="background:#2563eb" href="/api/match/{_e(fid)}/agent-workflow" target="_blank" rel="noopener">查看 JSON Workflow</a>
   </div>
 </section>
-<div id="agent-workbench-export-root" data-export-base="{_e(export_fname)}" data-export-bg="#0a0c18">
+<div id="agent-workbench-export-root" data-export-base="{_e(export_fname)}" data-export-bg="#fff5f8">
 <section class="card agent-douyin-wrap">
   <h3>📱 抖音总结 · 淘汰赛战意 + 胜负</h3>
   <p class="meta">战意卡片含淘汰赛对阵路径、加时点球概率、保守/激进策略；点「保存抖音总结图」下载 PNG（无水位/盘口/竞彩）。</p>
   {social_panel}
+</section>
+<section class="card vn-wrap">
+  <h3>🎀 个人看球笔记 · 粉彩风存图</h3>
+  <p class="meta">粉彩风笔记：FIFA 译中 + 体彩伤停射手 + 近10场战绩 + 你的个人看法；填看法后点存图。</p>
+  {viewing_panel}
 </section>
 </div>
 {_agent_pipeline_runner_html(fid, str(profile), has_archive=has_archive)}
@@ -3183,6 +3251,16 @@ def _worldcup_teaser(output_root: Path) -> str:
             f" · <a href='/review'>复盘详情</a></p>"
         )
     headline_line = f"<p style='margin:6px 0 0;font-size:15px'>{_e(headline)}</p>" if headline else ""
+    if _knockout_phase():
+        return f"""
+<div class="card" style="border-left:4px solid #2563eb">
+  <p style="margin:0"><a href="/worldcup"><strong>🏆 世界杯 · 完赛复盘</strong></a>
+  · <a href="/review"><strong>📋 推荐复盘</strong></a>
+     <span class="meta"> · {n} 场完赛</span></p>
+  {headline_line}
+  {tier_line}
+  {extra}
+</div>"""
     return f"""
 <div class="card" style="border-left:4px solid #2563eb">
   <p style="margin:0"><a href="/worldcup"><strong>🏆 开盘套路</strong></a>
@@ -3291,7 +3369,8 @@ def _pattern_block(patterns: dict) -> str:
     cards_html = "".join(_conclusion_card_html(c) for c in cards)
 
     if not cards_html and sample == 0:
-        cards_html = '<p class="meta empty-hint">暂无完场样本，小组赛推进后将自动生成结论卡片。</p>'
+        hint = "暂无完场样本，淘汰赛推进后将自动生成结论卡片。" if _knockout_phase() else "暂无完场样本，小组赛推进后将自动生成结论卡片。"
+        cards_html = f'<p class="meta empty-hint">{hint}</p>'
 
     return f"""
 <div class="hero-card">
@@ -3330,13 +3409,13 @@ def _upcoming_watch_html(watch: dict | None) -> str:
                 reason += "；" + "；".join(str(x) for x in m.get("routine_notes")[:2])
             sim = m.get("similar_open") or m.get("similar_live") or "—"
             group_chip = ""
-            if m.get("group"):
+            if not _knockout_phase() and m.get("group"):
                 label = f"{m.get('group')}组"
                 if m.get("group_archetype"):
                     label += f" · {m.get('group_archetype')}"
                 group_chip = f'<span class="chip chip-grp">{_e(label)}</span>'
-            strategy_hint = m.get("group_strategy_hint") or ""
-            state = m.get("group_state_context") or {}
+            strategy_hint = "" if _knockout_phase() else (m.get("group_strategy_hint") or "")
+            state = {} if _knockout_phase() else (m.get("group_state_context") or {})
             motivation_notes = state.get("motivation_notes") or []
             motivation_hint = motivation_notes[0] if state.get("played_matches") and motivation_notes else ""
             secondary = state.get("secondary_signals") or {}
@@ -3434,23 +3513,34 @@ def _upcoming_ai_watch_html(ai: dict | None) -> str:
     for m in (ai.get("match_notes") or [])[:8]:
         fid = m.get("fixture_id") or ""
         match = m.get("match") or fid
+        pick_bits = []
+        if m.get("pick_cn"):
+            pick_bits.append(f"推荐 <strong>{_e(m.get('pick_cn'))}</strong>")
+        if m.get("scores"):
+            pick_bits.append(f"比分 {_e(m.get('scores'))}")
+        pick_line = f"<p class='meta'>{' · '.join(pick_bits)}</p>" if pick_bits else ""
         match_cards += f"""
 <div class="ai-match-note">
   <div class="ai-match-head">
     <a href="/match/{_e(fid)}"><strong>{_e(match)}</strong></a>
     <span class="tag">{_e(m.get('verdict') or '复核')}</span>
   </div>
+  {pick_line}
   <p>{_e(m.get('action') or '')}</p>
   <p class="meta">{_e(m.get('reason') or '')}</p>
   <p class="meta"><strong>风险：</strong>{_e(m.get('risk') or '—')}</p>
 </div>"""
+    group_col = ""
+    if not _knockout_phase():
+        empty_li = '<li class="meta">—</li>'
+        group_col = f"<div><h4>小组/强弱</h4><ul>{group_notes or empty_li}</ul></div>"
     return f"""
 <div class="card ai-watch-card">
   <h3>AI 盘路总结 <span class="tag">{_e(ai.get('ai_provider_label') or 'AI')}</span></h3>
   <p class="ai-headline">{_e(ai.get('headline') or '')}</p>
   <p class="meta">{_e(ai.get('overview') or '')}</p>
   <div class="ai-watch-cols">
-    <div><h4>小组/强弱</h4><ul>{group_notes or '<li class="meta">—</li>'}</ul></div>
+    {group_col}
     <div><h4>投注风控</h4><ul>{betting_notes or '<li class="meta">—</li>'}</ul></div>
   </div>
   <div class="ai-match-grid">{match_cards}</div>
@@ -3553,6 +3643,18 @@ def html_worldcup_ledger(ledger: dict) -> str:
     upcoming_html = _upcoming_watch_html(upcoming_watch)
     pattern_html = _pattern_block(patterns)
     details_html = _ledger_details_block(records, acc, patterns)
+
+    wc_title = "🏆 世界杯 · 淘汰赛复盘" if _knockout_phase() else "🏆 本届世界杯 · 开盘套路"
+    wc_sub = (
+        "单场详情页含淘汰赛对阵分析 · 推荐结论与比分优先展示"
+        if _knockout_phase()
+        else "结论由完场赛果 + 初/终盘自动归纳"
+    )
+    knockout_link = (
+        ""
+        if _knockout_phase()
+        else '<p><a class="btn" href="/worldcup/knockout">⚔️ 淘汰赛分析 · 对阵路径/加时点球</a></p>'
+    )
 
     wc_css = _shared_css("""
 .card, .hero-card { border-radius: 12px; padding: clamp(14px, 3vw, 20px) clamp(14px, 3vw, 24px); }
@@ -3713,7 +3815,7 @@ function analyzeWorldcupMatch(fid, btn) {{
 }}
 </script>
 </head><body>
-<p class="back page-nav"><a href="/">← 返回首页</a> · <a href="/daily">当日推荐</a> · <a href="/handicap">亚盘赢盘</a> · <a href="/quant">量化回测</a> · <a href="/kelly">Kelly</a></p>
+{_page_nav(back=True)}
 
 <div class="card toolbar">
   <button class="btn" onclick="refreshLedger()">刷新</button>
@@ -3725,9 +3827,9 @@ function analyzeWorldcupMatch(fid, btn) {{
 
 <div id="worldcup-export-root">
   <div class="export-hero">
-    <h1 class="text-gradient">🏆 本届世界杯 · 开盘套路</h1>
-    <p class="meta">结论由完场赛果 + 初/终盘自动归纳 · 更新 {_e(updated)}</p>
-    <p><a class="btn" href="/worldcup/knockout">⚔️ 淘汰赛分析 · 对阵路径/加时点球</a></p>
+    <h1 class="text-gradient">{wc_title}</h1>
+    <p class="meta">{wc_sub} · 更新 {_e(updated)}</p>
+    {knockout_link}
   </div>
 
 {upcoming_html}
@@ -6729,7 +6831,9 @@ def html_match_detail(
         src_bits.append("推荐来自文件")
     last_ts = format_ts(index.get("updated_at") or (timeline[-1].get("ts") if timeline else None))
     freshness = f"<p class='meta freshness'>{' · '.join(src_bits)} · 最新 {_e(last_ts)} · 北京时间</p>"
-    qual_banner = _wrap_export_module("qual", _qualification_divergence_banner(prediction))
+    qual_banner = ""
+    if not _knockout_phase():
+        qual_banner = _wrap_export_module("qual", _qualification_divergence_banner(prediction))
     tier_banner = _wrap_export_module("tier", _buy_tier_banner(prediction))
 
     jingcai_card = _jingcai_card(_latest_jingcai(timeline), prediction)
@@ -7002,6 +7106,32 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
     )
     ai_summary_panel = html_ai_summary_panel(summary_ctx)
 
+    agent_workflow_fold = ""
+    agent_board_fold = ""
+    if _knockout_phase():
+        if agent_workflow_card:
+            agent_workflow_fold = _fold("Agent 工作流", agent_workflow_card, muted=True, export_slug="agent-workflow")
+        if agent_board_card:
+            agent_board_fold = _fold("专家证据板", agent_board_card, muted=True, export_slug="agent-board")
+        agent_workflow_card = ""
+        agent_board_card = ""
+
+    agents_btn = (
+        ""
+        if _knockout_phase()
+        else f'<a class="btn" style="background:#4f46e5" href="/match/{_e(fid)}/agents">多 Agent 工作台</a>'
+    )
+    kelly_btn = (
+        ""
+        if _knockout_phase()
+        else f'<a class="btn" style="background:#2563eb" href="/kelly?fixture_id={_e(fid)}">🧮 Kelly</a>'
+    )
+    meta_hint = (
+        "优先看下方<strong>推荐结论</strong>与<strong>比分推荐</strong>；需要时可展开盘口走势与历史记录。"
+        if _knockout_phase()
+        else "「AI 分析 &amp; 总结」点 <strong>📷 保存推荐图</strong> 下载 PNG（存图时自动隐藏竞彩/SP/免责声明等敏感字样，适合发抖音）；页面上仍可见完整分析。"
+    )
+
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head>
 <meta charset="utf-8"/>
@@ -7014,41 +7144,43 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
 </style>
 <script>{_AI_BTN_JS}{_AI_CHAT_JS}</script>
 </head><body>
-<p class="back page-nav"><a href="/">← 返回首页</a> · <a href="/daily">当日推荐</a> · <a href="/handicap">亚盘赢盘</a> · <a href="/quant">量化回测</a> · <a href="/kelly">Kelly</a></p>
+{_page_nav(back=True)}
 <p class="action-bar">
   <button type="button" class="btn btn-ai" data-label="✨ AI 推荐本场"
     onclick="aiRecommend('{_e(fid)}', this)">✨ AI 推荐本场</button>
   {deep_btn}
   <button type="button" class="btn" style="background:#9333ea" data-label="多 Agent 总分析"
     onclick="aiChiefAnalyze('{_e(fid)}', this)">多 Agent 总分析</button>
-  <a class="btn" style="background:#4f46e5" href="/match/{_e(fid)}/agents">多 Agent 工作台</a>
+  {agents_btn}
   <button type="button" class="btn" style="background:#64748b" onclick="savePageLongImage(this)">📷 整页长图（可选）</button>
-  <a class="btn" href="/share/match/{_e(fid)}" target="_blank" rel="noopener">📷 朋友圈分享图</a>
-  <a class="btn" style="background:#2563eb" href="/kelly?fixture_id={_e(fid)}">🧮 Kelly</a>
+  <a class="btn" href="/share/match/{_e(fid)}" target="_blank" rel="noopener">📷 分享图</a>
+  {kelly_btn}
   <span class="tag">{len(timeline)} 快照</span>
   <span class="tag">{len(changes)} 变动</span>
 </p>
-<p class="meta">「AI 分析 &amp; 总结」点 <strong>📷 保存推荐图</strong> 下载 PNG（存图时自动隐藏竞彩/SP/免责声明等敏感字样，适合发抖音）；页面上仍可见完整分析。</p>
+<p class="meta">{meta_hint}</p>
 
 <div id="match-export-root" data-export-base="{_e(export_fname)}">
 {export_hero}
+{settled_card}
+<div class="rec-grid">
+  {pred_card}
+  {score_rec_panel}
+</div>
+{chief_agent_card}
+{deep_card}
 {ai_summary_panel}
 {qual_banner}
 {tier_banner}
-{settled_card}
 {_ai_chat_card(scope="match", fid=fid)}
 {strategy_panel}
 {sweet_spot_panel}
-{score_rec_panel}
 {quant_panel}
 {agent_workflow_card}
-{chief_agent_card}
 {agent_board_card}
-{deep_card}
-<div class="rec-grid">
-  {pred_card}
-  {ah_card}
-</div>
+{agent_workflow_fold}
+{agent_board_fold}
+{ah_card}
 <div class="fold-stack">
 {market_fold}
 {charts_fold}

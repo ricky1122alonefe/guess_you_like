@@ -1,0 +1,451 @@
+{
+  "source_url": "https://www.footymetrics.com/referees/33287-adham-mohammad-tumah-makhadmeh",
+  "referee_id": "33287-adham-mohammad-tumah-makhadmeh",
+  "summary": {
+    "matches": 20,
+    "by_competition": [
+      {
+        "league": "26",
+        "matches": "2",
+        "yellow_cards": "4",
+        "red_cards": "0",
+        "fouls": "28",
+        "penalties": "0"
+      },
+      {
+        "league": "World Cup",
+        "matches": "2",
+        "yellow_cards": "4(2.00)",
+        "red_cards": "0(0.00)",
+        "fouls": "28(14.0)",
+        "penalties": "0"
+      },
+      {
+        "league": "2025",
+        "matches": "1",
+        "yellow_cards": "0",
+        "red_cards": "0",
+        "fouls": "10",
+        "penalties": "0"
+      },
+      {
+        "league": "FIFA Intercontinental Cup",
+        "matches": "1",
+        "yellow_cards": "0(0.00)",
+        "red_cards": "0(0.00)",
+        "fouls": "10(10.0)",
+        "penalties": "0"
+      },
+      {
+        "league": "25/26",
+        "matches": "5",
+        "yellow_cards": "31",
+        "red_cards": "2",
+        "fouls": "117",
+        "penalties": "1"
+      },
+      {
+        "league": "UAE Pro League",
+        "matches": "1",
+        "yellow_cards": "7(7.00)",
+        "red_cards": "1(1.00)",
+        "fouls": "25(25.0)",
+        "penalties": "0"
+      },
+      {
+        "league": "AFC Champions League Elite",
+        "matches": "4",
+        "yellow_cards": "24(6.00)",
+        "red_cards": "1(0.25)",
+        "fouls": "92(23.0)",
+        "penalties": "1"
+      },
+      {
+        "league": "25",
+        "matches": "2",
+        "yellow_cards": "12",
+        "red_cards": "0",
+        "fouls": "41",
+        "penalties": "1"
+      },
+      {
+        "league": "Super League",
+        "matches": "2",
+        "yellow_cards": "12(6.00)",
+        "red_cards": "0(0.00)",
+        "fouls": "41(20.5)",
+        "penalties": "1"
+      },
+      {
+        "league": "24",
+        "matches": "1",
+        "yellow_cards": "5",
+        "red_cards": "0",
+        "fouls": "25",
+        "penalties": "1"
+      },
+      {
+        "league": "Super League",
+        "matches": "1",
+        "yellow_cards": "5(5.00)",
+        "red_cards": "0(0.00)",
+        "fouls": "25(25.0)",
+        "penalties": "1"
+      },
+      {
+        "league": "2023",
+        "matches": "1",
+        "yellow_cards": "5",
+        "red_cards": "0",
+        "fouls": "29",
+        "penalties": "0"
+      },
+      {
+        "league": "AFC Asian Cup",
+        "matches": "1",
+        "yellow_cards": "5(5.00)",
+        "red_cards": "0(0.00)",
+        "fouls": "29(29.0)",
+        "penalties": "0"
+      },
+      {
+        "league": "24/25",
+        "matches": "8",
+        "yellow_cards": "32",
+        "red_cards": "1",
+        "fouls": "213",
+        "penalties": "4"
+      },
+      {
+        "league": "AFC Champions League Elite",
+        "matches": "8",
+        "yellow_cards": "32(4.00)",
+        "red_cards": "1(0.13)",
+        "fouls": "213(26.6)",
+        "penalties": "4"
+      },
+      {
+        "league": "2026",
+        "matches": "8",
+        "yellow_cards": "18",
+        "red_cards": "1",
+        "fouls": "149",
+        "penalties": "3"
+      },
+      {
+        "league": "WC Qualification Asia",
+        "matches": "8",
+        "yellow_cards": "18(2.25)",
+        "red_cards": "1(0.13)",
+        "fouls": "149(18.6)",
+        "penalties": "3"
+      },
+      {
+        "league": "23/24",
+        "matches": "8",
+        "yellow_cards": "32",
+        "red_cards": "1",
+        "fouls": "199",
+        "penalties": "5"
+      },
+      {
+        "league": "AFC Champions League Elite",
+        "matches": "8",
+        "yellow_cards": "32(4.00)",
+        "red_cards": "1(0.13)",
+        "fouls": "199(24.9)",
+        "penalties": "5"
+      },
+      {
+        "league": "22",
+        "matches": "7",
+        "yellow_cards": "17",
+        "red_cards": "0",
+        "fouls": "139",
+        "penalties": "0"
+      },
+      {
+        "league": "AFC Champions League Elite",
+        "matches": "7",
+        "yellow_cards": "17(2.43)",
+        "red_cards": "0(0.00)",
+        "fouls": "139(19.9)",
+        "penalties": "0"
+      },
+      {
+        "league": "21",
+        "matches": "1",
+        "yellow_cards": "2",
+        "red_cards": "0",
+        "fouls": "24",
+        "penalties": "0"
+      },
+      {
+        "league": "AFC Champions League Elite",
+        "matches": "1",
+        "yellow_cards": "2(2.00)",
+        "red_cards": "0(0.00)",
+        "fouls": "24(24.0)",
+        "penalties": "0"
+      },
+      {
+        "league": "2022",
+        "matches": "6",
+        "yellow_cards": "11",
+        "red_cards": "0",
+        "fouls": "116",
+        "penalties": "4"
+      },
+      {
+        "league": "WC Qualification Asia",
+        "matches": "6",
+        "yellow_cards": "11(1.83)",
+        "red_cards": "0(0.00)",
+        "fouls": "116(19.3)",
+        "penalties": "4"
+      }
+    ]
+  },
+  "records": [
+    {
+      "date": "27 Jun",
+      "match_raw": "NZL1-5BEL",
+      "home_team": "NZL",
+      "home_score": 1,
+      "away_score": 5,
+      "away_team": "BEL",
+      "yellow_cards": 2,
+      "red_cards": 0,
+      "fouls": 17,
+      "penalties": 0
+    },
+    {
+      "date": "15 Jun",
+      "match_raw": "ESP0-0CPV",
+      "home_team": "ESP",
+      "home_score": 0,
+      "away_score": 0,
+      "away_team": "CPV",
+      "yellow_cards": 2,
+      "red_cards": 0,
+      "fouls": 11,
+      "penalties": 0
+    },
+    {
+      "date": "17 Apr",
+      "match_raw": "AHL2-1JDT",
+      "home_team": "AHL",
+      "home_score": 2,
+      "away_score": 1,
+      "away_team": "JDT",
+      "yellow_cards": 9,
+      "red_cards": 1,
+      "fouls": 25,
+      "penalties": 0
+    },
+    {
+      "date": "10 Feb",
+      "match_raw": "ITT7-0GHA",
+      "home_team": "ITT",
+      "home_score": 7,
+      "away_score": 0,
+      "away_team": "GHA",
+      "yellow_cards": 3,
+      "red_cards": 0,
+      "fouls": 23,
+      "penalties": 0
+    },
+    {
+      "date": "5 Nov",
+      "match_raw": "JDT3-1SHS",
+      "home_team": "JDT",
+      "home_score": 3,
+      "away_score": 1,
+      "away_team": "SHS",
+      "yellow_cards": 6,
+      "red_cards": 0,
+      "fouls": 24,
+      "penalties": 1
+    },
+    {
+      "date": "18 Oct",
+      "match_raw": "AWA2-1ANA",
+      "home_team": "AWA",
+      "home_score": 2,
+      "away_score": 1,
+      "away_team": "ANA",
+      "yellow_cards": 7,
+      "red_cards": 1,
+      "fouls": 25,
+      "penalties": 0
+    },
+    {
+      "date": "14 Oct",
+      "match_raw": "KSA0-0IRQ",
+      "home_team": "KSA",
+      "home_score": 0,
+      "away_score": 0,
+      "away_team": "IRQ",
+      "yellow_cards": 6,
+      "red_cards": 0,
+      "fouls": 26,
+      "penalties": 0
+    },
+    {
+      "date": "30 Sep",
+      "match_raw": "ITT0-1SHA",
+      "home_team": "ITT",
+      "home_score": 0,
+      "away_score": 1,
+      "away_team": "SHA",
+      "yellow_cards": 6,
+      "red_cards": 0,
+      "fouls": 20,
+      "penalties": 0
+    },
+    {
+      "date": "14 Sep",
+      "match_raw": "PFC3-0ACI",
+      "home_team": "PFC",
+      "home_score": 3,
+      "away_score": 0,
+      "away_team": "ACI",
+      "yellow_cards": 0,
+      "red_cards": 0,
+      "fouls": 10,
+      "penalties": 0
+    },
+    {
+      "date": "31 Aug",
+      "match_raw": "SHL6-0BEI",
+      "home_team": "SHL",
+      "home_score": 6,
+      "away_score": 0,
+      "away_team": "BEI",
+      "yellow_cards": 7,
+      "red_cards": 0,
+      "fouls": 23,
+      "penalties": 0
+    },
+    {
+      "date": "24 Aug",
+      "match_raw": "SHA1-1TIA",
+      "home_team": "SHA",
+      "home_score": 1,
+      "away_score": 1,
+      "away_team": "TIA",
+      "yellow_cards": 5,
+      "red_cards": 0,
+      "fouls": 18,
+      "penalties": 1
+    },
+    {
+      "date": "5 Jun",
+      "match_raw": "KOR2-2KGZ",
+      "home_team": "KOR",
+      "home_score": 2,
+      "away_score": 2,
+      "away_team": "KGZ",
+      "yellow_cards": 3,
+      "red_cards": 0,
+      "fouls": 21,
+      "penalties": 0
+    },
+    {
+      "date": "29 Apr",
+      "match_raw": "ALH1-3AHL",
+      "home_team": "ALH",
+      "home_score": 1,
+      "away_score": 3,
+      "away_team": "AHL",
+      "yellow_cards": 11,
+      "red_cards": 1,
+      "fouls": 32,
+      "penalties": 1
+    },
+    {
+      "date": "20 Mar",
+      "match_raw": "AUS5-1IDN",
+      "home_team": "AUS",
+      "home_score": 5,
+      "away_score": 1,
+      "away_team": "IDN",
+      "yellow_cards": 0,
+      "red_cards": 0,
+      "fouls": 24,
+      "penalties": 2
+    },
+    {
+      "date": "11 Mar",
+      "match_raw": "ALH4-0PAK",
+      "home_team": "ALH",
+      "home_score": 4,
+      "away_score": 0,
+      "away_team": "PAK",
+      "yellow_cards": 3,
+      "red_cards": 0,
+      "fouls": 24,
+      "penalties": 1
+    },
+    {
+      "date": "18 Feb",
+      "match_raw": "JDT5-2PST",
+      "home_team": "JDT",
+      "home_score": 5,
+      "away_score": 2,
+      "away_team": "PST",
+      "yellow_cards": 3,
+      "red_cards": 0,
+      "fouls": 32,
+      "penalties": 1
+    },
+    {
+      "date": "3 Dec",
+      "match_raw": "ALH3-0GHA",
+      "home_team": "ALH",
+      "home_score": 3,
+      "away_score": 0,
+      "away_team": "GHA",
+      "yellow_cards": 2,
+      "red_cards": 0,
+      "fouls": 18,
+      "penalties": 0
+    },
+    {
+      "date": "25 Nov",
+      "match_raw": "AIN1-2AHL",
+      "home_team": "AIN",
+      "home_score": 1,
+      "away_score": 2,
+      "away_team": "AHL",
+      "yellow_cards": 7,
+      "red_cards": 0,
+      "fouls": 32,
+      "penalties": 0
+    },
+    {
+      "date": "14 Nov",
+      "match_raw": "BHR0-1CHN",
+      "home_team": "BHR",
+      "home_score": 0,
+      "away_score": 1,
+      "away_team": "CHN",
+      "yellow_cards": 3,
+      "red_cards": 1,
+      "fouls": 23,
+      "penalties": 0
+    },
+    {
+      "date": "5 Nov",
+      "match_raw": "JDT3-0UHD",
+      "home_team": "JDT",
+      "home_score": 3,
+      "away_score": 0,
+      "away_team": "UHD",
+      "yellow_cards": 2,
+      "red_cards": 0,
+      "fouls": 23,
+      "penalties": 0
+    }
+  ]
+}

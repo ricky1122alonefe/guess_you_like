@@ -45,15 +45,13 @@ def test_jingcai_league_map_has_asian():
 
 
 def test_nav_no_worldcup_main():
-    """导航主链不含世界杯（在「更多」折叠内）。"""
+    """导航主链只有首页/当日推荐/复盘，无世界杯/更多。"""
     from web_ui import _page_nav
     html = _page_nav()
-    # 世界杯应在 <details> 内，不在主链
     assert "首页" in html
-    assert "当日推荐" in html or "复盘" in html
-    assert "更多" in html
-    # 世界杯链接在 details 内
-    assert "worldcup" in html  # 存在但在折叠区
+    assert "复盘" in html
+    assert "worldcup" not in html  # 世界杯不进导航
+    assert "更多" not in html  # 不再有更多折叠
 
 
 def test_dashboard_title_no_worldcup():

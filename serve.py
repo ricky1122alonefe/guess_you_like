@@ -1968,8 +1968,28 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 from poll_500 import poll_single_fixture
                 idx_new = poll_single_fixture(fid, output_root=self.output_root)
-                ticks = len(idx_new.get("timeline") or []) if idx_new else 0
-                self._send_json({"ok": True, "ticks": ticks})
+                if not idx_new:
+                    self._send_json({"ok": False, "error": "补抓失败：无返回数据"}, 500)
+                    return
+                tl = idx_new.get("timeline") or []
+                # 检查是否有有效 tick（eu/ah 非空）
+                valid_ticks = [t for t in tl if t.get("odds", {}).get("eu_home") or t.get("odds", {}).get("ah_line") is not None]
+                if not valid_ticks and tl:
+                    self._send_json({"ok": False, "error": "补抓完成但欧亚盘口为空（500 可能未开售该场）", "ticks": len(tl)}, 200)
+                    return
+                # 重算 result_prediction
+                eu_h = ah_line = None
+                if valid_ticks:
+                    odds = valid_ticks[-1].get("odds", {})
+                    eu_h = odds.get("eu_home")
+                    ah_line = odds.get("ah_line")
+                self._send_json({
+                    "ok": True,
+                    "ticks": len(valid_ticks),
+                    "eu_home": eu_h,
+                    "ah_line": ah_line,
+                    "reload": True,
+                })
             except Exception as exc:
                 log.exception("单场补抓失败 fid=%s", fid)
                 self._send_json({"ok": False, "error": str(exc)}, 500)

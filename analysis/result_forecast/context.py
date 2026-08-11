@@ -38,11 +38,21 @@ def _implied_probs(home: float, draw: float, away: float) -> dict[str, float]:
 
 # ============ odds 合并：timeline + prediction 回落 ============
 
+def _is_valid_tick(tick: dict) -> bool:
+    """有效 tick：至少有 eu_home+eu_away 或 ah_line。"""
+    odds = tick.get("odds") or tick
+    eu_h = _safe_float(odds.get("eu_home"))
+    eu_a = _safe_float(odds.get("eu_away"))
+    ah = odds.get("ah_line")
+    ah_ok = ah is not None and str(ah).strip() not in ("", "None", "null")
+    return (eu_h is not None and eu_a is not None) or ah_ok
+
+
 def _from_tick(timeline: list[dict]) -> dict | None:
-    """从 timeline 取最新一个有效 tick 的 odds。"""
+    """从 timeline 取最新一个有效 tick 的 odds（跳过无效/空壳 tick）。"""
     for point in reversed(timeline):
-        odds = point.get("odds") or {}
-        if odds.get("eu_home") or odds.get("ah_line") is not None or odds.get("betfair"):
+        if _is_valid_tick(point):
+            odds = point.get("odds") or point
             return odds
     return None
 
@@ -389,7 +399,6 @@ def _extract_recent_form(match_name: str) -> dict | None:
     # 2. club_form（联赛队，从 PG match_results）
     try:
         from analysis.team_form.club_form import build_club_form
-        # 从 match_name 拆主客队
         parts = match_name.replace(" VS ", " vs ").replace(" Vs ", " vs ").split(" vs ")
         if len(parts) == 2:
             home_team, away_team = parts[0].strip(), parts[1].strip()
@@ -420,6 +429,10 @@ def _extract_recent_form(match_name: str) -> dict | None:
                     },
                     "source": "club_form",
                 }
+            elif cf and cf.get("missing"):
+                # 有 missing_reason 但无实际战绩 → 仍返回 None（让 missing 进 list）
+                # 但把 reason 存到 context 供 UI 使用
+                log.debug("club_form missing: %s", cf["missing"])
     except Exception as exc:
         log.debug("club_form failed: %s", exc)
 
@@ -453,15 +466,20 @@ def build_result_forecast_context(
             log.warning("load_match_index failed: %s", exc)
             index = None
 
-    # 若 index 来自文件、DB 有 tick：强制合并 DB timeline
-    if index and not index.get("timeline"):
-        try:
-            from db_timeline import load_match_index_from_db
-            db_idx = load_match_index_from_db(fixture_id)
-            if db_idx and db_idx.get("timeline"):
-                index["timeline"] = db_idx["timeline"]
-        except Exception:
-            pass
+    # 若 index 的 timeline 无有效 tick：强制合并 DB timeline
+    if index:
+        file_tl = index.get("timeline") or []
+        has_valid = any(_is_valid_tick(t) for t in file_tl)
+        if not has_valid:
+            try:
+                from db_timeline import load_match_index_from_db
+                db_idx = load_match_index_from_db(fixture_id)
+                if db_idx and db_idx.get("timeline"):
+                    db_tl = db_idx["timeline"]
+                    if any(_is_valid_tick(t) for t in db_tl):
+                        index["timeline"] = db_tl
+            except Exception:
+                pass
 
     if not index:
         # 最后回落：只用 prediction
@@ -503,6 +521,20 @@ def build_result_forecast_context(
     if not recent:
         missing.append("recent_form")
 
+    # 尝试获取 missing_reason 供 UI 展示
+    recent_missing_reason = ""
+    if not recent:
+        try:
+            from analysis.team_form.club_form import build_club_form
+            parts = match_name.replace(" VS ", " vs ").replace(" Vs ", " vs ").split(" vs ")
+            if len(parts) == 2:
+                home_team, away_team = parts[0].strip(), parts[1].strip()
+                cf = build_club_form(home_team, away_team)
+                if cf and cf.get("missing"):
+                    recent_missing_reason = f"库无历史：{home_team}/{away_team} 未映射或无赛果"
+        except Exception:
+            pass
+
     return {
         "fixture_id": fixture_id,
         "match_name": match_name,
@@ -511,5 +543,6 @@ def build_result_forecast_context(
         "betfair": betfair,
         "history_similar": history,
         "recent_form": recent,
+        "recent_missing_reason": recent_missing_reason,
         "missing": missing,
     }

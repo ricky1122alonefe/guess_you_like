@@ -238,10 +238,13 @@ def forecast(context: dict[str, Any]) -> dict[str, Any]:
         return _skip_result(context, f"最高概率{best_pct:.0%}低于阈值{skip_threshold:.0%}，建议观望")
 
     # confidence
-    if best_pct >= HIGH_CONFIDENCE and not divergence:
+    has_market = bool(context.get("european") or context.get("asian"))
+    if best_pct >= HIGH_CONFIDENCE and not divergence and has_market:
         confidence = "high"
     elif divergence:
         confidence = "low"
+    elif not has_market:
+        confidence = "low"  # 仅历史/战绩，缺盘口 → 降级
     elif best_pct >= skip_threshold + 0.05:
         confidence = "mid"
     else:
@@ -250,6 +253,8 @@ def forecast(context: dict[str, Any]) -> dict[str, Any]:
     reasons = _build_reasons(context, fused, source_probs)
     if divergence:
         reasons.append(f"⚠ {divergence}，置信度降级")
+    if not has_market:
+        reasons.append("⚠ 仅历史相似/战绩，缺盘口验证；请补抓欧亚")
 
     return {
         "pick": best,
@@ -266,6 +271,7 @@ def forecast(context: dict[str, Any]) -> dict[str, Any]:
             "betfair": context.get("betfair"),
             "history_similar": context.get("history_similar"),
             "recent_form": context.get("recent_form"),
+            "recent_missing_reason": context.get("recent_missing_reason", ""),
         },
         "missing": missing,
         "weights": norm_weights,
@@ -288,6 +294,7 @@ def _skip_result(context: dict, reason: str) -> dict:
             "betfair": context.get("betfair"),
             "history_similar": context.get("history_similar"),
             "recent_form": context.get("recent_form"),
+            "recent_missing_reason": context.get("recent_missing_reason", ""),
         },
         "missing": context.get("missing") or [],
         "weights": {},

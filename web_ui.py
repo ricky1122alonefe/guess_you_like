@@ -37,27 +37,13 @@ def _e(s) -> str:
 
 
 def _page_nav(*, extra: str = "", status: str = "", back: bool = False) -> str:
-    """Top navigation — 主链三页 + 更多折叠。"""
+    """Top navigation — 主链只留首页 · 复盘。"""
     main_links = (
         '<a href="/">首页</a>'
         ' · <a href="/daily">当日推荐</a>'
         ' · <a href="/review">复盘</a>'
     )
-    more_links = (
-        '<a href="/worldcup">世界杯</a>'
-        ' · <a href="/worldcup/knockout">淘汰赛</a>'
-        ' · <a href="/handicap">亚盘赢盘</a>'
-        ' · <a href="/divergence">欧亚分歧</a>'
-        ' · <a href="/quant">量化回测</a>'
-        ' · <a href="/kelly">Kelly</a>'
-        ' · <a href="/settings/ai">AI 设置</a>'
-        ' · <a href="/settings/agent-pipeline">Agent 工作流</a>'
-    )
-    links = (
-        f'{main_links}'
-        ' · <details style="display:inline"><summary style="cursor:pointer;display:inline;color:#60a5fa">更多 ▾</summary>'
-        f'<span style="margin-left:8px">{more_links}</span></details>'
-    )
+    links = main_links
     if status:
         links += f' · 状态 <strong>{_e(status)}</strong>'
     if extra:
@@ -6896,10 +6882,16 @@ def _form_card(match_name: str, prediction: dict | None) -> str:
     rf = (rp.get("factors") or {}).get("recent_form")
 
     if not rf:
+        missing_reason = ""
+        rp_full = (prediction or {}).get("result_prediction") or {}
+        # 从 context 获取 missing_reason
+        ctx_missing_reason = rp_full.get("factors", {}).get("recent_missing_reason") if rp_full else ""
+        if ctx_missing_reason:
+            missing_reason = ctx_missing_reason
         return (
             '<div class="card" style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0">'
             '<h3 style="margin:0 0 6px">📋 近期战绩</h3>'
-            '<p class="meta">联赛近况未接入（不影响预测）</p>'
+            f'<p class="meta">{_e(missing_reason or "库无历史赛果")}</p>'
             '</div>'
         )
 
@@ -7021,7 +7013,11 @@ def _result_forecast_card(prediction):
         sp = f"SP {pred_jc.get('sp_home','—')}/{pred_jc.get('sp_draw','—')}/{pred_jc.get('sp_away','—')}"
         jc_hint = f'<p class="meta" style="font-size:12px">竞彩可购：{sp}</p>'
     else:
-        jc_hint = '<p class="meta" style="font-size:12px;color:#888">无 SP · 仍可用欧亚分析</p>'
+        has_eu = bool((rp.get("factors") or {}).get("european"))
+        if has_eu:
+            jc_hint = '<p class="meta" style="font-size:12px;color:#888">无 SP · 仍可用欧亚分析</p>'
+        else:
+            jc_hint = '<p class="meta" style="font-size:12px;color:#888">无 SP · 亦无欧亚盘口</p>'
 
     # G2: 只显示参与融合的源权重
     weights = rp.get("weights") or {}
@@ -7444,7 +7440,7 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
     # 折叠旧推荐/比分/深度/AI总结/质量/档位/亚盘详情
     pred_score_fold = _fold(
         "旧推荐 · 比分推荐（展开）",
-        f'<div class="rec-grid">{pred_card}{score_rec_panel}</div>',
+        f'<div class="rec-grid">{pred_card}{score_rec_panel}</div>' if (pred_card or score_rec_panel) else "",
         muted=True,
     )
     deep_fold_card = _fold("深度 AI 分析", deep_card, muted=True) if deep_card else ""
@@ -7458,7 +7454,6 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>{_e(name)} · 趋势</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 {export_script}
 <style>
 {match_css}
@@ -7484,64 +7479,16 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
 {result_forecast_card}
 {ai_payload_card}
 <div class="fold-stack">
-{pred_score_fold}
-{market_fold}
-{extra_buttons_fold}
-{agent_extra_fold}
-{chief_agent_card}
-{agent_workflow_fold}
-{agent_board_fold}
-{deep_fold_card}
-{ai_summary_fold}
-{qual_fold}
-{tier_fold}
-{strategy_fold}
-{ah_detail_fold}
-{charts_fold}
-{bf_fold}
 {changes_fold}
 {snapshot_fold}
-{similar_fold}
-{ai_fold}
-{deep_fold}
-{team_form_fold}
 </div>
   <p class="export-footer">公益体彩 量力而行 · 仅供参考 不构成投注建议 · 最新 {_e(last_ts)}</p>
 </div>
 
 <script>
 const D = {chart_data};
-function lineChart(id, datasets, title) {{
-  new Chart(document.getElementById(id), {{
-    type: 'line',
-    data: {{ labels: D.labels, datasets }},
-    options: {{
-      responsive: true,
-      plugins: {{ legend: {{ position: 'bottom' }} }},
-      scales: {{ y: {{ beginAtZero: false }} }}
-    }}
-  }});
-}}
-lineChart('euChart', [
-  {{ label: '主胜', data: D.eu_h, borderColor: '#2563eb', tension: 0.2 }},
-  {{ label: '平局', data: D.eu_d, borderColor: '#16a34a', tension: 0.2 }},
-  {{ label: '客胜', data: D.eu_a, borderColor: '#dc2626', tension: 0.2 }},
-]);
-lineChart('ahChart', [
-  {{ label: '盘口(主视角)', data: D.ah_l, borderColor: '#7c3aed', tension: 0.2, yAxisID: 'y' }},
-  {{ label: '上水', data: D.ah_hw, borderColor: '#0891b2', tension: 0.2 }},
-  {{ label: '下水', data: D.ah_aw, borderColor: '#ea580c', tension: 0.2 }},
-]);
-function pctChart(id, labels, home, draw, away, title) {{
-  if (!labels || !labels.length) return;
-  new Chart(document.getElementById(id), {{
-    type: 'line',
-    data: {{
-      labels,
-      datasets: [
-        {{ label: '主胜', data: home, borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,.08)', fill: true, tension: 0.25 }},
-        {{ label: '平局', data: draw, borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,.08)', fill: true, tension: 0.25 }},
-        {{ label: '客胜', data: away, borderColor: '#dc2626', backgroundColor: 'rgba(220,38,38,.08)', fill: true, tension: 0.25 }},
+// 图表本轮不渲染（无 ≥2 有效点时整块不画；盘口卡已有最新欧亚数字）
+
       ]
     }},
     options: {{

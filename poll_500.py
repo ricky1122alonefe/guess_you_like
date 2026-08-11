@@ -179,3 +179,96 @@ def fetch_jingcai_context(session) -> tuple[dict[str, dict], dict[str, dict]]:
         log.warning("竞彩元数据抓取失败: %s", exc)
         jczq_meta = {}
     return live_odds, jczq_meta
+
+
+def poll_single_fixture(
+    fixture_id: str,
+    *,
+    output_root=None,
+    within_days: float = 14,
+) -> dict[str, Any]:
+    """补抓单场：写 Postgres odds_ticks，返回 DB 时间线 match index。
+
+    serve ``POST /api/match/{fid}/poll`` 调用此入口。``output_root`` 仅兼容占位。
+    """
+    from db.connection import ensure_schema, ping
+    from db.repository import insert_tick_if_changed, upsert_fixture
+    from db_timeline import load_match_index_from_db
+    from download_500 import MatchFixture, extract_fixture_id, fetch_match_info
+
+    del output_root  # 当前只写 DB 时间线
+    fid = extract_fixture_id(str(fixture_id))
+    if not ping():
+        raise RuntimeError("数据库未连接，无法补抓（请先 docker compose up -d db）")
+    ensure_schema()
+
+    session = make_session()
+    guard = ScraperGuard(min_delay=1.0, max_delay=2.0)
+
+    # 1) 尽量从 live 列表拿到对阵 / order_id；失败则只靠分析页队名
+    fx: MatchFixture | None = None
+    try:
+        live = fetch_live_fixtures(session, within_days=within_days, leagues=None)
+        for cand in live:
+            if str(cand.fixture_id) == fid:
+                fx = cand
+                break
+    except Exception as exc:
+        log.warning("live 列表查找 fid=%s 失败: %s", fid, exc)
+
+    if fx is None:
+        try:
+            fx = fetch_match_info(session, fid)
+        except Exception as exc:
+            log.warning("fetch_match_info fid=%s 失败: %s", fid, exc)
+            fx = MatchFixture(fixture_id=fid)
+
+    # 2) 竞彩上下文（失败不阻断欧亚）
+    live_odds: dict[str, dict] = {}
+    jczq_meta: dict[str, dict] = {}
+    try:
+        live_odds, jczq_meta = fetch_jingcai_context(session)
+    except Exception as exc:
+        log.warning("jingcai context fid=%s: %s", fid, exc)
+
+    # 3) 抓亚欧 + 必发，强制要求有有效欧或亚
+    tick = poll_fixture(
+        session, fx, guard=guard, live_odds=live_odds, jczq_meta=jczq_meta,
+    )
+    has_eu = tick.get("eu_home") is not None and tick.get("eu_away") is not None
+    has_ah = tick.get("ah_line") is not None
+    if not has_eu and not has_ah:
+        raise RuntimeError(
+            f"补抓后欧亚均为空 fid={fid}（页面解析失败或 500 暂无盘）"
+        )
+
+    db_id = upsert_fixture(
+        source="500",
+        external_id=fid,
+        home_team=fx.home or "",
+        away_team=fx.away or "",
+        match_name=fx.base_name,
+        kickoff_at=fx.kickoff,
+    )
+    inserted = insert_tick_if_changed(db_id, tick, source="500")
+    log.info(
+        "单场补抓 fid=%s inserted=%s eu=%s ah_line=%s",
+        fid, inserted, tick.get("eu_home"), tick.get("ah_line"),
+    )
+
+    idx = load_match_index_from_db(fid)
+    if not idx:
+        # 最小返回，避免 serve 再炸
+        idx = {
+            "fixture_id": fid,
+            "match_name": fx.base_name,
+            "timeline": [{"odds": {
+                k: tick.get(k) for k in (
+                    "eu_home", "eu_draw", "eu_away",
+                    "ah_line", "ah_home_water", "ah_away_water",
+                )
+            }}],
+            "point_count": 1,
+            "source": "postgresql",
+        }
+    return idx

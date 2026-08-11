@@ -1932,7 +1932,7 @@ def test_dashboard_chief_report_column():
         assert len(merged.get("top_scores") or []) >= 1
 
         dash = html_dashboard({}, None, output_root=root)
-        assert "Agent研判" in dash
+        assert "推荐" in dash  # P0: 表头收敛为 选|比赛|欧去水|亚盘|必发|规则倾向|详情
 
 
 def test_factor_fetch_catalog_and_agents():

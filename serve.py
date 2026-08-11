@@ -683,6 +683,12 @@ class Handler(BaseHTTPRequestHandler):
             agent_workflow = build_agent_workflow(root, fid)
             from match_settlement import load_settled_map
             settled = load_settled_map(root).get(fid)
+            # T3: 结果预测（五源融合，纯规则，不阻塞详情页）
+            try:
+                from analysis.result_forecast import forecast_for_match
+                pred["result_prediction"] = forecast_for_match(fid, index=idx, prediction=pred)
+            except Exception:
+                log.exception("result_forecast failed for fid=%s", fid)
             self._send_html(html_match_detail(
                 idx, prediction=pred, ai_records=ai_records,
                 deep_records=deep_records, agent_board=agent_board,
@@ -1907,6 +1913,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": str(exc)}, 409)
             except Exception as exc:
                 log.exception("深度 AI 失败 fid=%s", fid)
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        # G1: 单场补抓盘口
+        m_poll = re.match(r"^/api/match/(.+)/poll$", path)
+        if m_poll:
+            fid = m_poll.group(1)
+            try:
+                from poll_500 import poll_single_fixture
+                idx_new = poll_single_fixture(fid, output_root=self.output_root)
+                ticks = len(idx_new.get("timeline") or []) if idx_new else 0
+                self._send_json({"ok": True, "ticks": ticks})
+            except Exception as exc:
+                log.exception("单场补抓失败 fid=%s", fid)
                 self._send_json({"ok": False, "error": str(exc)}, 500)
             return
         self._send_json({"error": "not found"}, 404)

@@ -23,8 +23,11 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 DEFAULT_TIMEOUT = 60
-# live.500.com 赛程表第 2 列；默认只抓世界杯，避免芬超等联赛混入
-DEFAULT_LEAGUES: tuple[str, ...] = ("世界杯",)
+# live.500.com 赛程表第 2 列联赛名过滤：
+#   None = 不按联赛过滤，抓时间窗内全部场次
+#   非空集合 = 只保留这些联赛名（与 live 页一致，如「世界杯」）
+DEFAULT_LEAGUES: tuple[str, ...] | None = None
+WORLD_CUP_LEAGUES: tuple[str, ...] = ("世界杯",)
 
 
 @dataclass
@@ -355,7 +358,11 @@ def fetch_live_fixtures(
     now: datetime | None = None,
     leagues: Collection[str] | None = DEFAULT_LEAGUES,
 ) -> list[MatchFixture]:
-    """Scrape fixtures from live.500.com; default = kickoff within 2 days, 世界杯 only."""
+    """Scrape fixtures from live.500.com.
+
+    Default: kickoff within ``within_days``, **all leagues** (``leagues=None``).
+    Pass e.g. ``WORLD_CUP_LEAGUES`` to restrict.
+    """
     sess = session or _session()
     now = to_beijing(now or now_beijing())
     league_filter = set(leagues) if leagues is not None else None
@@ -504,7 +511,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--all-leagues",
         action="store_true",
-        help="包含全部联赛（默认仅世界杯）",
+        help="包含全部联赛（默认已是全部，保留兼容）",
+    )
+    parser.add_argument(
+        "--worldcup-only",
+        action="store_true",
+        help="仅抓世界杯（旧默认行为）",
     )
     parser.add_argument(
         "--days", type=float, default=2,
@@ -527,7 +539,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     within = None if args.all else args.days
-    leagues = None if args.all_leagues else DEFAULT_LEAGUES
+    if args.worldcup_only:
+        leagues = WORLD_CUP_LEAGUES
+    else:
+        leagues = None  # 全部联赛（含 --all-leagues）
 
     if args.list:
         fixtures = fetch_live_fixtures(within_days=within, leagues=leagues)

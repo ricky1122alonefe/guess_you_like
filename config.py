@@ -56,7 +56,28 @@ EU_IMPLIED_PEER_SUM_DEV_PP = 4.0     # 与同业隐含和中位偏差 ≥4pp 记
 EU_IMPLIED_SCORE_PENALTY = 1.0       # daily_picks 轻量降权（非否决）
 
 # ── 服务赛程窗口（poll / 整点分析 / 首页展示）────────────────
-SERVICE_WITHIN_DAYS = 7.0            # 世界杯小组赛程跨度大，默认 7 天
+SERVICE_WITHIN_DAYS = 7.0            # 服务赛程窗口（poll / 整点分析 / 首页展示）
+
+# ── Q1-D0: 产品转向竞彩开售联赛 ──────────────────────────
+FOCUS_JINGCAI_ONLY = True            # 首页默认只显示竞彩在售（有编号/SP）；False=全部 500
+TOURNAMENT_PHASE = "league"          # 默认联赛模式（非 group/knockout）
+AI_PROFILE_DEFAULT = "league"        # AI 默认联赛 profile（非 worldcup）
+
+# ── 结果预测融合权重（五源）──────────────────────────────
+RESULT_FORECAST_WEIGHTS = {
+    "history_similar": 0.35,
+    "european": 0.25,
+    "asian": 0.15,
+    "betfair": 0.15,
+    "recent_form": 0.10,
+}
+RESULT_FORECAST_SKIP_THRESHOLD = 0.38  # max(p) < 此值 → 观望
+
+# ── P2/P4/P6 配置 ──────────────────────────────────────────
+FORM_WINDOW_DEFAULT = 30       # overall 窗口（20|30|50 可切换）
+FORM_SPLIT_N = 20              # 主队主场 / 客队客场 各取 N 场
+PARLAY_MAX_LEGS = 3            # 串关最大腿数
+DEVIG_METHOD = "proportional"  # 去水方法：proportional | shin | power
 
 # ── 定时 AI 节流（整点任务：距上次 AI 不足此间隔则跳过）────
 AI_AUTO_ENABLED = False             # False=仅手动触发 AI；True=整点任务可自动跑 AI

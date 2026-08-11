@@ -16,7 +16,7 @@ from db.repository import (
     set_scraper_state,
     upsert_fixture,
 )
-from download_500 import DEFAULT_LEAGUES, fetch_live_fixtures
+from download_500 import DEFAULT_LEAGUES, WORLD_CUP_LEAGUES, fetch_live_fixtures
 from http_client import ScraperGuard, make_session
 from poll_500 import fetch_jingcai_context, poll_fixture
 
@@ -25,6 +25,7 @@ SOURCE = "500"
 
 
 def run_once(*, within_days: float, guard: ScraperGuard, leagues=DEFAULT_LEAGUES) -> dict:
+    """``leagues=None``（默认）= live.500 时间窗内全部联赛。"""
     session = make_session()
     fixtures = fetch_live_fixtures(session, within_days=within_days, leagues=leagues)
     live_odds, jczq_meta = fetch_jingcai_context(session)
@@ -87,7 +88,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--all-leagues",
         action="store_true",
-        help="包含全部联赛（默认仅世界杯）",
+        help="包含全部联赛（默认已是全部，保留兼容）",
+    )
+    parser.add_argument(
+        "--worldcup-only",
+        action="store_true",
+        help="仅抓世界杯（旧默认行为）",
     )
     parser.add_argument("--once", action="store_true", help="只跑一轮")
     parser.add_argument("--init-db", action="store_true", help="初始化 schema 后退出")
@@ -110,15 +116,21 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     guard = ScraperGuard(min_delay=1.5, max_delay=3.0)
-    leagues = None if args.all_leagues else DEFAULT_LEAGUES
+    if args.worldcup_only:
+        leagues = WORLD_CUP_LEAGUES
+    else:
+        leagues = None  # 全部联赛（含 --all-leagues）
 
     if args.once:
         run_once(within_days=args.days, guard=guard, leagues=leagues)
         return 0
 
-    log.info("开始轮询 interval=%ds days=%s leagues=%s",
-             args.interval, args.days,
-             "全部" if leagues is None else "、".join(leagues))
+    log.info(
+        "开始轮询 interval=%ds days=%s leagues=%s",
+        args.interval,
+        args.days,
+        "全部" if leagues is None else "、".join(leagues),
+    )
     while True:
         started = time.time()
         try:

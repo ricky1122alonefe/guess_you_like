@@ -12,7 +12,7 @@ from typing import Any
 
 from db.connection import ping
 from db.repository import list_tournament_results
-from download_500 import DEFAULT_LEAGUES
+from download_500 import WORLD_CUP_LEAGUES
 from eu_implied_metrics import compute_eu_implied
 from market_patterns import analyze_market_patterns
 from match_status import RESULT_CN, goals_to_result_1x2
@@ -1502,7 +1502,7 @@ def build_tournament_ledger(
         )
     return {
         "tournament": TOURNAMENT,
-        "leagues": list(DEFAULT_LEAGUES),
+        "leagues": list(WORLD_CUP_LEAGUES),
         "updated_at": now_beijing_str(),
         "accuracy": compute_accuracy_report(records),
         "opening_patterns": opening_patterns,

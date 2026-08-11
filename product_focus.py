@@ -1,4 +1,7 @@
-"""Product focus helpers — jingcai 1X2 / rqsp-first, optional score prediction."""
+"""Product focus helpers — jingcai 1X2 / rqsp-first, optional score prediction.
+
+Q1-D0: 产品转向竞彩开售联赛。默认联赛模式（非世界杯）。
+"""
 
 from __future__ import annotations
 
@@ -10,7 +13,18 @@ def score_prediction_enabled() -> bool:
 
 
 def knockout_phase() -> bool:
-    return getattr(cfg, "TOURNAMENT_PHASE", "group") == "knockout"
+    """是否处于淘汰赛阶段。Q1-D0 后默认 False（联赛模式）。"""
+    return getattr(cfg, "TOURNAMENT_PHASE", "league") == "knockout"
+
+
+def focus_jingcai_only() -> bool:
+    """首页是否默认只显示竞彩在售场。"""
+    return bool(getattr(cfg, "FOCUS_JINGCAI_ONLY", True))
+
+
+def ai_profile() -> str:
+    """AI 默认 profile：联赛而非世界杯。"""
+    return getattr(cfg, "AI_PROFILE_DEFAULT", "league")
 
 
 def strip_score_fields(pred: dict) -> dict:

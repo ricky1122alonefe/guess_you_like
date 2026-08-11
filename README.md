@@ -1,21 +1,25 @@
 # guess_you_like
 
-世界杯 / 竞彩赛事 **赔率分析 + AI 推荐** 本地服务。抓取 500.com 亚盘/欧赔/必发，结合历史相似样本、欧亚互转、盘口套路与多模型 AI，提供 Web 看板、单场详情、当日推荐与世界杯盘路总结。
+盘口工作台：欧赔 + 亚盘 + 欧亚分歧 + 必发 +（可选）竞彩 SP 对照 + 近 20～50 场总结、主近 20 主场 / 客近 20 客场 + 去水隐含概率 + 勾选 2～3 场串关 EV + 同一结构化数据喂 AI。
 
-> **免责声明**：仅供个人学习与研究，不构成任何投注建议。请遵守当地法律法规与数据来源网站的使用条款。数据出处见 [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md)。
+> **免责声明**：仅供个人学习与研究，不构成任何投注建议。请遵守当地法律法规与数据来源网站的使用条款。竞彩空 ≠ 无法分析。
 
 ## 功能概览
 
-- **首页看板** `/`：赛程列表、AI 推荐、2串1、SSE 人工干预对话
-- **单场详情** `/match/{fixture_id}`：走势图表、相似样本 Top10、深度分析、保存长图
-- **当日推荐** `/daily`：稳健/进取档位、保底 2串1
-- **世界杯盘路** `/worldcup`：完赛套路归纳、未来 24h 观察、AI 小组战意分析
-- **小组战意** `/worldcup/groups`：12 组实时积分、最佳第三排名、次轮/末轮默契球与拼命球预测（已接入推荐引擎）
-- **亚盘赢盘** `/handicap`：相似样本上下盘赢盘率、推荐回测、盘口区间规律
-- **欧亚分歧** `/divergence`：扫描欧赔与亚盘巨大分歧场次（诱盘/控盘预警）
-- **AI 设置** `/settings/ai`：后台配置多模型启用、角色、测试连通
-- **量化回测** `/quant`：Dixon-Coles、Elo、竞彩 EV、小组 MC
-- **Kelly 计算器** `/kelly`：根据胜率与赔率计算最优仓位（支持半 Kelly / ¼ Kelly）
+### 主路径（首屏即见）
+- **首页看板** `/`：赛程列表（选|比赛|去水倾向|亚盘|必发热|规则倾向|详情），勾选 2～3 场算串关 EV
+- **单场详情** `/match/{fixture_id}`：首屏 4 块（①盘口去水 ②战绩 ③规则结论 ④AI），其余折叠
+- **复盘** `/review`：命中/Brier/CLV 轻复盘
+
+### 更多（折叠）
+- 当日推荐 `/daily`、世界杯盘路 `/worldcup`、亚盘赢盘 `/handicap`、欧亚分歧 `/divergence`、量化回测 `/quant`、Kelly `/kelly`、AI 设置 `/settings/ai`
+
+### 分析引擎
+- **去水** `analysis/market/devig.py`：devig_1x2 → p 和=1 + overround（proportional/shin/power）
+- **战绩** `analysis/team_form/club_form.py`：近 20～50 场总结 + 主队主场 last20 / 客队客场 last20
+- **规则融合** `analysis/result_forecast/`：五源（欧赔+亚盘+必发+历史相似+战绩）→ 1X2 预测
+- **串关 EV** `analysis/market/parlay_ev.py`：2～3 场组合 EV（独立假设）
+- **AI payload** `analysis/market/ai_payload.py`：结构化包 → markdown，喂外部 AI
 
 ## 快速开始
 

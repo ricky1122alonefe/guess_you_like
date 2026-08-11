@@ -1,0 +1,130 @@
+# 竞彩常见联赛 → football-data 联赛码 + 中文队名别名映射
+# 500 league_name → {fd_code, fd_path, teams: {中文: 英文/历史库名}}
+
+leagues:
+  # 五大联赛
+  英超:
+    fd_code: EPL
+    fd_path: england/premier-league
+  英格兰超级联赛:
+    fd_code: EPL
+    fd_path: england/premier-league
+  西甲:
+    fd_code: LALIGA
+    fd_path: spain/la-liga
+  西班牙甲级联赛:
+    fd_code: LALIGA
+    fd_path: spain/la-liga
+  意甲:
+    fd_code: SERIE_A
+    fd_path: italy/serie-a
+  意大利甲级联赛:
+    fd_code: SERIE_A
+    fd_path: italy/serie-a
+  德甲:
+    fd_code: BUNDESLIGA
+    fd_path: germany/bundesliga
+  德国甲级联赛:
+    fd_code: BUNDESLIGA
+    fd_path: germany/bundesliga
+  法甲:
+    fd_code: LIGUE_1
+    fd_path: france/ligue-1
+  法国甲级联赛:
+    fd_code: LIGUE_1
+    fd_path: france/ligue-1
+  # 二级联赛
+  英冠:
+    fd_code: CHAMPIONSHIP
+    fd_path: england/championship
+  西乙:
+    fd_code: SEGUNDA
+    fd_path: spain/segunda-division
+  意乙:
+    fd_code: SERIE_B
+    fd_path: italy/serie-b
+  德乙:
+    fd_code: BUNDESLIGA2
+    fd_path: germany/bundesliga-2
+  法乙:
+    fd_code: LIGUE_2
+    fd_path: france/ligue-2
+  # 其他欧洲
+  荷甲:
+    fd_code: EREDIVISIE
+    fd_path: netherlands/eredivisie
+  葡超:
+    fd_code: PRIMEIRA
+    fd_path: portugal/primeira-liga
+  苏超:
+    fd_code: SPL
+    fd_path: scotland/premiership
+  比甲:
+    fd_code: JUPILER
+    fd_path: belgium/first-division-a
+  奥超:
+    fd_code: AUSTRIAN
+    fd_path: austria/bundesliga
+  丹超:
+    fd_code: SUPERLIGA
+    fd_path: denmark/superliga
+  瑞典超:
+    fd_code: ALLSVENSKAN
+    fd_path: sweden/allsvenskan
+  挪超:
+    fd_code: ELITESERIEN
+    fd_path: norway/eliteserien
+  芬超:
+    fd_code: VEIKKAUSLIIGA
+    fd_path: finland/veikkausliiga
+  冰岛超:
+    fd_code: BESTADEILD
+    fd_path: iceland/bestadeild
+  爱超:
+    fd_code: LOI
+    fd_path: ireland/premier-division
+  # 亚洲
+  日职:
+    fd_code: J1
+    fd_path: japan/j1-league
+  日职联:
+    fd_code: J1
+    fd_path: japan/j1-league
+  韩K:
+    fd_code: K_LEAGUE
+    fd_path: south-korea/k-league-1
+  韩国K联赛:
+    fd_code: K_LEAGUE
+    fd_path: south-korea/k-league-1
+  澳超:
+    fd_code: A_LEAGUE
+    fd_path: australia/a-league
+  沙特联:
+    fd_code: SPL_SAUDI
+    fd_path: saudi-arabia/pro-league
+  # 美洲
+  美职:
+    fd_code: MLS
+    fd_path: usa/mls
+  美国职业大联盟:
+    fd_code: MLS
+    fd_path: usa/mls
+  巴甲:
+    fd_code: BRASILEIRAO
+    fd_path: brazil/brasileirao
+  阿甲:
+    fd_code: PRIMERA_AR
+    fd_path: argentina/primera-division
+  南美解放者杯:
+    fd_code: LIBERTADORES
+    fd_path: south-america/copa-libertadores
+  # 杯赛/欧战
+  欧冠:
+    fd_code: UCL
+    fd_path: europe/champions-league
+  欧联:
+    fd_code: UEL
+    fd_path: europe/europa-league
+  欧会:
+    fd_code: UECL
+    fd_path: europe/conference-league

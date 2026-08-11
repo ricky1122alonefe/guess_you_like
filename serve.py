@@ -901,10 +901,12 @@ class Handler(BaseHTTPRequestHandler):
             latest = _read_json(root / "latest.json")
             qs = parse_qs(urlparse(self.path).query)
             match_date = qs.get("date", [None])[0]
+            show_all = qs.get("all", ["0"])[0] in ("1", "true", "yes")
             self._send_html(html_dashboard(
                 get_state(), latest, output_root=root,
                 within_days=self.within_days,
                 match_date=match_date,
+                show_all=show_all,
             ))
             return
         if path == "/api/dashboard/chat-stream":
@@ -1697,8 +1699,8 @@ class Handler(BaseHTTPRequestHandler):
                 raw = self.rfile.read(length) if length else b"{}"
                 payload = json.loads(raw.decode("utf-8"))
                 fixture_ids = payload.get("fixture_ids") or []
-                if len(fixture_ids) != 2:
-                    self._send_json({"ok": False, "error": "请勾选恰好 2 场比赛"}, 400)
+                if not (2 <= len(fixture_ids) <= 3):
+                    self._send_json({"ok": False, "error": "请勾选 2～3 场比赛"}, 400)
                     return
                 from custom_parlay import (
                     analyze_custom_parlay,
@@ -1706,8 +1708,52 @@ class Handler(BaseHTTPRequestHandler):
                     merge_ai_into_explanation,
                     run_parlay_ai_brief,
                 )
+                from analysis.market.parlay_ev import compute_parlay_ev
                 matches = load_matches_for_parlay(self.output_root, fixture_ids)
-                result = analyze_custom_parlay(matches)
+
+                # 兼容旧 2串1 路径（2 场）
+                if len(fixture_ids) == 2:
+                    result = analyze_custom_parlay(matches)
+                else:
+                    # 3 场：直接用 compute_parlay_ev
+                    result = {"ok": True, "n_legs": 3, "matches": matches}
+
+                # FIX-2: 统一接入 compute_parlay_ev（2～3 场）
+                legs = []
+                for m in matches:
+                    pr = m.get("predict_row") or m
+                    rp = m.get("result_prediction") or {}
+                    pick = rp.get("pick") or pr.get("result_1x2") or ""
+                    p_model = 0
+                    # 取对应方向的概率
+                    if pick == "home":
+                        p_model = rp.get("p_home", 0)
+                    elif pick == "draw":
+                        p_model = rp.get("p_draw", 0)
+                    elif pick == "away":
+                        p_model = rp.get("p_away", 0)
+                    else:
+                        p_model = 0
+                    # 赔率：竞彩 SP > 欧赔
+                    jc = m.get("jingcai") or {}
+                    eu = m.get("odds_snapshot") or {}
+                    if pick == "home":
+                        odds = jc.get("sp_home") or eu.get("eu_home") or 0
+                    elif pick == "draw":
+                        odds = jc.get("sp_draw") or eu.get("eu_draw") or 0
+                    elif pick == "away":
+                        odds = jc.get("sp_away") or eu.get("eu_away") or 0
+                    else:
+                        odds = 0
+                    legs.append({
+                        "pick": pick,
+                        "p_model": float(p_model or 0),
+                        "odds": float(odds or 0),
+                        "match_name": pr.get("比赛") or m.get("match_name") or "",
+                        "odds_source": "竞彩SP" if jc.get("sp_home") else "欧赔",
+                    })
+                ev_result = compute_parlay_ev(legs)
+                result["parlay_ev"] = ev_result
                 if use_ai:
                     try:
                         ai_brief = run_parlay_ai_brief(

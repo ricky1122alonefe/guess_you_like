@@ -150,7 +150,8 @@ AH_CONFLICT_FORCE_SKIP_ON_HIGH_CONTROL = True
 AH_CONFLICT_DOWNGRADE_CONFIDENCE = True
 
 # ── 赛制阶段 ──────────────────────────────────────────
-TOURNAMENT_PHASE = "knockout"  # group=小组赛 · knockout=淘汰赛（隐藏小组战意/出线页）
+# Q1-D0: 默认联赛模式（非 group/knockout）。如需切回杯赛，手动改 "knockout"
+# TOURNAMENT_PHASE = "knockout"  # group=小组赛 · knockout=淘汰赛
 
 # ── 比分预测（全局开关）────────────────────────────────
 SCORE_PREDICTION_ENABLED = True  # True = 展示推荐比分与比分命中复盘

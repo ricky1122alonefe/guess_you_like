@@ -163,13 +163,35 @@ def _load_prediction_cache(output_root: str | Path) -> dict[str, dict]:
     return {}
 
 
-def _stub_dashboard_match(*, fixture_id: str, match_name: str) -> dict:
+def _stub_dashboard_match(
+    *,
+    fixture_id: str,
+    match_name: str,
+    match_num: str = "",
+) -> dict:
+    row: dict[str, Any] = {"比赛": match_name}
+    if match_num:
+        row["竞彩编号"] = match_num
     return {
         "fixture_id": fixture_id,
         "match": match_name,
-        "predict_row": {"比赛": match_name},
+        "match_num": match_num or "",
+        "predict_row": row,
         "recommendation_source": "pending",
     }
+
+
+def _attach_live_match_num(match: dict, *, match_num: str) -> dict:
+    """把 live/jczq 的竞彩编号写进首页用 match（过滤依赖这些字段）。"""
+    if not match_num:
+        return match
+    out = dict(match)
+    out["match_num"] = match_num
+    pr = dict(out.get("predict_row") or {})
+    if not pr.get("竞彩编号"):
+        pr["竞彩编号"] = match_num
+    out["predict_row"] = pr
+    return out
 
 
 def _load_db_fixture_stubs(*, within_days: float, now: datetime) -> dict[str, dict]:
@@ -181,13 +203,19 @@ def _load_db_fixture_stubs(*, within_days: float, now: datetime) -> dict[str, di
         with cursor() as cur:
             cur.execute(
                 """
-                SELECT external_id, match_name, home_team, away_team, kickoff_at
-                FROM fixtures
-                WHERE source = '500'
-                  AND kickoff_at IS NOT NULL
-                  AND kickoff_at >= NOW() - interval '30 minutes'
-                  AND kickoff_at <= NOW() + (%s || ' days')::interval
-                ORDER BY kickoff_at
+                SELECT f.external_id, f.match_name, f.home_team, f.away_team, f.kickoff_at,
+                       (SELECT t.raw_meta->'jingcai'->>'match_num'
+                        FROM odds_ticks t
+                        WHERE t.fixture_id = f.id
+                          AND t.raw_meta->'jingcai'->>'match_num' IS NOT NULL
+                        ORDER BY t.captured_at DESC
+                        LIMIT 1) AS match_num
+                FROM fixtures f
+                WHERE f.source = '500'
+                  AND f.kickoff_at IS NOT NULL
+                  AND f.kickoff_at >= NOW() - interval '30 minutes'
+                  AND f.kickoff_at <= NOW() + (%s || ' days')::interval
+                ORDER BY f.kickoff_at
                 """,
                 (str(within_days),),
             )
@@ -210,7 +238,10 @@ def _load_db_fixture_stubs(*, within_days: float, now: datetime) -> dict[str, di
         if not name:
             home, away = row.get("home_team") or "", row.get("away_team") or ""
             name = f"{home}VS{away}" if home and away else fid
-        out[fid] = _stub_dashboard_match(fixture_id=fid, match_name=name)
+        match_num = row.get("match_num") or ""
+        out[fid] = _stub_dashboard_match(
+            fixture_id=fid, match_name=name, match_num=match_num,
+        )
     return out
 
 
@@ -236,8 +267,14 @@ def load_dashboard_matches(
 
     for fx in fixtures:
         fid = str(fx.fixture_id)
-        by_id[fid] = preds.get(fid) or _stub_dashboard_match(
-            fixture_id=fid, match_name=fx.base_name,
+        base = preds.get(fid) or _stub_dashboard_match(
+            fixture_id=fid,
+            match_name=fx.base_name,
+            match_num=getattr(fx, "match_num", "") or "",
+        )
+        # 有 prediction 缓存也要补编号，否则 FOCUS_JINGCAI_ONLY 会全滤掉
+        by_id[fid] = _attach_live_match_num(
+            base, match_num=getattr(fx, "match_num", "") or ""
         )
 
     # live.500 often exposes only the current match day. Merge DB/cache future rows

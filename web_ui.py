@@ -604,14 +604,14 @@ function onDashSolidFilter(el) {
 
 _PARLAY_JS = """
 const parlaySelected = new Map();
-const PICK_MAX = 20;
+const PARLAY_MAX = 3;
 
 function toggleParlayPick(el) {
   const fid = el.dataset.fid;
     if (el.checked) {
-    if (parlaySelected.size >= PICK_MAX) {
+    if (parlaySelected.size >= PARLAY_MAX) {
       el.checked = false;
-      showToast('最多选 ' + PICK_MAX + ' 场', true);
+      showToast('串关最多选 ' + PARLAY_MAX + ' 场', true);
       return;
     }
     const tier = el.dataset.tier || '';
@@ -636,14 +636,10 @@ function updateParlayToolbar() {
   const countEl = document.getElementById('parlay-count');
   const btn = document.getElementById('parlay-analyze-btn');
   const aiBtn = document.getElementById('parlay-ai-btn');
-  const posterBtn = document.getElementById('poster-batch-btn');
-  const listExportBtn = document.getElementById('dash-list-export-btn');
-  if (countEl) countEl.textContent = n + ' 场 · 串关需 2';
-  const ready = n === 2;
+  if (countEl) countEl.textContent = n + ' 场 · 串关需 2～3';
+  const ready = n === 2 || n === 3;
   if (btn) btn.disabled = !ready;
   if (aiBtn) aiBtn.disabled = !ready;
-  if (posterBtn) posterBtn.disabled = n === 0;
-  if (listExportBtn) listExportBtn.disabled = n === 0;
 }
 
 function dashExportItems() {
@@ -730,6 +726,27 @@ function renderParlayResult(d) {
   window._lastParlay = d;
   const el = document.getElementById('parlay-result');
   if (!el) return;
+  // FIX-2: 串关 EV 展示
+  var evHtml = '';
+  if (d.parlay_ev && d.parlay_ev.ok) {
+    var pe = d.parlay_ev;
+    var legsHtml = (pe.legs_ev || []).map(function(l) {
+      return '<tr><td>' + escHtml(l.match || '—') + '</td><td>' + escHtml(l.pick || '—')
+        + '</td><td>' + (l.odds || '—') + '</td><td>' + (l.p_model ? (l.p_model*100).toFixed(0)+'%' : '—')
+        + '</td><td>' + (l.ev_pct || '—') + '</td><td>' + escHtml(l.odds_source || '') + '</td></tr>';
+    }).join('');
+    evHtml = '<div class="card" style="border:2px solid #1565c0;border-radius:8px;padding:12px;margin-bottom:12px">'
+      + '<h3>串关 EV（' + pe.n_legs + ' 场 · 独立假设）</h3>'
+      + '<p style="font-size:18px"><strong>组合赔率 ' + pe.parlay_odds + '</strong> · '
+      + '组合概率 ' + (pe.parlay_p*100).toFixed(2) + '% · '
+      + '<span style="color:' + (pe.parlay_ev >= 0 ? '#d32f2f' : '#888') + ';font-weight:bold">EV ' + pe.parlay_ev_pct + '</span></p>'
+      + '<p class="meta">示例：投' + pe.stake_example + '元 → 返' + pe.payout_example + '元（盈' + pe.profit_example + '）</p>'
+      + '<table style="width:100%;font-size:13px;margin:6px 0">'
+      + '<tr><th>场次</th><th>方向</th><th>赔率</th><th>p(模型)</th><th>单腿EV</th><th>来源</th></tr>'
+      + legsHtml + '</table>'
+      + '<p class="meta" style="font-size:11px">' + escHtml(pe.disclaimer || '') + '</p>'
+      + '</div>';
+  }
   if (d.options && d.options.length) {
     const cards = d.options.map((opt, idx) => {
       const verdictCls = opt.verdict === '可串' ? 'verdict-ok' : (opt.verdict === '不建议' ? 'verdict-bad' : 'verdict-warn');
@@ -829,7 +846,7 @@ function renderParlayResult(d) {
     ? '<a class="btn btn-sm" href="/share/parlay?ids=' + encodeURIComponent(shareIds) + '" target="_blank" rel="noopener">📷 保存成图</a>'
     : '';
   const title = d.ai_provider_label ? ('AI 自动选 2串1 · ' + d.ai_provider_label) : '自选 2串1';
-  el.innerHTML = '<h3>' + escHtml(title) + ' · <span class="' + verdictCls + '">' + escHtml(d.verdict) + '</span></h3>'
+  el.innerHTML = evHtml + '<h3>' + escHtml(title) + ' · <span class="' + verdictCls + '">' + escHtml(d.verdict) + '</span></h3>'
     + '<p class="meta">' + escHtml(d.verdict_detail) + ' · ' + combined + payout + escHtml(dateTxt) + '</p>'
     + legsHtml + explainHtml + warnHtml + aiHtml
     + '<div class="parlay-actions">' + shareBtn + '</div>'
@@ -840,9 +857,9 @@ function renderParlayResult(d) {
 
 function analyzeParlay(useAi) {
   const ids = [...parlaySelected.keys()];
-  if (ids.length !== 2) { showToast('请勾选 2 场', true); return; }
+  if (ids.length < 2 || ids.length > 3) { showToast('请勾选 2～3 场', true); return; }
   const btn = useAi ? document.getElementById('parlay-ai-btn') : document.getElementById('parlay-analyze-btn');
-  const label = useAi ? 'AI 简评' : '2串1 分析';
+  const label = useAi ? 'AI 简评' : (ids.length + '串1 分析');
   if (btn) { btn.disabled = true; btn.textContent = '分析中…'; }
   const url = '/api/parlay/analyze' + (useAi ? '?ai=1' : '');
   fetch(url, {
@@ -856,7 +873,7 @@ function analyzeParlay(useAi) {
       if (btn) btn.textContent = label;
       if (!d.ok) { showToast(d.error || '分析失败', true); return; }
       renderParlayResult(d);
-      showToast('✅ 2串1 分析完成');
+      showToast('✅ ' + ids.length + '串1 分析完成');
     })
     .catch(e => {
       updateParlayToolbar();
@@ -1485,23 +1502,46 @@ def _dashboard_finished_row(
     )
 
 
-def _filter_jingcai_priority(matches: list[dict]) -> list[dict]:
-    """Q1-D0: 竞彩在售优先。有编号/SP 的场排前，无编号的排后或折叠。"""
-    if not _focus_jingcai_only():
-        return matches
-    jingcai = []
-    other = []
-    for m in matches:
-        # 有竞彩编号或 SP → 主列表
-        pr = m.get("predict_row") or {}
-        has_num = bool(pr.get("竞彩编号") or m.get("match_num"))
-        jc = m.get("jingcai") or {}
-        has_sp = bool(jc.get("has_sp") or jc.get("sp_home"))
-        if has_num or has_sp:
-            jingcai.append(m)
-        else:
-            other.append(m)
-    return jingcai + other  # 竞彩在前，其余在后
+def _match_has_jingcai_signal(m: dict) -> bool:
+    """是否「竞彩在售相关」——看真字段，兼容 snapshot / 编号 / SP。
+
+    注意：分析对象常用 jingcai_snapshot，不是 m['jingcai']。
+    """
+    if not m:
+        return False
+    pr = m.get("predict_row") or {}
+    if pr.get("竞彩编号") or m.get("match_num"):
+        return True
+    if pr.get("竞彩SP") not in (None, "", "—"):
+        return True
+    for key in ("jingcai_snapshot", "jingcai"):
+        jc = m.get(key) or {}
+        if not isinstance(jc, dict):
+            continue
+        if jc.get("match_num") or jc.get("has_sp") or jc.get("has_rqsp"):
+            return True
+        if jc.get("sp_home") or jc.get("sp_draw") or jc.get("sp_away"):
+            return True
+        if jc.get("rqsp_home") or jc.get("rq_home"):
+            return True
+    info = m.get("jingcai_pick_info") or {}
+    if isinstance(info, dict) and info.get("jingcai_market") not in (None, "", "none"):
+        return True
+    return False
+
+
+def _filter_jingcai_priority(matches: list[dict], *, show_all: bool = False) -> list[dict]:
+    """竞彩真过滤。
+
+    - show_all=True → 返回全部（有竞彩的排前）
+    - FOCUS_JINGCAI_ONLY=False → 返回全部
+    - 默认 → 只保留有竞彩编号/SP/snapshot 的场
+    """
+    if show_all or not _focus_jingcai_only():
+        jingcai = [m for m in matches if _match_has_jingcai_signal(m)]
+        other = [m for m in matches if not _match_has_jingcai_signal(m)]
+        return jingcai + other
+    return [m for m in matches if _match_has_jingcai_signal(m)]
 
 
 def html_dashboard(
@@ -1511,6 +1551,7 @@ def html_dashboard(
     output_root: Path,
     within_days: float | None = None,
     match_date: str | None = None,
+    show_all: bool = False,
 ) -> str:
     import config as app_cfg
     from ai_schedule import format_ai_interval
@@ -1536,14 +1577,18 @@ def html_dashboard(
         live_status_map=live_status_map,
     )
     all_active = upcoming + live
-    # Q1-D0: 竞彩在售优先
-    all_active = _filter_jingcai_priority(all_active)
+    # 先挂上 poll 里的竞彩 snapshot/编号，再过滤；否则 jingcai 只在 ensure 后才有，列表永远空
+    all_active = [_enrich_dashboard_match(m) for m in all_active]
+    all_active = _filter_jingcai_priority(all_active, show_all=show_all)
     available_days = list_available_match_days(all_active, kickoff_map)
     cycle_day = resolve_match_day(all_active, kickoff_map, match_date=match_date)
     sweet_day_matches = filter_matches_by_day(all_active, kickoff_map, cycle_day)
 
-    all_active_enriched = [_enrich_dashboard_match(m) for m in all_active]
-    sweet_day_enriched = [_enrich_dashboard_match(m) for m in sweet_day_matches]
+    all_active_enriched = all_active
+    sweet_day_enriched = [
+        m if m.get("buy_tier_cn") is not None else _enrich_dashboard_match(m)
+        for m in sweet_day_matches
+    ]
     n_live = sum(1 for m in all_active_enriched if m.get("match_phase") == "live")
     n_upcoming = len(all_active_enriched) - n_live
     if n_live:
@@ -1573,7 +1618,13 @@ def html_dashboard(
         for m in all_active_enriched
     )
     if not active_rows:
-        active_rows = "<tr><td colspan='7'>暂无未开赛/进行中比赛</td></tr>"
+        if not all_active and _focus_jingcai_only() and not show_all:
+            active_rows = (
+                "<tr><td colspan='7'>暂无竞彩在售比赛 · "
+                "<a href='/?all=1'>显示全部场次</a></td></tr>"
+            )
+        else:
+            active_rows = "<tr><td colspan='7'>暂无未开赛/进行中比赛</td></tr>"
 
     finished_rows = "".join(
         _dashboard_finished_row(
@@ -1722,16 +1773,16 @@ def html_dashboard(
 <script>{_AI_BTN_JS}{_AI_CHAT_JS}{_DASH_FILTER_JS}{_PARLAY_JS}</script>
 </head><body>
 <h1 class="text-gradient">竞彩盘口 · 赛果预测</h1>
-<p class="meta">{_e(run_status)} · 库内 {_e(db_count)} 场{(' · 仅显示竞彩在售' if _focus_jingcai_only() else '')}</p>
+<p class="meta">{_e(run_status)} · 库内 {_e(db_count)} 场{(' · 仅显示竞彩在售 · <a href="/?all=1">显示全部</a>' if _focus_jingcai_only() and not show_all else (' · <a href="/">仅竞彩</a>' if show_all else ''))}</p>
 {_page_nav()}
 <button class="btn" style="margin-bottom:14px" onclick="fetch('/api/run',{{method:'POST'}}).then(r=>r.json()).then(d=>showToast(d.message||d.error||'已触发', !d.ok))">刷新分析</button>
 <a class="btn" href="/daily" style="margin-bottom:14px">当日推荐</a>
 <div class="card">
   <h2>{_e(active_title)}</h2>
   <div class="parlay-toolbar">
-    <span class="meta">已选 <strong id="parlay-count">0 场 · 串关需 2</strong></span>
+    <span class="meta">已选 <strong id="parlay-count">0 场 · 串关需 2～3</strong></span>
     <button type="button" class="btn btn-sm" id="parlay-analyze-btn" disabled
-            onclick="analyzeParlay(false)">2串1 分析</button>
+            onclick="analyzeParlay(false)">串关 EV</button>
     <button type="button" class="btn btn-sm btn-ai" id="parlay-ai-btn" disabled
             onclick="analyzeParlay(true)">AI 简评（可选）</button>
   </div>
@@ -5372,24 +5423,15 @@ def _score_recommend_panel(prediction: dict | None) -> str:
     from score_recommend import build_score_recommendation
 
     sr = prediction.get("score_recommend") or build_score_recommendation(prediction)
-    # G4: 检查比分概率是否全 0%（假数据），若是则不展示
+    # G4: 检查比分概率是否全 0%（假数据），若是则不渲染
     primary = sr.get("primary") or []
     if sr.get("ok") and primary:
         all_zero = all((p.get("prob_pct") or 0) == 0 for p in primary)
         if all_zero:
-            return f"""
-<div class="card score-rec-card muted">
-  <h3>⚽ 比分推荐 <span class="tag">基础分析</span></h3>
-  <p class="meta">比分模型未就绪（无 λ 参数，无法计算概率）</p>
-</div>"""
+            return ""
 
     if not sr.get("ok"):
-        reason = sr.get("reason") or "暂无数据"
-        return f"""
-<div class="card score-rec-card muted">
-  <h3>⚽ 比分推荐 <span class="tag">基础分析</span></h3>
-  <p class="meta">{_e(reason)}</p>
-</div>"""
+        return ""
 
     primary = sr.get("primary") or []
     rows = ""
@@ -6814,6 +6856,118 @@ def _buy_tier_banner(prediction: dict | None) -> str:
 </div>"""
 
 
+def _market_signal_card(match_name: str, prediction: dict | None, timeline: list) -> str:
+    """FIX-4 ①盘口信号卡：devig + 亚盘 + 必发 摘要。"""
+    rp = (prediction or {}).get("result_prediction") or {}
+    factors = rp.get("factors") or {}
+    eu = factors.get("european")
+    asian = factors.get("asian")
+    bf = factors.get("betfair")
+
+    lines: list[str] = []
+    if eu:
+        imp = eu.get("implied") or {}
+        lines.append(f"欧赔去水：主{imp.get('home',0):.0%} / 平{imp.get('draw',0):.0%} / 客{imp.get('away',0):.0%}")
+        if eu.get("move"):
+            lines.append(f"变动：{eu['move']}")
+    if asian:
+        fav_cn = {"home": "主队", "away": "客队", "even": "均势"}.get(asian.get("favored"), "—")
+        wm = f"，{asian['water_move']}" if asian.get("water_move") else ""
+        lines.append(f"亚盘：让球{asian['line']:+.1f}（{fav_cn}方向）{wm}")
+    if bf:
+        hot_cn = {"home": "主胜", "draw": "平", "away": "客胜"}.get(bf.get("hot"), "—")
+        lines.append(f"必发：成交{bf.get('volume_total',0)/10000:.0f}万，热门{hot_cn}")
+
+    if not lines:
+        lines.append("无欧亚盘口数据：请补抓盘口或等 poll")
+
+    items_html = "".join(f"<li>{_e(l)}</li>" for l in lines)
+    return (
+        '<div class="card" style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0">'
+        '<h3 style="margin:0 0 6px">📊 盘口信号</h3>'
+        f'<ul style="margin:4px 0;padding-left:20px;font-size:13px">{items_html}</ul>'
+        '</div>'
+    )
+
+
+def _form_card(match_name: str, prediction: dict | None) -> str:
+    """FIX-4 ②战绩卡：club_form（近30 + 主队主场last20 + 客队客场last20）。"""
+    rp = (prediction or {}).get("result_prediction") or {}
+    rf = (rp.get("factors") or {}).get("recent_form")
+
+    if not rf:
+        return (
+            '<div class="card" style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0">'
+            '<h3 style="margin:0 0 6px">📋 近期战绩</h3>'
+            '<p class="meta">联赛近况未接入（不影响预测）</p>'
+            '</div>'
+        )
+
+    home = rf.get("home") or {}
+    away = rf.get("away") or {}
+    parts: list[str] = []
+    if home.get("home_at_home"):
+        parts.append(home["home_at_home"])
+    elif home.get("form_str"):
+        parts.append(f"主队近况：{home['form_str']}（胜率{home.get('win_rate',0):.0%}）")
+    if away.get("away_at_away"):
+        parts.append(away["away_at_away"])
+    elif away.get("form_str"):
+        parts.append(f"客队近况：{away['form_str']}（胜率{away.get('win_rate',0):.0%}）")
+
+    items_html = "".join(f"<li>{_e(p)}</li>" for p in parts) if parts else "<li>暂无战绩数据</li>"
+    return (
+        '<div class="card" style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0">'
+        '<h3 style="margin:0 0 6px">📋 近期战绩</h3>'
+        f'<ul style="margin:4px 0;padding-left:20px;font-size:13px">{items_html}</ul>'
+        '</div>'
+    )
+
+
+def _ai_payload_card(match_name: str, prediction: dict | None, rule_prediction: dict | None) -> str:
+    """FIX-4 ④AI：结构化 payload + markdown 预览（league profile，非世界杯）。"""
+    rp = rule_prediction or (prediction or {}).get("result_prediction") or {}
+    factors = rp.get("factors") or {}
+
+    try:
+        from analysis.market.ai_payload import build_ai_match_brief_payload, payload_to_markdown
+        market = {
+            "eu": factors.get("european"),
+            "ah": factors.get("asian"),
+            "devig": (factors.get("european") or {}).get("implied"),
+            "betfair": factors.get("betfair"),
+        }
+        rule_conclusion = {
+            "pick": rp.get("pick"),
+            "pick_cn": rp.get("pick_cn"),
+            "confidence_cn": rp.get("confidence_cn"),
+            "reasons": rp.get("reasons"),
+        }
+        jc = (prediction or {}).get("jingcai") or {}
+        payload = build_ai_match_brief_payload(
+            match_name, market=market, form=factors.get("recent_form"),
+            rule_conclusion=rule_conclusion, jingcai=jc,
+        )
+        md = payload_to_markdown(payload)
+        # 截断显示
+        md_short = md[:1500] + ("\n...(完整内容可复制)" if len(md) > 1500 else "")
+        return (
+            '<div class="card" style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0">'
+            '<h3 style="margin:0 0 6px">🤖 AI 分析素材（league profile）</h3>'
+            '<p class="meta" style="font-size:12px">结构化 payload 已打包；可复制给外部 AI，或点上方「AI 推荐本场」自动分析。</p>'
+            f'<details><summary style="cursor:pointer;color:#60a5fa">展开 markdown payload</summary>'
+            f'<pre style="white-space:pre-wrap;font-size:12px;background:#f8f8f8;padding:8px;border-radius:4px;margin-top:6px">{_e(md_short)}</pre>'
+            '</details></div>'
+        )
+    except Exception:
+        return (
+            '<div class="card" style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0">'
+            '<h3 style="margin:0 0 6px">🤖 AI 分析素材</h3>'
+            '<p class="meta">payload 构建失败，请点上方「AI 推荐本场」</p>'
+            '</div>'
+        )
+
+
 def _result_forecast_card(prediction):
     """T3: 结果预测卡片（五源融合 -> 1X2 + 概率 + 理由）。"""
     if not prediction:
@@ -6867,7 +7021,7 @@ def _result_forecast_card(prediction):
         sp = f"SP {pred_jc.get('sp_home','—')}/{pred_jc.get('sp_draw','—')}/{pred_jc.get('sp_away','—')}"
         jc_hint = f'<p class="meta" style="font-size:12px">竞彩可购：{sp}</p>'
     else:
-        jc_hint = '<p class="meta" style="font-size:12px;color:#888">本场无竞彩 / 未开售（不影响赛果分析）</p>'
+        jc_hint = '<p class="meta" style="font-size:12px;color:#888">无 SP · 仍可用欧亚分析</p>'
 
     # G2: 只显示参与融合的源权重
     weights = rp.get("weights") or {}
@@ -6916,6 +7070,17 @@ def html_match_detail(
     pred_card = _wrap_export_module("recommend", _build_pred_cards(prediction))
     result_forecast_card = _wrap_export_module("result-forecast", _result_forecast_card(prediction))
     settled_card = _wrap_export_module("settled", _settled_card(settled))
+
+    # FIX-4: 首屏 4 块 — ①盘口信号 ②战绩 ③规则结论 ④AI
+    # ①盘口信号卡（devig + ah + betfair 摘要）
+    market_card_html = _market_signal_card(name, prediction, timeline)
+    market_card = _wrap_export_module("market-signal", market_card_html)
+    # ②战绩卡（club_form）
+    form_card_html = _form_card(name, prediction)
+    form_card = _wrap_export_module("club-form", form_card_html)
+    # ④AI payload 卡（结构化包 + markdown 预览）
+    ai_payload_card_html = _ai_payload_card(name, prediction, rp if 'rp' in dir() else (prediction or {}).get("result_prediction"))
+    ai_payload_card = _wrap_export_module("ai-payload", ai_payload_card_html)
     strategy_panel = _wrap_export_module("strategy", _build_match_strategy_panel(name, prediction))
     sweet_spot_panel = _wrap_export_module("sweet-spot", _sweet_spot_panel(prediction))
     score_rec_panel = _score_recommend_panel(prediction)
@@ -7259,7 +7424,7 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
         if _knockout_phase()
         else f'<a class="btn" style="background:#2563eb" href="/kelly?fixture_id={_e(fid)}">🧮 Kelly</a>'
     )
-    meta_hint = "优先看<strong>结果预测</strong>与<strong>盘口信号</strong>（欧赔/亚盘/必发）；需要时可展开走势与历史记录。"
+    meta_hint = "优先看 盘口 → 战绩 → 规则预测 → AI 素材；需要再展开下方折叠。"
 
     # 折叠非首屏内容
     extra_buttons_fold = _fold(
@@ -7275,6 +7440,18 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
     )
     strategy_fold = _fold("策略 & 甜区 & 量化", strategy_panel + sweet_spot_panel + quant_panel, muted=True) if (strategy_panel or sweet_spot_panel or quant_panel) else ""
     agent_extra_fold = _fold("Agent 分析", chief_agent_card + agent_workflow_card + agent_board_card, muted=True) if (not _knockout_phase() and (chief_agent_card or agent_workflow_card or agent_board_card)) else ""
+
+    # 折叠旧推荐/比分/深度/AI总结/质量/档位/亚盘详情
+    pred_score_fold = _fold(
+        "旧推荐 · 比分推荐（展开）",
+        f'<div class="rec-grid">{pred_card}{score_rec_panel}</div>',
+        muted=True,
+    )
+    deep_fold_card = _fold("深度 AI 分析", deep_card, muted=True) if deep_card else ""
+    ai_summary_fold = _fold("AI 总结", ai_summary_panel, muted=True) if ai_summary_panel else ""
+    qual_fold = _fold("质量评估", qual_banner, muted=True) if qual_banner else ""
+    tier_fold = _fold("档位", tier_banner, muted=True) if tier_banner else ""
+    ah_detail_fold = _fold("亚盘详情", ah_card, muted=True) if ah_card else ""
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head>
@@ -7302,25 +7479,24 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
 <div id="match-export-root" data-export-base="{_e(export_fname)}">
 {export_hero}
 {settled_card}
+{market_card}
+{form_card}
 {result_forecast_card}
-<div class="rec-grid">
-  {pred_card}
-  {score_rec_panel}
-</div>
+{ai_payload_card}
 <div class="fold-stack">
+{pred_score_fold}
 {market_fold}
 {extra_buttons_fold}
 {agent_extra_fold}
 {chief_agent_card}
 {agent_workflow_fold}
 {agent_board_fold}
-{deep_card}
-{ai_summary_panel}
-{qual_banner}
-{tier_banner}
-{_ai_chat_card(scope="match", fid=fid)}
+{deep_fold_card}
+{ai_summary_fold}
+{qual_fold}
+{tier_fold}
 {strategy_fold}
-{ah_card}
+{ah_detail_fold}
 {charts_fold}
 {bf_fold}
 {changes_fold}

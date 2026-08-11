@@ -6,30 +6,138 @@ leagues:
   英超:
     fd_code: EPL
     fd_path: england/premier-league
+    teams:
+      曼城: Man City
+      曼联: Man United
+      阿森纳: Arsenal
+      利物浦: Liverpool
+      切尔西: Chelsea
+      热刺: Tottenham
+      纽卡斯尔: Newcastle
+      西汉姆: West Ham
+      阿斯顿维拉: Aston Villa
+      布莱顿: Brighton
+      水晶宫: Crystal Palace
+      埃弗顿: Everton
+      富勒姆: Fulham
+      狼队: Wolves
+      伯恩茅斯: Bournemouth
+      诺丁汉森林: Nottingham Forest
+      布伦特福德: Brentford
+      卢顿: Luton
+      伯恩利: Burnley
+      谢菲尔德联队: Sheffield United
   英格兰超级联赛:
     fd_code: EPL
     fd_path: england/premier-league
   西甲:
     fd_code: LALIGA
     fd_path: spain/la-liga
+    teams:
+      皇马: Real Madrid
+      巴萨: Barcelona
+      巴塞罗那: Barcelona
+      马竞: Atletico Madrid
+      塞维利亚: Sevilla
+      皇家社会: Real Sociedad
+      皇家贝蒂斯: Real Betis
+      比利亚雷亚尔: Villarreal
+      瓦伦西亚: Valencia
+      赫罗纳: Girona
+      毕尔巴鄂: Athletic Bilbao
+      塞尔塔: Celta Vigo
+      奥萨苏纳: Osasuna
+      马略卡: Mallorca
+      赫塔费: Getafe
+      拉斯帕尔马斯: Las Palmas
+      阿拉维斯: Alaves
+      加的斯: Cadiz
+      格拉纳达: Granada
+      阿尔梅里亚: Almeria
   西班牙甲级联赛:
     fd_code: LALIGA
     fd_path: spain/la-liga
   意甲:
     fd_code: SERIE_A
     fd_path: italy/serie-a
+    teams:
+      国米: Inter
+      国际米兰: Inter
+      米兰: AC Milan
+      AC米兰: AC Milan
+      尤文: Juventus
+      尤文图斯: Juventus
+      那不勒斯: Napoli
+      罗马: Roma
+      拉齐奥: Lazio
+      亚特兰大: Atalanta
+      佛罗伦萨: Fiorentina
+      博洛尼亚: Bologna
+      都灵: Torino
+      乌迪内斯: Udinese
+      萨索洛: Sassuolo
+      热那亚: Genoa
+      蒙扎: Monza
+      莱切: Lecce
+      维罗纳: Verona
+      恩波利: Empoli
+      萨勒尼塔纳: Salernitana
+      卡利亚里: Cagliari
+      弗洛西诺内: Frosinone
   意大利甲级联赛:
     fd_code: SERIE_A
     fd_path: italy/serie-a
   德甲:
     fd_code: BUNDESLIGA
     fd_path: germany/bundesliga
+    teams:
+      拜仁: Bayern Munich
+      拜仁慕尼黑: Bayern Munich
+      多特: Dortmund
+      多特蒙德: Dortmund
+      勒沃库森: Bayer Leverkusen
+      莱比锡: RB Leipzig
+      莱比锡红牛: RB Leipzig
+      法兰克福: Eintracht Frankfurt
+      沃尔夫斯堡: Wolfsburg
+      门兴: Monchengladbach
+      门兴格拉德巴赫: Monchengladbach
+      弗赖堡: Freiburg
+      霍芬海姆: Hoffenheim
+      美因茨: Mainz
+      奥格斯堡: Augsburg
+      柏林联合: Union Berlin
+      不莱梅: Werder Bremen
+      波鸿: Bochum
+      科隆: FC Koln
+      达姆施塔特: Darmstadt
+      海登海姆: Heidenheim
   德国甲级联赛:
     fd_code: BUNDESLIGA
     fd_path: germany/bundesliga
   法甲:
     fd_code: LIGUE_1
     fd_path: france/ligue-1
+    teams:
+      巴黎: Paris Saint Germain
+      巴黎圣日耳曼: Paris Saint Germain
+      摩纳哥: Monaco
+      马赛: Marseille
+      里昂: Lyon
+      里尔: Lille
+      尼斯: Nice
+      朗斯: Lens
+      雷恩: Rennes
+      斯特拉斯堡: Strasbourg
+      蒙彼利埃: Montpellier
+      南特: Nantes
+      布雷斯特: Brest
+      图卢兹: Toulouse
+      梅斯: Metz
+      勒阿弗尔: Le Havre
+      洛里昂: Lorient
+      克莱蒙: Clermont
+      昂热: Angers
   法国甲级联赛:
     fd_code: LIGUE_1
     fd_path: france/ligue-1

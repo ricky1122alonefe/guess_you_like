@@ -73,6 +73,53 @@ def _summary_row(team: str, matches: list[dict], perspective: str) -> dict:
     }
 
 
+_LEAGUE_MAP_CACHE: dict | None = None
+
+
+def _load_league_map() -> dict:
+    """加载 jingcai_league_map.yaml（带缓存）。"""
+    global _LEAGUE_MAP_CACHE
+    if _LEAGUE_MAP_CACHE is not None:
+        return _LEAGUE_MAP_CACHE
+    try:
+        import yaml
+        from pathlib import Path
+        p = Path("config/jingcai_league_map.yaml")
+        if not p.exists():
+            _LEAGUE_MAP_CACHE = {}
+            return _LEAGUE_MAP_CACHE
+        data = yaml.safe_load(p.read_text())
+        _LEAGUE_MAP_CACHE = data.get("leagues") or {}
+        return _LEAGUE_MAP_CACHE
+    except Exception:
+        _LEAGUE_MAP_CACHE = {}
+        return _LEAGUE_MAP_CACHE
+
+
+def _resolve_team_name(team: str, league_name: str = "") -> str:
+    """通过 jingcai_league_map 映射中文别名 → 历史库名。
+
+    优先在 league_name 对应联赛的 teams 子表查找；
+    找不到则全局搜索所有联赛的 teams 子表。
+    """
+    leagues = _load_league_map()
+
+    # 1. 优先在指定联赛的 teams 里查
+    if league_name and league_name in leagues:
+        teams = leagues[league_name].get("teams") or {}
+        if team in teams:
+            return teams[team]
+
+    # 2. 全局搜索所有联赛的 teams
+    for league_info in leagues.values():
+        teams = league_info.get("teams") or {}
+        if team in teams:
+            return teams[team]
+
+    # 3. 原样返回（可能是英文名或未映射）
+    return team
+
+
 def _query_team_matches(team: str, perspective: str, limit: int) -> list[dict]:
     """从 PG 查某队近 N 场赛果（带赔率）。"""
     try:
@@ -120,6 +167,7 @@ def build_club_form(
     *,
     window: int = 30,
     split_n: int = 20,
+    league_name: str = "",
 ) -> dict[str, Any]:
     """构建两队战绩上下文。
 
@@ -128,15 +176,20 @@ def build_club_form(
         away_team: 客队名
         window: overall 窗口（20|30|50，默认 30）
         split_n: 主队主场/客队客场各取 N 场（默认 20）
+        league_name: 联赛名（用于 jingcai_league_map 映射）
 
     Returns:
         {overall: {home_team, away_team}, split: {home_at_home_last_N, away_at_away_last_N}, missing}
     """
     missing: list[str] = []
 
+    # FIX-3: 通过联赛映射表解析中文别名
+    home_resolved = _resolve_team_name(home_team, league_name)
+    away_resolved = _resolve_team_name(away_team, league_name)
+
     # Overall
-    home_all = _query_team_matches(home_team, "all", window)
-    away_all = _query_team_matches(away_team, "all", window)
+    home_all = _query_team_matches(home_resolved, "all", window)
+    away_all = _query_team_matches(away_resolved, "all", window)
     home_overall = _summary_row(home_team, home_all, "all") if home_all else None
     away_overall = _summary_row(away_team, away_all, "all") if away_all else None
 
@@ -146,8 +199,8 @@ def build_club_form(
         missing.append(f"away_overall({away_team})")
 
     # Split: 主队主场 / 客队客场
-    home_home = _query_team_matches(home_team, "home", split_n)
-    away_away = _query_team_matches(away_team, "away", split_n)
+    home_home = _query_team_matches(home_resolved, "home", split_n)
+    away_away = _query_team_matches(away_resolved, "away", split_n)
     home_at_home = _summary_row(home_team, home_home, "home") if home_home else None
     away_at_away = _summary_row(away_team, away_away, "away") if away_away else None
 

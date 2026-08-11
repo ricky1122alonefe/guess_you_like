@@ -91,6 +91,35 @@ def test_single_leg_ev():
     assert abs(ev["ev"] - 0.0) < 0.001  # 0.5 * 2.0 - 1 = 0
 
 
+def test_parlay_ev_three_legs_with_names():
+    """FIX-2: 3 场串关 EV（含 match_name + odds_source）。"""
+    legs = [
+        {"pick": "home", "p_model": 0.55, "odds": 2.0, "match_name": "A vs B", "odds_source": "竞彩SP"},
+        {"pick": "draw", "p_model": 0.30, "odds": 3.2, "match_name": "C vs D", "odds_source": "欧赔"},
+        {"pick": "away", "p_model": 0.40, "odds": 2.5, "match_name": "E vs F", "odds_source": "竞彩SP"},
+    ]
+    r = compute_parlay_ev(legs)
+    assert r["ok"]
+    assert r["n_legs"] == 3
+    assert r["parlay_odds"] == 16.0  # 2.0 * 3.2 * 2.5
+    assert abs(r["parlay_p"] - 0.066) < 0.001  # 0.55*0.30*0.40
+    # legs_ev 含 match_name + odds_source
+    assert r["legs_ev"][0]["match"] == "A vs B"
+    assert r["legs_ev"][0]["odds_source"] == "竞彩SP"
+
+
+def test_parlay_ev_two_legs_jingcai_sp():
+    """FIX-2: 2 场串关用竞彩 SP。"""
+    legs = [
+        {"pick": "home", "p_model": 0.50, "odds": 1.85, "match_name": "A vs B", "odds_source": "竞彩SP"},
+        {"pick": "away", "p_model": 0.45, "odds": 2.10, "match_name": "C vs D", "odds_source": "竞彩SP"},
+    ]
+    r = compute_parlay_ev(legs)
+    assert r["ok"]
+    assert abs(r["parlay_odds"] - 3.885) < 0.01
+    assert all(l["odds_source"] == "竞彩SP" for l in r["legs_ev"])
+
+
 # ============ P5: AI payload ============
 
 def test_ai_payload_structure():

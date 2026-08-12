@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from db.connection import ping
+from bs4 import BeautifulSoup
+from db.connection import cursor, ping
 from db.repository import (
     get_closing_tick,
     get_fixture_by_external,
@@ -17,10 +20,16 @@ from db.repository import (
     list_match_results_map,
     upsert_match_result,
 )
-from download_500 import DEFAULT_LEAGUES, _session
+from download_500 import DEFAULT_LEAGUES, BASE, _session
+from http_client import make_session
 from live_scores_500 import LiveScore, align_score_to_fixture, fetch_live_scoreboard
 from market_patterns import analyze_market_patterns
-from match_status import evaluate_prediction_hits, match_phase, RESULT_CN
+from match_status import (
+    ah_settlement_to_label,
+    evaluate_prediction_hits,
+    match_phase,
+    RESULT_CN,
+)
 from prediction_archive import load_best_prediction, prediction_snapshot
 from time_utils import format_beijing, now_beijing_str
 from worldcup_analytics import refresh_tournament_ledger
@@ -30,6 +39,16 @@ SOURCE = "500"
 
 
 from odds_utils import eu_favorite as _eu_favorite, odds_from_tick as _odds_from_tick
+
+def _to_float(text: str | None) -> float | None:
+    """Convert text to float; return None on failure."""
+    if text is None:
+        return None
+    try:
+        txt = str(text).strip().replace("↑", "").replace("↓", "")
+        return float(txt)
+    except (ValueError, TypeError):
+        return None
 
 
 def _pattern_meta(cur: dict) -> dict[str, Any]:
@@ -45,6 +64,7 @@ def _pattern_meta(cur: dict) -> dict[str, Any]:
 def _closing_fields(tick: dict | None) -> dict[str, Any]:
     if not tick:
         return {}
+    ou = _extract_ou(tick)
     return {
         "closing_captured_at": tick.get("captured_at"),
         "closing_ah_line": tick.get("ah_line"),
@@ -56,6 +76,28 @@ def _closing_fields(tick: dict | None) -> dict[str, Any]:
         "closing_eu_open_home": tick.get("eu_open_home"),
         "closing_eu_open_draw": tick.get("eu_open_draw"),
         "closing_eu_open_away": tick.get("eu_open_away"),
+        "closing_ou_line": ou.get("line"),
+        "closing_ou_over": ou.get("over"),
+        "closing_ou_under": ou.get("under"),
+        "closing_ou_open_line": ou.get("open_line"),
+        "closing_ou_open_over": ou.get("open_over"),
+        "closing_ou_open_under": ou.get("open_under"),
+    }
+
+
+def _extract_ou(tick: dict | None) -> dict[str, Any]:
+    """从 tick 顶层或 raw_meta.ou 取大小球。"""
+    if not tick:
+        return {}
+    raw = tick.get("raw_meta")
+    raw_ou = raw.get("ou") if isinstance(raw, dict) else {}
+    return {
+        "line": _to_float(tick.get("ou_line") or (raw_ou or {}).get("ou_line")),
+        "over": _to_float(tick.get("ou_over") or (raw_ou or {}).get("ou_over")),
+        "under": _to_float(tick.get("ou_under") or (raw_ou or {}).get("ou_under")),
+        "open_line": _to_float(tick.get("ou_open_line") or (raw_ou or {}).get("ou_open_line")),
+        "open_over": _to_float(tick.get("ou_open_over") or (raw_ou or {}).get("ou_open_over")),
+        "open_under": _to_float(tick.get("ou_open_under") or (raw_ou or {}).get("ou_open_under")),
     }
 
 
@@ -64,9 +106,13 @@ def _build_payload(
     *,
     opening_tick: dict | None,
     closing_tick: dict | None,
+    hits: dict[str, Any] | None = None,
+    score_source: str = "",
 ) -> dict[str, Any]:
     opening = _odds_from_tick(opening_tick, opening=True)
     closing = _odds_from_tick(closing_tick, opening=False)
+    open_ou = _extract_ou(opening_tick)
+    close_ou = _extract_ou(closing_tick)
     open_cur = {**opening, **{f"ah_open_{k}": v for k, v in opening.items() if k.startswith("ah_")}}
 
     open_mp = _pattern_meta(open_cur) if opening.get("eu_home") else {}
@@ -80,12 +126,21 @@ def _build_payload(
     fav = _eu_favorite(opening.get("eu_home"), opening.get("eu_draw"), opening.get("eu_away"))
 
     snap = prediction_snapshot(pred)
+
+    hits_obj: dict[str, Any] = {
+        "1x2": hits.get("hit_1x2") if hits else None,
+        "ah": ah_settlement_to_label(hits.get("ah_settlement")) if hits else None,
+        "ou": hits.get("hit_ou") if hits else None,
+        "jingcai": hits.get("hit_jingcai") if hits else None,
+    }
     return {
         "recommendation_source": snap.get("recommendation_source"),
         "run_id": snap.get("run_id"),
         "prediction": snap,
-        "opening_odds": opening,
-        "closing_odds": closing,
+        "opening_odds": {**opening, "ou": open_ou},
+        "closing_odds": {**closing, "ou": close_ou},
+        "hits": hits_obj,
+        "score_source": score_source,
         "opening_favorite": fav,
         "opening_favorite_cn": RESULT_CN.get(fav) if fav else None,
         "opening_consistency": open_mp.get("consistency"),
@@ -104,13 +159,21 @@ def _result_row(
     opening_tick: dict | None,
     closing_tick: dict | None,
 ) -> dict[str, Any]:
+    closing_ou = _extract_ou(closing_tick)
     hits = evaluate_prediction_hits(
         pred,
         home_score=score.home_score,
         away_score=score.away_score,
         ah_line=(closing_tick or {}).get("ah_line"),
+        ou_line=closing_ou.get("line"),
     )
-    payload = _build_payload(pred, opening_tick=opening_tick, closing_tick=closing_tick)
+    payload = _build_payload(
+        pred,
+        opening_tick=opening_tick,
+        closing_tick=closing_tick,
+        hits=hits,
+        score_source=score.score_source or score.source,
+    )
     row = {
         "fixture_id": fixture_db_id,
         "status": score.status,
@@ -128,11 +191,102 @@ def _result_row(
         "pick_ah_cn": hits.get("pick_ah_cn"),
         "hit_ah": hits.get("hit_ah"),
         "ah_settlement": hits.get("ah_settlement"),
+        "hit_ou": hits.get("hit_ou"),
+        "ou_settlement": hits.get("ou_settlement"),
+        "hit_jingcai": hits.get("hit_jingcai"),
         "payload": payload,
         "source": SOURCE,
     }
     row.update(_closing_fields(closing_tick))
     return row
+
+
+# ---------------------------------------------------------------------------
+# score resolution (500.com data page fallback)
+# ---------------------------------------------------------------------------
+
+def _parse_shuju_score(html: str) -> LiveScore | None:
+    """从 500 数据页（shuju-{fid}.shtml）顶部「比赛时间」行解析完场比分。
+
+    世界杯结构：['英格兰', '', '26世界杯半决赛比赛时间2026-07-16 03:001:2', '阿根廷', '阿根廷']
+    联赛结构：['主队', ..., '比赛时间2026-06-14 00:00', '0:3', '客队', ...]
+    策略：扫描所有单元格文本，找到含「比赛时间」的单元格后，从中提取 `时间后的比分`，
+    若单元格本身没有比分，再取下一个单元格。
+
+    同时检测页面是否有终场/完场标记，未终场返回 None，避免把临时比分当完场写入。
+    """
+    text = re.sub(r"\s+", "", html)
+    finished_markers = ("比赛结束", "终场", "已结束", "完场")
+    page_finished = any(m in text for m in finished_markers)
+
+    soup = BeautifulSoup(html, "html.parser")
+    for table in soup.find_all("table"):
+        for tr in table.find_all("tr"):
+            cells = [c.get_text(strip=True) for c in tr.find_all(["td", "th"])]
+            for idx, cell in enumerate(cells):
+                if "比赛时间" not in cell:
+                    continue
+                # 先尝试在同一单元格提取：去掉比赛时间本身后再取比分
+                rest = re.sub(r"比赛时间\s*\d{4}-\d{2}-\d{2}\s*\d{2}:\d{2}", "", cell)
+                m = re.search(r"(\d+)\s*[:：]\s*(\d+)", rest)
+                same_cell_score = bool(m)
+                if not m and idx + 1 < len(cells):
+                    m = re.search(r"(\d+)\s*[:：]\s*(\d+)", cells[idx + 1])
+                if not m:
+                    continue
+                home = int(m.group(1))
+                away = int(m.group(2))
+                # 数据页「比赛时间」单元格内直接跟比分 = 完场证据；
+                # 跨单元格比分需要页面级终场标记。
+                is_finished = same_cell_score or page_finished
+                if not is_finished:
+                    return None
+                return LiveScore(
+                    fixture_id="",
+                    home_score=home,
+                    away_score=away,
+                    score_text=f"{home}-{away}",
+                    status="finished",
+                    source="500_data_page",
+                    is_finished=True,
+                    score_source="500_data_page",
+                )
+    return None
+
+
+def fetch_match_score_from_pages(fid: str) -> LiveScore | None:
+    """从 500 数据页抓完场比分；未终场或失败返回 None。"""
+    from http_client import get_text, ScraperGuard
+
+    session = make_session()
+    guard = ScraperGuard(min_delay=0.5, max_delay=1.0)
+    url = f"{BASE}/fenxi/shuju-{fid}.shtml"
+    try:
+        html = get_text(session, url, source="500", guard=guard)
+    except Exception as exc:
+        log.debug("shuju 页获取比分失败 fid=%s: %s", fid, exc)
+        return None
+    return _parse_shuju_score(html)
+
+
+def _resolve_score(
+    fixture: dict,
+    scoreboard: dict[str, LiveScore],
+) -> LiveScore | None:
+    """优先取 scoreboard；不在 scoreboard 时尝试 500 数据页/分析页。"""
+    fid = fixture["external_id"]
+    score = scoreboard.get(fid)
+    if score and score.home_score is not None and score.away_score is not None:
+        return score
+
+    try:
+        result = fetch_match_score_from_pages(str(fid))
+        if result is not None and result.home_score is not None:
+            return result
+    except Exception as exc:
+        log.warning("fetch_match_score_from_pages fid=%s: %s", fid, exc)
+
+    return None
 
 
 def _save_result_file(output_root: Path, external_id: str, row: dict, fixture: dict) -> None:
@@ -159,6 +313,71 @@ def _save_result_file(output_root: Path, external_id: str, row: dict, fixture: d
         f.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
 
 
+def _is_dirty_name(name: str | None) -> bool:
+    if not name:
+        return True
+    dirty_exact = (
+        "亚冠杯","欧冠","欧联","欧会","欧超杯","解放者杯","南美杯",
+        "附加赛","决赛","半决赛","四分之一决赛","八强","四强",
+    )
+    dirty_substr = (
+        "资格赛", "附加赛", "预选赛", "季后赛", "小组赛", "淘汰赛",
+        "第三轮", "第二轮", "第一轮", "第1轮", "第2轮", "第3轮",
+    )
+    name = str(name).strip()
+    if name in dirty_exact:
+        return True
+    return any(s in name for s in dirty_substr)
+
+
+def ensure_fixture_identity(fixture_id: str, output_root: str | Path | None = None) -> dict | None:
+    """如果 fixtures 表中的队名被识别为脏名，尝试从 500 亚盘分析页回填真实队名。
+
+    返回更新后的 fixture 字典；回填失败或队名不脏则返回 None（表示无需修正）。
+    """
+    from download_500 import _session, fetch_match_info
+
+    with cursor() as cur:
+        cur.execute(
+            "SELECT id, external_id, home_team, away_team, match_name, kickoff_at FROM fixtures WHERE external_id=%s",
+            (str(fixture_id),),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+
+    home, away = row["home_team"], row["away_team"]
+    if not (_is_dirty_name(home) or _is_dirty_name(away)):
+        return None
+
+    try:
+        session = _session()
+        info = fetch_match_info(session, str(fixture_id))
+    except Exception as exc:
+        log.warning("无法从 500 回填 %s 队名: %s", fixture_id, exc)
+        return None
+
+    real_home = info.home or ""
+    real_away = info.away or ""
+    if not real_home or not real_away:
+        return None
+    if _is_dirty_name(real_home) or _is_dirty_name(real_away):
+        log.warning("500 回填队名仍脏 %s: %s vs %s", fixture_id, real_home, real_away)
+        return None
+
+    match_name = f"{real_home} vs {real_away}"
+    with cursor() as cur:
+        cur.execute(
+            "UPDATE fixtures SET home_team=%s, away_team=%s, match_name=%s, updated_at=NOW() WHERE id=%s",
+            (real_home, real_away, match_name, row["id"]),
+        )
+    log.info("已回填 %s 队名: %s", fixture_id, match_name)
+    row["home_team"] = real_home
+    row["away_team"] = real_away
+    row["match_name"] = match_name
+    return dict(row)
+
+
 def settle_fixture(
     fixture: dict,
     score: LiveScore,
@@ -168,6 +387,27 @@ def settle_fixture(
 ) -> bool:
     db_id = int(fixture["id"])
     ext = str(fixture.get("external_id") or score.fixture_id)
+
+    # 完场可信度：必须有完场证据
+    if not score.is_finished and score.status not in ("finished", "完", "完场", "终场"):
+        log.info("跳过未确认完场场次 %s (status=%s)", ext, score.status)
+        return False
+
+    # 0-0 必须二次确认完场证据
+    if score.home_score == 0 and score.away_score == 0 and not score.is_finished:
+        log.warning("跳过 0-0 未确认完场场次 %s", ext)
+        return False
+
+    # 身份修正：脏队名先尝试从 500 回填真实队名
+    refreshed = ensure_fixture_identity(ext, output_root=output_root)
+    if refreshed:
+        fixture = refreshed
+        db_id = int(fixture["id"])
+
+    # 脏队名不得 settle/覆盖
+    if _is_dirty_name(fixture.get("home_team")) or _is_dirty_name(fixture.get("away_team")):
+        log.warning("脏队名不得结算 %s: %s vs %s", ext, fixture.get("home_team"), fixture.get("away_team"))
+        return False
 
     if output_root and pred is None:
         pred = load_best_prediction(
@@ -338,16 +578,21 @@ def run_settlement(
             log.debug("账本刷新: %s", exc)
         return summary
 
-    try:
-        board = fetch_live_scoreboard(_session(), leagues=leagues)
-    except Exception as exc:
-        log.warning("拉取 live.500 比分失败: %s", exc)
-        summary["errors"].append(str(exc))
-        return summary
+    # 快速路径：指定了 fixture_ids 时不拉取全量 scoreboard，直接走 500 数据页
+    if fixture_ids:
+        board: dict[str, LiveScore] = {}
+        live_status: dict[str, Any] = {}
+    else:
+        try:
+            board = fetch_live_scoreboard(_session(), leagues=leagues)
+        except Exception as exc:
+            log.warning("拉取 live.500 比分失败: %s", exc)
+            summary["errors"].append(str(exc))
+            return summary
 
-    from daily_picks import load_live_status_map
+        from daily_picks import load_live_status_map
 
-    live_status = load_live_status_map(within_days=14)
+        live_status = load_live_status_map(within_days=14)
 
     for fx in pending:
         ext = str(fx["external_id"])
@@ -357,10 +602,20 @@ def run_settlement(
             continue
         score = board.get(ext)
         if not score:
-            summary["skipped_no_score"] += 1
-            continue
-        if score.source != "wc_api":
+            # scoreboard 没有时尝试 500 数据页 / 分析页
+            score = _resolve_score(fx, board)
+            if score is None:
+                summary["skipped_no_score"] += 1
+                continue
+            score.fixture_id = ext
+            if not score.score_text:
+                score.score_text = f"{score.home_score}-{score.away_score}"
+        if score.source != "wc_api" and score.source != "500_data_page":
             score = align_score_to_fixture(score, fx)
+            # align 后必须仍有完场证据（HTML scoreboard 默认已带）
+            if not score.is_finished:
+                score.is_finished = True
+                score.score_source = score.score_source or score.source
         try:
             settle_fixture(fx, score, output_root=root)
             summary["settled"] += 1
@@ -388,9 +643,9 @@ def run_settlement(
         except Exception as exc:
             log.warning("亚盘账本更新失败: %s", exc)
         try:
-            from quant_analytics import refresh_elo_from_settled
+            from elo_ratings import refresh_elo_from_match_results
 
-            refresh_elo_from_settled(root)
+            refresh_elo_from_match_results()
         except Exception as exc:
             log.debug("Elo 更新: %s", exc)
 

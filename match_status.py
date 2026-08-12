@@ -26,6 +26,17 @@ def goals_to_result_1x2(home: int, away: int) -> str:
     return "away"
 
 
+def ah_settlement_to_label(ah_settlement: float | None) -> str | None:
+    """Convert numeric settlement to win/push/lose label."""
+    if ah_settlement is None:
+        return None
+    if ah_settlement > 0:
+        return "win"
+    if ah_settlement < 0:
+        return "lose"
+    return "push"
+
+
 def norm_result(text: str | None) -> str | None:
     s = (text or "").strip()
     return RESULT_MAP.get(s) or RESULT_MAP.get(s.lower())
@@ -59,11 +70,14 @@ def evaluate_prediction_hits(
     home_score: int,
     away_score: int,
     ah_line: float | None = None,
+    ou_line: float | None = None,
+    jingcai_pick_key: str | None = None,
 ) -> dict[str, Any]:
     """Compare stored prediction vs actual score; reuse check_results semantics."""
     score_text = f"{home_score}-{away_score}"
     actual_1x2 = goals_to_result_1x2(home_score, away_score)
     actual_cn = RESULT_CN[actual_1x2]
+    total_goals = home_score + away_score
 
     out: dict[str, Any] = {
         "score_text": score_text,
@@ -78,7 +92,10 @@ def evaluate_prediction_hits(
         "pick_ah_cn": None,
         "hit_ah": None,
         "ah_settlement": None,
+        "hit_ou": None,
+        "hit_jingcai": None,
     }
+
     if not pred:
         return out
 
@@ -89,7 +106,7 @@ def evaluate_prediction_hits(
     info = pred.get("jingcai_pick_info") or {}
     jc = pred.get("jingcai_snapshot") or {}
     mode = info.get("jingcai_market") or jingcai_market_mode(jc)
-    pick_key = info.get("jingcai_pick")
+    pick_key = jingcai_pick_key or info.get("jingcai_pick")
     out["pick_jingcai_cn"] = pick_cn
     out["pick_1x2_cn"] = row.get("赛果预测") or pred.get("result_1x2_cn") or row.get("胜平负")
 
@@ -97,10 +114,21 @@ def evaluate_prediction_hits(
         if mode == "rqsp" and jc.get("handicap") is not None:
             actual_rq = settle_handicap(home_score, away_score, int(jc["handicap"]))
             out["hit_1x2"] = pick_key == actual_rq
+            out["hit_jingcai"] = out["hit_1x2"]
         elif mode == "sp":
             out["hit_1x2"] = pick_key == actual_1x2
+            out["hit_jingcai"] = out["hit_1x2"]
         else:
             legacy = norm_result(pick_cn)
+            if legacy:
+                out["hit_1x2"] = legacy == actual_1x2
+                out["hit_jingcai"] = out["hit_1x2"]
+
+    # 若竞彩 pick 不存在，回退到 pick_1x2_cn 中文（如“主胜”）
+    if out["hit_1x2"] is None:
+        pick_1x2 = out["pick_1x2_cn"]
+        if pick_1x2:
+            legacy = norm_result(pick_1x2)
             if legacy:
                 out["hit_1x2"] = legacy == actual_1x2
 
@@ -131,5 +159,18 @@ def evaluate_prediction_hits(
         )
         out["hit_ah"] = ah_eval.get("hit_ah")
         out["ah_settlement"] = ah_eval.get("ah_settlement")
+
+    if ou_line is not None and total_goals is not None:
+        try:
+            line_f = float(ou_line)
+        except (TypeError, ValueError):
+            line_f = None
+        if line_f is not None:
+            if total_goals > line_f:
+                out["hit_ou"] = "over"
+            elif total_goals < line_f:
+                out["hit_ou"] = "under"
+            else:
+                out["hit_ou"] = "push"
 
     return out

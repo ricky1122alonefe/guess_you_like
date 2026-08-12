@@ -1025,16 +1025,32 @@ def _hit_badge(hit) -> str:
     return '<span class="meta">—</span>'
 
 
+def _ou_settlement_badge(label: str | None) -> str:
+    if not label:
+        return '<span class="meta">—</span>'
+    label = str(label).lower()
+    if label == "over":
+        return '<span class="tag tag-ok">大</span>'
+    if label == "under":
+        return '<span class="tag tag-miss">小</span>'
+    if label == "push":
+        return '<span class="tag tag-warn">走</span>'
+    return f'<span class="meta">{_e(label)}</span>'
+
+
 def _closing_odds_txt(settled: dict) -> str:
     eu_h = settled.get("closing_eu_home")
     eu_d = settled.get("closing_eu_draw")
     eu_a = settled.get("closing_eu_away")
     ah = settled.get("closing_ah_line")
+    ou = settled.get("closing_ou_line")
     parts = []
     if eu_h is not None:
         parts.append(f"欧 {eu_h}/{eu_d}/{eu_a}")
     if ah is not None:
         parts.append(f"亚 {ah}")
+    if ou is not None:
+        parts.append(f"OU {ou}")
     ts = settled.get("closing_captured_at")
     if ts:
         parts.append(format_ts(ts))
@@ -5155,6 +5171,8 @@ def _settled_card(settled: dict | None) -> str:
     hit_1x2 = _hit_badge(settled.get("hit_1x2"))
     hit_sc = _hit_badge(settled.get("hit_score"))
     settled_at = format_ts(settled.get("settled_at"))
+    ou_line = settled.get("closing_ou_line")
+    ou_line_txt = f" · 线 {ou_line}" if ou_line is not None else ""
     return f"""
 <div class="card settled-card">
   <h3>已完场复盘</h3>
@@ -5162,6 +5180,7 @@ def _settled_card(settled: dict | None) -> str:
   <p class="meta">终盘 {_e(closing)}</p>
   <p>预测 {_e(pick)} · 命中 {hit_1x2} 1X2 · {hit_sc} 比分</p>
   <p class="meta">亚盘 {_e(settled.get('pick_ah_cn') or '—')} · 赢盘 {_hit_badge(settled.get('hit_ah'))}</p>
+  <p class="meta">OU{_e(ou_line_txt)} · 结果 {_ou_settlement_badge(settled.get('hit_ou'))}</p>
 </div>"""
 
 
@@ -5510,6 +5529,7 @@ def _review_row(r: dict) -> str:
     hit_1x2 = _hit_badge(r.get("hit_1x2"))
     hit_sc = _hit_badge(r.get("hit_score")) if _score_enabled() else "—"
     hit_ah = _hit_badge(r.get("hit_ah"))
+    hit_ou = _ou_settlement_badge(r.get("hit_ou"))
     cmp_txt = r.get("compare_summary") or "—"
     cmp_cls = "cmp-ok" if r.get("hit_1x2") is True else ("cmp-bad" if r.get("hit_1x2") is False else "")
     ref = r.get("reference_result_1x2_cn") or "—"
@@ -5536,7 +5556,7 @@ def _review_row(r: dict) -> str:
         f"<td class='meta'>{_e(ref)}</td>"
         f"<td class='meta'>{_e(open_cn)}</td>"
         f"<td class='meta'>{_e(rec_scores)}</td>"
-        f"<td>{user_hit}</td><td>{hit_1x2}</td><td>{hit_sc}</td><td>{hit_ah}</td>"
+        f"<td>{user_hit}</td><td>{hit_1x2}</td><td>{hit_sc}</td><td>{hit_ah}</td><td>{hit_ou}</td>"
         f"<td class='meta'>{_e(r.get('recommendation_source') or '—')}</td>"
         f"</tr>\n"
     )
@@ -5828,7 +5848,7 @@ function sortReview(kind) {{
       <tr>
         <th>开球</th><th>比赛</th><th>我的定稿</th><th>Agent 推荐</th><th>实际</th><th>对照</th>
         <th>档位</th><th>置信</th><th>参考研判</th><th>初盘</th><th>比分</th>
-        <th>定稿</th><th>1X2</th><th>比分</th><th>亚盘</th><th>来源</th>
+        <th>定稿</th><th>1X2</th><th>比分</th><th>亚盘</th><th>OU</th><th>来源</th>
       </tr>
     </thead>
     <tbody>
@@ -6842,76 +6862,145 @@ def _buy_tier_banner(prediction: dict | None) -> str:
 </div>"""
 
 
-def _market_signal_card(match_name: str, prediction: dict | None, timeline: list) -> str:
-    """FIX-4 ①盘口信号卡：devig + 亚盘 + 必发 摘要。"""
+def _market_signal_card(
+    match_name: str,
+    prediction: dict | None,
+    timeline: list,
+    market_open_close: dict | None = None,
+) -> str:
+    """FIX-4 ①盘口信号卡：开盘 vs 临盘 + devig + 亚盘 + 必发。"""
     rp = (prediction or {}).get("result_prediction") or {}
     factors = rp.get("factors") or {}
     eu = factors.get("european")
     asian = factors.get("asian")
     bf = factors.get("betfair")
 
+    moc = market_open_close or {}
+    opening = moc.get("opening") or {}
+    latest = moc.get("latest") or {}
+    move = moc.get("move") or {}
+
     lines: list[str] = []
+    # 开盘 vs 临盘 欧赔
+    if opening.get("eu_home") or latest.get("eu_home"):
+        o_h = opening.get("eu_home")
+        l_h = latest.get("eu_home")
+        o_a = opening.get("eu_away")
+        l_a = latest.get("eu_away")
+        o_d = opening.get("eu_draw") or "—"
+        l_d = latest.get("eu_draw") or "—"
+        open_txt = f"开盘 {o_h}/{o_d}/{o_a}" if o_h and o_a else "开盘 —"
+        latest_txt = f"临盘 {l_h}/{l_d}/{l_a}" if l_h and l_a else "临盘 —"
+        lines.append(f"欧赔 {open_txt} → {latest_txt}")
+        if move.get("eu_home_delta") is not None:
+            lines.append(f"主胜漂移：{move['eu_home_delta']:+.2f}")
+    # 亚盘
+    if opening.get("ah_line") is not None or latest.get("ah_line") is not None:
+        o_l = opening.get("ah_line")
+        l_l = latest.get("ah_line")
+        o_w = opening.get("ah_home_water")
+        l_w = latest.get("ah_home_water")
+        lines.append(f"亚盘 开盘 {o_l}@{o_w} → 临盘 {l_l}@{l_w}")
+        if move.get("ah_line_delta") is not None:
+            lines.append(f"让球线漂移：{move['ah_line_delta']:+.2f}")
+    # OU
+    if opening.get("ou_line") is not None or latest.get("ou_line") is not None:
+        o_ou = opening.get("ou_line")
+        l_ou = latest.get("ou_line")
+        lines.append(f"OU 开盘 {o_ou} → 临盘 {l_ou}")
+    # devig
     if eu:
         imp = eu.get("implied") or {}
         lines.append(f"欧赔去水：主{imp.get('home',0):.0%} / 平{imp.get('draw',0):.0%} / 客{imp.get('away',0):.0%}")
-        if eu.get("move"):
-            lines.append(f"变动：{eu['move']}")
-    if asian:
-        fav_cn = {"home": "主队", "away": "客队", "even": "均势"}.get(asian.get("favored"), "—")
-        wm = f"，{asian['water_move']}" if asian.get("water_move") else ""
-        lines.append(f"亚盘：让球{asian['line']:+.1f}（{fav_cn}方向）{wm}")
     if bf:
         hot_cn = {"home": "主胜", "draw": "平", "away": "客胜"}.get(bf.get("hot"), "—")
-        lines.append(f"必发：成交{bf.get('volume_total',0)/10000:.0f}万，热门{hot_cn}")
+        vol = bf.get('volume_total', 0) or 0
+        vol_str = f"{vol/10000:.1f}万" if vol >= 10000 else f"{vol:.0f}"
+        lines.append(f"必发：成交{vol_str}，热门{hot_cn}")
 
     if not lines:
-        lines.append("无欧亚盘口数据：请补抓盘口或等 poll")
+        lines.append("暂无盘口数据")
 
     items_html = "".join(f"<li>{_e(l)}</li>" for l in lines)
     return (
         '<div class="card" style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0">'
-        '<h3 style="margin:0 0 6px">📊 盘口信号</h3>'
+        '<h3 style="margin:0 0 6px">📊 盘口（开盘 vs 即盘）</h3>'
         f'<ul style="margin:4px 0;padding-left:20px;font-size:13px">{items_html}</ul>'
         '</div>'
     )
 
 
-def _form_card(match_name: str, prediction: dict | None) -> str:
-    """FIX-4 ②战绩卡：club_form（近30 + 主队主场last20 + 客队客场last20）。"""
+def _form_card(match_name: str, prediction: dict | None, club_form: dict | None = None) -> str:
+    """FIX-4 ②战绩卡：club_form（近30 + 主队主场last20 + 客队客场last20）+ 样本列表。"""
     rp = (prediction or {}).get("result_prediction") or {}
     rf = (rp.get("factors") or {}).get("recent_form")
 
-    if not rf:
-        missing_reason = ""
-        rp_full = (prediction or {}).get("result_prediction") or {}
-        # 从 context 获取 missing_reason
-        ctx_missing_reason = rp_full.get("factors", {}).get("recent_missing_reason") if rp_full else ""
-        if ctx_missing_reason:
-            missing_reason = ctx_missing_reason
-        return (
-            '<div class="card" style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0">'
-            '<h3 style="margin:0 0 6px">📋 近期战绩</h3>'
-            f'<p class="meta">{_e(missing_reason or "库无历史赛果")}</p>'
-            '</div>'
+    # 优先用直接传入的 club_form
+    cf = club_form or {}
+    home_overall = (cf.get("overall") or {}).get("home_team") or {}
+    away_overall = (cf.get("overall") or {}).get("away_team") or {}
+    home_split = (cf.get("split") or {}).get("home_at_home_last_20") or {}
+    away_split = (cf.get("split") or {}).get("away_at_away_last_20") or {}
+    samples = cf.get("samples") or {}
+    missing = cf.get("missing") or []
+
+    parts: list[str] = []
+    if home_split.get("summary_cn"):
+        parts.append(home_split["summary_cn"])
+    elif home_overall.get("summary_cn"):
+        parts.append(home_overall["summary_cn"])
+    elif rf and (rf.get("home") or {}).get("form_str"):
+        h = rf["home"]
+        parts.append(f"主队近况：{h['form_str']}（胜率{h.get('win_rate',0):.0%}）")
+    if away_split.get("summary_cn"):
+        parts.append(away_split["summary_cn"])
+    elif away_overall.get("summary_cn"):
+        parts.append(away_overall["summary_cn"])
+    elif rf and (rf.get("away") or {}).get("form_str"):
+        a = rf["away"]
+        parts.append(f"客队近况：{a['form_str']}（胜率{a.get('win_rate',0):.0%}）")
+
+    summary_html = "".join(f"<li>{_e(p)}</li>" for p in parts) if parts else ""
+
+    # 样本表格（主队全部 + 客队全部，最多各 5 条）
+    home_samples = (samples.get("home_all") or [])[:5]
+    away_samples = (samples.get("away_all") or [])[:5]
+    rows = ""
+    for s in home_samples + away_samples:
+        eu = ""
+        if s.get("closing_eu_home"):
+            eu = f"{_e(s.get('closing_eu_home'))}/{_e(s.get('closing_eu_draw'))}/{_e(s.get('closing_eu_away'))}"
+        ah = ""
+        if s.get("closing_ah_line") is not None:
+            ah = f"{_e(s.get('closing_ah_line'))}@{_e(s.get('closing_ah_home_water'))}"
+        rows += (
+            f"<tr><td>{_e(s.get('date'))}</td><td>{_e(s.get('match'))}</td>"
+            f"<td>{_e(eu)}</td><td>{_e(ah)}</td></tr>"
+        )
+    samples_html = ""
+    if rows:
+        samples_html = (
+            '<details style="margin-top:8px"><summary style="cursor:pointer;color:#60a5fa">近场样本</summary>'
+            '<table style="margin-top:6px;font-size:12px">'
+            '<tr><th>日期</th><th>比赛</th><th>收盘欧赔</th><th>收盘亚盘</th></tr>'
+            f'{rows}'
+            '</table></details>'
         )
 
-    home = rf.get("home") or {}
-    away = rf.get("away") or {}
-    parts: list[str] = []
-    if home.get("home_at_home"):
-        parts.append(home["home_at_home"])
-    elif home.get("form_str"):
-        parts.append(f"主队近况：{home['form_str']}（胜率{home.get('win_rate',0):.0%}）")
-    if away.get("away_at_away"):
-        parts.append(away["away_at_away"])
-    elif away.get("form_str"):
-        parts.append(f"客队近况：{away['form_str']}（胜率{away.get('win_rate',0):.0%}）")
+    missing_html = ""
+    home_played = (home_overall or {}).get("played") or 0
+    away_played = (away_overall or {}).get("played") or 0
+    if missing and home_played == 0 and away_played == 0:
+        missing_html = f'<p class="meta">{_e("；".join(missing))}</p>'
+    elif not parts:
+        missing_html = '<p class="meta">暂无历史战绩数据</p>'
 
-    items_html = "".join(f"<li>{_e(p)}</li>" for p in parts) if parts else "<li>暂无战绩数据</li>"
     return (
         '<div class="card" style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0">'
-        '<h3 style="margin:0 0 6px">📋 近期战绩</h3>'
-        f'<ul style="margin:4px 0;padding-left:20px;font-size:13px">{items_html}</ul>'
+        '<h3 style="margin:0 0 6px">📋 历史战绩</h3>'
+        f'<ul style="margin:4px 0;padding-left:20px;font-size:13px">{summary_html}</ul>'
+        f'{samples_html}'
+        f'{missing_html}'
         '</div>'
     )
 
@@ -6958,6 +7047,113 @@ def _ai_payload_card(match_name: str, prediction: dict | None, rule_prediction: 
             '<p class="meta">payload 构建失败，请点上方「AI 推荐本场」</p>'
             '</div>'
         )
+
+
+def _history_similar_card(history_similar: dict | None) -> str:
+    """FIX-4 ③历史同赔卡：赛果分布 + n + Top 样本。"""
+    if not history_similar:
+        return (
+            '<div class="card" style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0">'
+            '<h3 style="margin:0 0 6px">📚 历史同赔</h3>'
+            '<p class="meta">暂无足够相似样本</p>'
+            '</div>'
+        )
+    n = history_similar.get("n") or 0
+    ph = history_similar.get("p_home") or 0
+    pd_ = history_similar.get("p_draw") or 0
+    pa = history_similar.get("p_away") or 0
+    total = ph + pd_ + pa
+    if total <= 0:
+        return (
+            '<div class="card" style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0">'
+            '<h3 style="margin:0 0 6px">📚 历史同赔</h3>'
+            '<p class="meta">样本分布为空</p>'
+            '</div>'
+        )
+
+    def _bar(label, pct, color):
+        return (
+            '<div style="display:flex;align-items:center;gap:6px;margin:2px 0">'
+            f'<span style="width:28px;font-size:12px">{_e(label)}</span>'
+            '<div style="flex:1;height:14px;background:#eee;border-radius:3px">'
+            f'<div style="width:{pct*100:.0f}%;height:100%;background:{color};border-radius:3px"></div>'
+            '</div>'
+            f'<span style="width:38px;font-size:12px;text-align:right">{pct:.0%}</span>'
+            '</div>'
+        )
+
+    bars = _bar("主", ph / total, "#d32f2f") + _bar("平", pd_ / total, "#888") + _bar("客", pa / total, "#1565c0")
+    rows = ""
+    for i, s in enumerate(history_similar.get("samples") or [], 1):
+        rows += (
+            f"<tr><td>{i}</td><td>{_e(s.get('date'))}</td><td>{_e(s.get('match'))}</td>"
+            f"<td>{_e(s.get('result'))}</td></tr>"
+        )
+    samples_html = ""
+    if rows:
+        samples_html = (
+            '<details style="margin-top:8px"><summary style="cursor:pointer;color:#60a5fa">Top 样本</summary>'
+            '<table style="margin-top:6px;font-size:12px">'
+            '<tr><th>#</th><th>日期</th><th>比赛</th><th>结果</th></tr>'
+            f'{rows}'
+            '</table></details>'
+        )
+
+    return (
+        '<div class="card" style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0">'
+        '<h3 style="margin:0 0 6px">📚 历史同赔</h3>'
+        f'<p class="meta">样本数 {n} · 按开盘欧赔容差匹配</p>'
+        f'<div style="margin:6px 0">{bars}</div>'
+        f'{samples_html}'
+        '</div>'
+    )
+
+
+def _models_detail_card(models):
+    """轻量模型对照折叠块：Elo / 泊松λ / edge。"""
+    if not models:
+        return ""
+    parts = []
+    elo = models.get("elo") or {}
+    if elo:
+        p = elo.get("p_elo_1x2") or {}
+        parts.append(
+            f'<p style="margin:4px 0"><b>Elo</b>：'
+            f'主 {_e(elo.get("home_elo", "—"))} vs 客 {_e(elo.get("away_elo", "—"))}，'
+            f'差 {_e(elo.get("elo_diff", "—"))}；'
+            f'p=主{p.get("home", "—")}/平{p.get("draw", "—")}/客{p.get("away", "—")}</p>'
+        )
+    poisson = models.get("poisson_matrix") or {}
+    if poisson:
+        top = (poisson.get("top_scores") or [{}])[0]
+        p = poisson.get("p_1x2") or {}
+        parts.append(
+            f'<p style="margin:4px 0"><b>泊松λ</b>：'
+            f'主{_e(poisson.get("lambda_home", "—"))} 客{_e(poisson.get("lambda_away", "—"))}；'
+            f'最可能 {_e(top.get("score", "—"))}；'
+            f'p=主{p.get("home", "—")}/平{p.get("draw", "—")}/客{p.get("away", "—")}</p>'
+        )
+    edge = models.get("edge") or {}
+    if edge:
+        src = edge.get("market_source", "—")
+        fused = edge.get("result_forecast") or {}
+        e = fused.get("edge") or {}
+        k = fused.get("half_kelly") or {}
+        parts.append(
+            f'<p style="margin:4px 0"><b>Edge</b>：来源 {_e(src)}；'
+            f'edge=主{e.get("home", "—")}/平{e.get("draw", "—")}/客{e.get("away", "—")}；'
+            f'half-Kelly=主{k.get("home", "—")}/平{k.get("draw", "—")}/客{k.get("away", "—")}</p>'
+        )
+    if not parts:
+        return ""
+    disclaimer = _e(edge.get("disclaimer", "研究用，非投注建议"))
+    return (
+        '<details style="margin-top:10px;border:1px solid #e5e7eb;border-radius:6px;padding:8px">'
+        '<summary style="cursor:pointer;color:#1565c0;font-weight:bold">模型对照（Elo / 泊松λ / edge）</summary>'
+        f'<div style="margin-top:8px;font-size:12px">{ "".join(parts) }</div>'
+        f'<p class="meta" style="font-size:11px;color:#888;margin:6px 0 0">{disclaimer}</p>'
+        '</details>'
+    )
 
 
 def _result_forecast_card(prediction):
@@ -7029,6 +7225,9 @@ def _result_forecast_card(prediction):
         if w_parts:
             weights_html = f'<p class="meta" style="font-size:11px;color:#666">融合权重：{" · ".join(w_parts)}</p>'
 
+    models = (rp.get("secondary") or {}).get("models") or {}
+    models_detail_html = _models_detail_card(models)
+
     return (
         '<div class="card result-forecast-card" style="border:2px solid #1565c0;border-radius:8px;padding:12px;margin:8px 0">'
         '<h3 style="margin:0 0 6px">🎯 赛果预测（五源融合）</h3>'
@@ -7041,6 +7240,7 @@ def _result_forecast_card(prediction):
         f'{weights_html}'
         f'{missing_html}'
         f'{jc_hint}'
+        f'{models_detail_html}'
         '<p class="meta" style="font-size:11px;margin-top:6px">仅供研究参考，不构成投注建议。规则融合，非 AI 生成。</p>'
         '</div>'
     )
@@ -7067,13 +7267,26 @@ def html_match_detail(
     result_forecast_card = _wrap_export_module("result-forecast", _result_forecast_card(prediction))
     settled_card = _wrap_export_module("settled", _settled_card(settled))
 
-    # FIX-4: 首屏 4 块 — ①盘口信号 ②战绩 ③规则结论 ④AI
-    # ①盘口信号卡（devig + ah + betfair 摘要）
-    market_card_html = _market_signal_card(name, prediction, timeline)
+    # FIX-detail-three: 构建统一上下文，供盘口/战绩/同赔/规则预测使用
+    forecast_ctx: dict = {}
+    try:
+        from analysis.result_forecast.context import build_result_forecast_context
+        forecast_ctx = build_result_forecast_context(str(fid)) or {}
+    except Exception:
+        forecast_ctx = {}
+    market_open_close = forecast_ctx.get("market_open_close") or {}
+    club_form = forecast_ctx.get("club_form") or {}
+    history_similar = forecast_ctx.get("history_similar") or None
+
+    # FIX-detail-three: 首屏顺序 ①盘口 ②战绩 ③历史同赔 ④规则结论 ⑤AI
+    # ①盘口信号卡（开盘 vs 即盘）
+    market_card_html = _market_signal_card(name, prediction, timeline, market_open_close)
     market_card = _wrap_export_module("market-signal", market_card_html)
-    # ②战绩卡（club_form）
-    form_card_html = _form_card(name, prediction)
+    # ②战绩卡（club_form + samples）
+    form_card_html = _form_card(name, prediction, club_form)
     form_card = _wrap_export_module("club-form", form_card_html)
+    # ③历史同赔卡
+    history_similar_card = _wrap_export_module("history-similar", _history_similar_card(history_similar))
     # ④AI payload 卡（结构化包 + markdown 预览）
     ai_payload_card_html = _ai_payload_card(name, prediction, rp if 'rp' in dir() else (prediction or {}).get("result_prediction"))
     ai_payload_card = _wrap_export_module("ai-payload", ai_payload_card_html)
@@ -7466,7 +7679,7 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
     onclick="aiRecommend('{_e(fid)}', this)">✨ AI 推荐本场</button>
   <button type="button" class="btn" style="background:#64748b"
     onclick="pollSingle('{_e(fid)}', this)">补抓本场盘口</button>
-  <span class="tag">{len(timeline)} 快照</span>
+  <span class="tag">{sum(1 for t in timeline if t.get('odds', {}).get('eu_home') or t.get('odds', {}).get('ah_line') is not None)} 有效快照</span>
   <span class="tag">{len(changes)} 变动</span>
 </p>
 <p class="meta">{meta_hint}</p>
@@ -7476,6 +7689,7 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
 {settled_card}
 {market_card}
 {form_card}
+{history_similar_card}
 {result_forecast_card}
 {ai_payload_card}
 <div class="fold-stack">
@@ -7486,25 +7700,6 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
 </div>
 
 <script>
-const D = {chart_data};
-// 图表本轮不渲染（无 ≥2 有效点时整块不画；盘口卡已有最新欧亚数字）
-
-      ]
-    }},
-    options: {{
-      responsive: true,
-      plugins: {{ legend: {{ position: 'bottom' }}, title: {{ display: !!title, text: title || '' }} }},
-      scales: {{
-        y: {{ beginAtZero: true, max: 100, ticks: {{ callback: v => v + '%' }} }}
-      }}
-    }}
-  }});
-}}
-if (D.trend_labels && D.trend_labels.length) {{
-  pctChart('bfTrendChart', D.trend_labels, D.trend_home, D.trend_draw, D.trend_away);
-}}
-if (D.poll_labels && D.poll_labels.length) {{
-  pctChart('bfPollChart', D.poll_labels, D.poll_home, D.poll_draw, D.poll_away);
-}}
+// 图表本轮不渲染
 </script>
 </body></html>"""

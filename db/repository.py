@@ -22,13 +22,34 @@ def upsert_fixture(
     match_name: str = "",
     kickoff_at: datetime | None = None,
 ) -> int:
-    sql = """
+    # 脏名不覆盖真名（与 poll_500 的 _DIRTY_TEAM_EXACT / _DIRTY_TEAM_SUBSTR 对齐）
+    _dirty_exact = (
+        "亚冠杯","欧冠","欧联","欧会","欧超杯","解放者杯","南美杯",
+        "日职","日职联","韩K","英超","西甲","意甲","德甲","法甲",
+        "英冠","西乙","荷甲","葡超","苏超","美职","澳超","巴甲","阿甲",
+        "附加赛","决赛","半决赛","四分之一决赛","八强","四强",
+    )
+    _dirty_substr = (
+        "资格赛", "附加赛", "预选赛", "季后赛", "小组赛", "淘汰赛",
+        "第三轮", "第二轮", "第一轮", "第1轮", "第2轮", "第3轮",
+    )
+    _exact_cond = " OR ".join(f"EXCLUDED.{{col}} = '{d}'" for d in _dirty_exact)
+    _substr_cond = " OR ".join(f"EXCLUDED.{{col}} LIKE '%%{s}%%'" for s in _dirty_substr)
+
+    def _guard(col: str) -> str:
+        return f"EXCLUDED.{col} = '' OR {_exact_cond.format(col=col)} OR {_substr_cond.format(col=col)}"
+
+    home_guard = _guard("home_team")
+    away_guard = _guard("away_team")
+    name_guard = _guard("match_name")
+
+    sql = f"""
     INSERT INTO fixtures (source, external_id, home_team, away_team, match_name, kickoff_at, updated_at)
     VALUES (%s, %s, %s, %s, %s, %s, NOW())
     ON CONFLICT (source, external_id) DO UPDATE SET
-        home_team = EXCLUDED.home_team,
-        away_team = EXCLUDED.away_team,
-        match_name = EXCLUDED.match_name,
+        home_team = CASE WHEN {home_guard} THEN fixtures.home_team ELSE EXCLUDED.home_team END,
+        away_team = CASE WHEN {away_guard} THEN fixtures.away_team ELSE EXCLUDED.away_team END,
+        match_name = CASE WHEN {name_guard} THEN fixtures.match_name ELSE EXCLUDED.match_name END,
         kickoff_at = COALESCE(EXCLUDED.kickoff_at, fixtures.kickoff_at),
         updated_at = NOW()
     RETURNING id
@@ -162,13 +183,21 @@ def list_ticks(fixture_db_id: int, *, limit: int = 500) -> list[dict]:
 
 
 def get_closing_tick(fixture_db_id: int, kickoff_at: datetime | None) -> dict | None:
-    """Last odds tick at or before kickoff (临盘/终盘快照)."""
+    """Last *valid* odds tick at or before kickoff (观测临盘/终盘快照).
+
+    有效 tick：至少有完整欧三向 或 (ah_line 有值).
+    kickoff_at 为 None 时取赛前最后一条并 log warning.
+    """
+    _valid = """
+        (eu_home IS NOT NULL AND eu_home > 0 AND eu_away IS NOT NULL AND eu_away > 0)
+        OR (ah_line IS NOT NULL)
+    """
     if kickoff_at is None:
         with cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT * FROM odds_ticks
-                WHERE fixture_id = %s
+                WHERE fixture_id = %s AND ({_valid})
                 ORDER BY captured_at DESC
                 LIMIT 1
                 """,
@@ -177,9 +206,9 @@ def get_closing_tick(fixture_db_id: int, kickoff_at: datetime | None) -> dict | 
             return cur.fetchone()
     with cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT * FROM odds_ticks
-            WHERE fixture_id = %s AND captured_at <= %s
+            WHERE fixture_id = %s AND captured_at <= %s AND ({_valid})
             ORDER BY captured_at DESC
             LIMIT 1
             """,
@@ -255,8 +284,11 @@ def _match_result_values(row: dict[str, Any]) -> tuple[Any, ...]:
         "closing_captured_at", "closing_ah_line", "closing_ah_home_water", "closing_ah_away_water",
         "closing_eu_home", "closing_eu_draw", "closing_eu_away",
         "closing_eu_open_home", "closing_eu_open_draw", "closing_eu_open_away",
-        "pick_1x2_cn", "pick_jingcai_cn", "recommended_scores",
-        "hit_1x2", "hit_score", "payload", "source",
+        "closing_ou_line", "closing_ou_over", "closing_ou_under",
+        "closing_ou_open_line", "closing_ou_open_over", "closing_ou_open_under",
+        "pick_1x2_cn", "pick_ah_cn", "pick_jingcai_cn", "recommended_scores",
+        "hit_1x2", "hit_score", "hit_ah", "ah_settlement", "hit_ou", "ou_settlement", "hit_jingcai",
+        "payload", "source",
     )
     vals: list[Any] = []
     for col in cols:
@@ -276,8 +308,11 @@ def upsert_match_result(fixture_db_id: int, row: dict[str, Any]) -> None:
         "closing_captured_at", "closing_ah_line", "closing_ah_home_water", "closing_ah_away_water",
         "closing_eu_home", "closing_eu_draw", "closing_eu_away",
         "closing_eu_open_home", "closing_eu_open_draw", "closing_eu_open_away",
-        "pick_1x2_cn", "pick_jingcai_cn", "recommended_scores",
-        "hit_1x2", "hit_score", "payload", "source",
+        "closing_ou_line", "closing_ou_over", "closing_ou_under",
+        "closing_ou_open_line", "closing_ou_open_over", "closing_ou_open_under",
+        "pick_1x2_cn", "pick_ah_cn", "pick_jingcai_cn", "recommended_scores",
+        "hit_1x2", "hit_score", "hit_ah", "ah_settlement", "hit_ou", "ou_settlement", "hit_jingcai",
+        "payload", "source",
     )
     vals = _match_result_values(row)
     placeholders = ", ".join(["%s"] * len(cols))
@@ -328,12 +363,20 @@ def list_match_results_map(*, source: str = "500", limit: int = 200) -> dict[str
 
 
 def get_opening_tick(fixture_db_id: int) -> dict | None:
-    """First odds tick (初盘/最早 poll 快照)."""
+    """First *valid* odds tick (观测初盘 = 本站最早有效快照).
+
+    有效 tick：至少有完整欧三向 (eu_home + eu_draw + eu_away) 或 (ah_line 有值 + 双水).
+    页内 eu_open_* / ah_open_* 是庄家初盘，此处仅返回观测初盘（本站首条）。
+    """
     with cursor() as cur:
         cur.execute(
             """
             SELECT * FROM odds_ticks
             WHERE fixture_id = %s
+              AND (
+                (eu_home IS NOT NULL AND eu_home > 0 AND eu_away IS NOT NULL AND eu_away > 0)
+                OR (ah_line IS NOT NULL)
+              )
             ORDER BY captured_at ASC
             LIMIT 1
             """,

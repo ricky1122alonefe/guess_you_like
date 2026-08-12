@@ -23,10 +23,97 @@ def _to_float(text: str) -> float | None:
     text = str(text or "").strip().replace("↑", "").replace("↓", "")
     if not text or text in {"-", "—"}:
         return None
+    # 百分比列（36.58%）不是赔率
+    if text.endswith("%"):
+        return None
     try:
         return float(text)
     except ValueError:
         return None
+
+
+def _is_plausible_eu_odds(v: float | None) -> bool:
+    """欧赔合理区间；排除凯利指数(常 0.7–1.0)与概率小数。"""
+    return v is not None and 1.01 <= v <= 80.0
+
+
+def _is_plausible_ah_water(v: float | None) -> bool:
+    """亚盘水位常见 0.5–2.5；过宽则拒。"""
+    return v is not None and 0.30 <= v <= 3.50
+
+
+def _is_plausible_ou_line(v: float | None) -> bool:
+    """大小球盘口合理区间：0.5–6.5 球；过低小数按凯利列处理。"""
+    return v is not None and 1.0 <= v <= 6.5
+
+
+def _is_plausible_ou_water(v: float | None) -> bool:
+    """大小球水位与亚盘水位区间一致。"""
+    return v is not None and 0.30 <= v <= 3.50
+
+
+# live.500 常见：联赛/阶段名被拆成「主客」
+_DIRTY_TEAM_EXACT = frozenset({
+    "亚冠杯", "欧冠", "欧联", "欧会", "欧超杯", "解放者杯", "南美杯",
+    "日职", "日职联", "韩K", "英超", "西甲", "意甲", "德甲", "法甲",
+    "英冠", "西乙", "荷甲", "葡超", "苏超", "美职", "澳超", "巴甲", "阿甲",
+    "附加赛", "决赛", "半决赛", "四分之一决赛", "八强", "四强",
+})
+_DIRTY_TEAM_SUBSTR = (
+    "资格赛", "附加赛", "预选赛", "季后赛", "小组赛", "淘汰赛",
+    "第三轮", "第二轮", "第一轮", "第1轮", "第2轮", "第3轮",
+)
+
+
+def is_dirty_team_label(name: str) -> bool:
+    """是否像联赛/轮次名，而非俱乐部名。"""
+    n = (name or "").strip()
+    if not n or len(n) < 2:
+        return True
+    if "VS" in n.upper() or "vs" in n:
+        return True
+    if n in _DIRTY_TEAM_EXACT:
+        return True
+    if any(s in n for s in _DIRTY_TEAM_SUBSTR):
+        return True
+    # 极短且以杯/联结尾，多半是赛事名
+    if len(n) <= 4 and n.endswith(("杯", "联", "超", "冠")):
+        return True
+    return False
+
+
+def needs_name_fix(fixture: MatchFixture) -> bool:
+    return is_dirty_team_label(fixture.home or "") or is_dirty_team_label(fixture.away or "")
+
+
+def ensure_fixture_real_teams(session, fixture: MatchFixture) -> MatchFixture:
+    """live 脏队名 → 分析页真实主客。失败则原样返回。"""
+    from download_500 import fetch_match_info
+
+    if not needs_name_fix(fixture):
+        return fixture
+    try:
+        info = fetch_match_info(session, str(fixture.fixture_id))
+    except Exception as exc:
+        log.warning("fetch_match_info 队名修正失败 fid=%s: %s", fixture.fixture_id, exc)
+        return fixture
+    if not info.home or not info.away:
+        return fixture
+    if is_dirty_team_label(info.home) and is_dirty_team_label(info.away):
+        return fixture
+    fixture.home = info.home
+    fixture.away = info.away
+    if getattr(info, "label", None):
+        fixture.label = info.label
+    log.info(
+        "队名修正 fid=%s → %s vs %s",
+        fixture.fixture_id, fixture.home, fixture.away,
+    )
+    return fixture
+
+
+# 统一对外名：poll_service / poll_single_fixture 只调这一处
+ensure_fixture_identity = ensure_fixture_real_teams
 
 
 def _pick_row(rows: list[str], *patterns: str) -> list[str] | None:
@@ -42,25 +129,104 @@ def _parse_ah_row(cells: list[str]) -> dict[str, Any]:
     # name|home|line|away|time|open_home|open_line|open_away|open_time
     line = parse_handicap(cells[2]) if len(cells) > 2 else None
     open_line = parse_handicap(cells[6]) if len(cells) > 6 else None
+    hw = _to_float(cells[1]) if len(cells) > 1 else None
+    aw = _to_float(cells[3]) if len(cells) > 3 else None
+    oh = _to_float(cells[5]) if len(cells) > 5 else None
+    oa = _to_float(cells[7]) if len(cells) > 7 else None
     return {
         "ah_line": line,
-        "ah_home_water": _to_float(cells[1]) if len(cells) > 1 else None,
-        "ah_away_water": _to_float(cells[3]) if len(cells) > 3 else None,
-        "ah_open_line": open_line or line,
-        "ah_open_home": _to_float(cells[5]) if len(cells) > 5 else None,
-        "ah_open_away": _to_float(cells[7]) if len(cells) > 7 else None,
+        "ah_home_water": hw if _is_plausible_ah_water(hw) else hw,
+        "ah_away_water": aw if _is_plausible_ah_water(aw) else aw,
+        "ah_open_line": open_line if open_line is not None else line,
+        "ah_open_home": oh if _is_plausible_ah_water(oh) else None,
+        "ah_open_away": oa if _is_plausible_ah_water(oa) else None,
     }
+
+
+def _find_eu_open_triple(cells: list[str]) -> tuple[float | None, float | None, float | None]:
+    """在即时 H/D/A 之后，寻找第二组像欧赔的三元组当作公司初盘。
+
+    现网百家页前段常是：赔三列 + 概率% + 返还率 + 凯利(0.7–1.0)。
+    凯利不可当 open；仅当存在 1.01–80 的第二组三列才记入 eu_open_*。
+    """
+    # 从 index 4 起滑窗（跳过主即时三列 1..3）
+    for i in range(4, max(4, len(cells) - 2)):
+        h, d, a = _to_float(cells[i]), _to_float(cells[i + 1]), _to_float(cells[i + 2])
+        if _is_plausible_eu_odds(h) and _is_plausible_eu_odds(d) and _is_plausible_eu_odds(a):
+            return h, d, a
+    return None, None, None
 
 
 def _parse_eu_row(cells: list[str]) -> dict[str, Any]:
+    h = _to_float(cells[1]) if len(cells) > 1 else None
+    d = _to_float(cells[2]) if len(cells) > 2 else None
+    a = _to_float(cells[3]) if len(cells) > 3 else None
+    # 经典错位：cells[8:11] 现网多为凯利，不是初盘
+    oh, od, oa = _find_eu_open_triple(cells)
+    if (
+        oh is None
+        and len(cells) > 10
+        and _is_plausible_eu_odds(_to_float(cells[8]))
+        and _is_plausible_eu_odds(_to_float(cells[9]))
+        and _is_plausible_eu_odds(_to_float(cells[10]))
+    ):
+        oh, od, oa = _to_float(cells[8]), _to_float(cells[9]), _to_float(cells[10])
     return {
-        "eu_home": _to_float(cells[1]) if len(cells) > 1 else None,
-        "eu_draw": _to_float(cells[2]) if len(cells) > 2 else None,
-        "eu_away": _to_float(cells[3]) if len(cells) > 3 else None,
-        "eu_open_home": _to_float(cells[8]) if len(cells) > 10 else None,
-        "eu_open_draw": _to_float(cells[9]) if len(cells) > 10 else None,
-        "eu_open_away": _to_float(cells[10]) if len(cells) > 10 else None,
+        "eu_home": h if _is_plausible_eu_odds(h) else None,
+        "eu_draw": d if _is_plausible_eu_odds(d) else None,
+        "eu_away": a if _is_plausible_eu_odds(a) else None,
+        "eu_open_home": oh,
+        "eu_open_draw": od,
+        "eu_open_away": oa,
     }
+
+
+def _parse_ou_row(cells: list[str]) -> dict[str, Any]:
+    """大小球平均值行：cell[1]=平均值, [3]=大, [4]=盘口, [5]=小, [9]=初大, [10]=初盘, [11]=初小。"""
+    over = _to_float(cells[3]) if len(cells) > 3 else None
+    line = _to_float(cells[4]) if len(cells) > 4 else None
+    under = _to_float(cells[5]) if len(cells) > 5 else None
+    oover = _to_float(cells[9]) if len(cells) > 9 else None
+    oline = _to_float(cells[10]) if len(cells) > 10 else None
+    ounder = _to_float(cells[11]) if len(cells) > 11 else None
+    valid = _is_plausible_ou_line(line) and _is_plausible_ou_water(over) and _is_plausible_ou_water(under)
+    # 初盘必须三件套同时合法，防止把凯利/概率列误填成部分 open
+    open_valid = (
+        valid
+        and _is_plausible_ou_line(oline)
+        and _is_plausible_ou_water(oover)
+        and _is_plausible_ou_water(ounder)
+    )
+    return {
+        "ou_line": line if valid else None,
+        "ou_over": over if valid else None,
+        "ou_under": under if valid else None,
+        "ou_open_line": oline if open_valid else None,
+        "ou_open_over": oover if open_valid else None,
+        "ou_open_under": ounder if open_valid else None,
+    }
+
+
+def _fetch_ou_html(session, fixture_id: str, *, guard: ScraperGuard) -> dict[str, Any] | None:
+    """抓取大小球分析页；无数据返回 None，失败不阻断欧亚。"""
+    fid = str(fixture_id)
+    url = f"{BASE}/fenxi/daxiao-{fid}.shtml"
+    try:
+        html = get_text(session, url, source="500", guard=guard)
+    except Exception as exc:
+        log.debug("大小球页获取失败 fid=%s: %s", fid, exc)
+        return None
+    if "大小球" not in html:
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    for tr in soup.find_all("tr"):
+        tds = tr.find_all(["td", "th"])
+        if len(tds) >= 11 and tds[1].get_text(strip=True) == "平均值":
+            cells = [c.get_text(strip=True) for c in tds]
+            parsed = _parse_ou_row(cells)
+            if parsed.get("ou_line") is not None:
+                return parsed
+    return None
 
 
 def fetch_odds_html(
@@ -69,6 +235,13 @@ def fetch_odds_html(
     *,
     guard: ScraperGuard,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    """抓取 500.com 欧赔/亚盘分析页。
+
+    500 对庄名打码（如 官*官*、威***威***），不能按明文匹配。
+    改为：按行结构解析——能提取合法赔率浮点的行即为有效行。
+    优先 Pi/平博/平均值（若匹配），否则取第一条有效行。
+    欧、亚任一成功即可；两侧都失败才报错。
+    """
     fid = str(fixture_id)
     ah_url = f"{BASE}/fenxi/yazhi-{fid}.shtml"
     eu_url = f"{BASE}/fenxi/ouzhi-{fid}.shtml"
@@ -80,23 +253,66 @@ def fetch_odds_html(
     eu_soup = BeautifulSoup(eu_html, "html.parser")
     ah_rows = _serialize_xls_table(ah_soup)["row"]
     eu_rows = _serialize_xls_table(eu_soup)["row"]
-    if not ah_rows or not eu_rows:
-        raise RuntimeError(f"页面无赔率表格 fid={fid}")
 
-    ah_cells = _pick_row(ah_rows, r"Pi|平博|Pinnacle") or _pick_row(ah_rows, "平均值")
+    # 欧赔：优先明文匹配，回退按结构解析
     eu_cells = _pick_row(eu_rows, r"Pi|平博|Pinnacle") or _pick_row(eu_rows, "平均值")
-    if not ah_cells or not eu_cells:
-        raise RuntimeError(f"未找到平博/平均值行 fid={fid}")
+    eu_bookmaker = "pinnacle" if (eu_cells and re.search(r"Pi|平博", eu_cells[0], re.I)) else "average"
+    if not eu_cells:
+        eu_cells = _pick_first_valid_eu_row(eu_rows)
+        eu_bookmaker = "first_valid"
 
-    bookmaker = "pinnacle" if re.search(r"Pi|平博", ah_cells[0], re.I) else "average"
-    ah = _parse_ah_row(ah_cells)
-    eu = _parse_eu_row(eu_cells)
-    eu_books = parse_eu_bookmakers(eu_rows)
-    ah["bookmaker"] = bookmaker
-    eu["bookmaker"] = bookmaker
+    # 亚盘：优先明文匹配，回退按结构解析
+    ah_cells = _pick_row(ah_rows, r"Pi|平博|Pinnacle") or _pick_row(ah_rows, "平均值")
+    ah_bookmaker = "pinnacle" if (ah_cells and re.search(r"Pi|平博", ah_cells[0], re.I)) else "average"
+    if not ah_cells:
+        ah_cells = _pick_first_valid_ah_row(ah_rows)
+        ah_bookmaker = "first_valid"
+
+    if not eu_cells and not ah_cells:
+        raise RuntimeError(f"欧赔/亚盘均无有效行 fid={fid}")
+
+    # 缺一侧不报错，用空 dict 填充
+    ah = _parse_ah_row(ah_cells) if ah_cells else {}
+    eu = _parse_eu_row(eu_cells) if eu_cells else {}
+    eu_books = parse_eu_bookmakers(eu_rows) if eu_rows else []
+    ah["bookmaker"] = ah_bookmaker
+    eu["bookmaker"] = eu_bookmaker
     eu["eu_books"] = eu_books
     ah["eu_books"] = eu_books
     return ah, eu
+
+
+def _pick_first_valid_eu_row(rows: list[str]) -> list[str] | None:
+    """从欧赔表取第一条能解析出 3 个合法赔率浮点的行。"""
+    for row in rows:
+        cells = row.split("|")
+        if len(cells) < 4:
+            continue
+        vals = [_to_float(cells[i]) for i in range(1, 4)]
+        if all(v is not None and v > 1.0 for v in vals):
+            return cells
+    return None
+
+
+def _pick_first_valid_ah_row(rows: list[str]) -> list[str] | None:
+    """从亚盘表取第一条能解析出盘口线+水位的行。
+
+    AH row: bookmaker|home_water|line|away_water|time|...
+    line 可能是 "受半球"、"平手"、"半球"、"受平手/半球升" 等
+    """
+    for row in rows:
+        cells = row.split("|")
+        if len(cells) < 4:
+            continue
+        line_raw = cells[2] if len(cells) > 2 else ""
+        if not line_raw or line_raw in ("盘口", "赔率"):
+            continue
+        line = parse_handicap(line_raw)
+        hw = _to_float(cells[1])
+        aw = _to_float(cells[3])
+        if line is not None or (hw is not None and aw is not None):
+            return cells
+    return None
 
 
 def build_tick(
@@ -106,13 +322,16 @@ def build_tick(
     *,
     jingcai: dict[str, Any] | None = None,
     betfair: dict[str, Any] | None = None,
+    ou: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     jc = jingcai or {}
     bf = betfair or {}
+    ou = ou or {}
     merged = {
         "bookmaker": ah.get("bookmaker") or eu.get("bookmaker") or "pinnacle",
         **ah,
         **eu,
+        **ou,
         "raw_meta": {
             "external_id": fixture.fixture_id,
             "match_name": fixture.base_name,
@@ -120,6 +339,15 @@ def build_tick(
             "jingcai": jc,
             "betfair": bf,
             "eu_books": eu.get("eu_books") or [],
+            "ou": {
+                "has_data": ou.get("ou_line") is not None,
+                "ou_line": ou.get("ou_line"),
+                "ou_over": ou.get("ou_over"),
+                "ou_under": ou.get("ou_under"),
+                "ou_open_line": ou.get("ou_open_line"),
+                "ou_open_over": ou.get("ou_open_over"),
+                "ou_open_under": ou.get("ou_open_under"),
+            },
         },
     }
     key = {
@@ -130,20 +358,51 @@ def build_tick(
             "ah_open_line", "ah_open_home", "ah_open_away",
             "eu_home", "eu_draw", "eu_away",
             "eu_open_home", "eu_open_draw", "eu_open_away",
+            "ou_line", "ou_over", "ou_under",
+            "ou_open_line", "ou_open_over", "ou_open_under",
         )
     }
     key["eu_books_fp"] = eu_books_fingerprint(eu.get("eu_books") or [])
-    key["jingcai"] = jc
+    # 竞彩 SP / 必发变动也要写新 tick，否则只改 SP 时时间线僵住
+    key["jingcai"] = {
+        "match_num": jc.get("match_num"),
+        "has_sp": jc.get("has_sp"),
+        "sp_home": jc.get("sp_home"),
+        "sp_draw": jc.get("sp_draw"),
+        "sp_away": jc.get("sp_away"),
+        "has_rqsp": jc.get("has_rqsp"),
+        "rqsp_home": jc.get("rqsp_home"),
+        "rqsp_draw": jc.get("rqsp_draw"),
+        "rqsp_away": jc.get("rqsp_away"),
+        "handicap": jc.get("handicap"),
+    }
     key["betfair"] = {
         "volume_home": bf.get("volume_home"),
         "volume_draw": bf.get("volume_draw"),
         "volume_away": bf.get("volume_away"),
+        "volume_total": bf.get("volume_total"),
         "volume_pct": bf.get("volume_pct"),
     }
     merged["tick_hash"] = hashlib.sha256(
         json.dumps(key, sort_keys=True, default=str).encode()
     ).hexdigest()[:32]
     return merged
+
+
+def assert_tick_has_markets(tick: dict[str, Any], *, fixture_id: str = "") -> None:
+    """无有效欧亚不准当成功抓取：欧需三向齐全，亚需 line + 双水。"""
+    has_eu = (
+        _is_plausible_eu_odds(_to_float(tick.get("eu_home")))
+        and _is_plausible_eu_odds(_to_float(tick.get("eu_draw")))
+        and _is_plausible_eu_odds(_to_float(tick.get("eu_away")))
+    )
+    has_ah = (
+        tick.get("ah_line") is not None
+        and _is_plausible_ah_water(_to_float(tick.get("ah_home_water")))
+        and _is_plausible_ah_water(_to_float(tick.get("ah_away_water")))
+    )
+    if not has_eu and not has_ah:
+        raise RuntimeError(f"欧亚均为空或非法 fid={fixture_id or '?'}")
 
 
 def poll_fixture(
@@ -154,7 +413,9 @@ def poll_fixture(
     live_odds: dict[str, dict] | None = None,
     jczq_meta: dict[str, dict] | None = None,
 ) -> dict[str, Any]:
+    fixture = ensure_fixture_identity(session, fixture)
     ah, eu = fetch_odds_html(session, fixture.fixture_id, guard=guard)
+    ou = _fetch_ou_html(session, fixture.fixture_id, guard=guard) or {}
     jc = build_jingcai_snapshot(
         fixture.fixture_id,
         live_odds or {},
@@ -162,7 +423,9 @@ def poll_fixture(
         jczq_meta=jczq_meta,
     )
     bf = fetch_betfair_snapshot(session, fixture.fixture_id)
-    return build_tick(fixture, ah, eu, jingcai=jc, betfair=bf)
+    tick = build_tick(fixture, ah, eu, jingcai=jc, betfair=bf, ou=ou)
+    assert_tick_has_markets(tick, fixture_id=str(fixture.fixture_id))
+    return tick
 
 
 def list_upcoming_fixtures(*, within_days: float = 2) -> list[MatchFixture]:
@@ -223,6 +486,8 @@ def poll_single_fixture(
             log.warning("fetch_match_info fid=%s 失败: %s", fid, exc)
             fx = MatchFixture(fixture_id=fid)
 
+    fx = ensure_fixture_identity(session, fx)
+
     # 2) 竞彩上下文（失败不阻断欧亚）
     live_odds: dict[str, dict] = {}
     jczq_meta: dict[str, dict] = {}
@@ -231,16 +496,10 @@ def poll_single_fixture(
     except Exception as exc:
         log.warning("jingcai context fid=%s: %s", fid, exc)
 
-    # 3) 抓亚欧 + 必发，强制要求有有效欧或亚
+    # 3) 抓亚欧 + 必发（poll_fixture 内校验非空）
     tick = poll_fixture(
         session, fx, guard=guard, live_odds=live_odds, jczq_meta=jczq_meta,
     )
-    has_eu = tick.get("eu_home") is not None and tick.get("eu_away") is not None
-    has_ah = tick.get("ah_line") is not None
-    if not has_eu and not has_ah:
-        raise RuntimeError(
-            f"补抓后欧亚均为空 fid={fid}（页面解析失败或 500 暂无盘）"
-        )
 
     db_id = upsert_fixture(
         source="500",
@@ -266,6 +525,8 @@ def poll_single_fixture(
                 k: tick.get(k) for k in (
                     "eu_home", "eu_draw", "eu_away",
                     "ah_line", "ah_home_water", "ah_away_water",
+                    "ou_line", "ou_over", "ou_under",
+                    "ou_open_line", "ou_open_over", "ou_open_under",
                 )
             }}],
             "point_count": 1,

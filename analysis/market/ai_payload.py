@@ -74,9 +74,12 @@ def payload_to_markdown(payload: dict) -> str:
 
     market = payload.get("market") or {}
     devig = market.get("devig") or {}
-    if devig.get("p_home") is not None:
+    p_h = devig.get("p_home") or devig.get("home")
+    if p_h is not None:
+        p_d = devig.get("p_draw") or devig.get("draw") or 0
+        p_a = devig.get("p_away") or devig.get("away") or 0
         lines.append("## 盘口信号")
-        lines.append(f"- 去水隐含概率：主 {devig['p_home']:.1%} / 平 {devig.get('p_draw', 0):.1%} / 客 {devig.get('p_away', 0):.1%}")
+        lines.append(f"- 去水隐含概率：主 {p_h:.1%} / 平 {p_d:.1%} / 客 {p_a:.1%}")
         if devig.get("overround"):
             lines.append(f"- 抽水：{devig['overround']:.1%}")
         ah = market.get("ah")
@@ -113,6 +116,18 @@ def payload_to_markdown(payload: dict) -> str:
         lines.append(f"- 倾向：{rule.get('pick_cn', rule['pick'])}（置信度 {rule.get('confidence_cn', '—')}）")
         for r in (rule.get("reasons") or []):
             lines.append(f"  - {r}")
+        models = (rule.get("secondary") or {}).get("models") or {}
+        if models:
+            lines.append("- 模型对照（折叠）：")
+            elo = models.get("elo") or {}
+            if elo:
+                lines.append(f"  - Elo差 {elo.get('elo_diff', '—')}（主{elo.get('home_elo', '—')} vs 客{elo.get('away_elo', '—')}）")
+            poisson = models.get("poisson_matrix") or {}
+            if poisson:
+                lines.append(f"  - 泊松λ：主{poisson.get('lambda_home', '—')} 客{poisson.get('lambda_away', '—')}，最可能 {poisson.get('top_scores', [{}])[0].get('score', '—')}")
+            edge = models.get("edge") or {}
+            if edge:
+                lines.append(f"  - 市场来源：{edge.get('market_source', '—')}；edge 主/平/客见结构化字段")
         lines.append("")
 
     jc = payload.get("jingcai") or {}

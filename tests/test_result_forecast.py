@@ -369,3 +369,15 @@ def test_g5_weights_match_factors():
     # weights 应含 european / asian / history_similar
     assert "european" in result["weights"]
     assert "history_similar" in result["weights"]
+
+
+def test_forecast_reasons_cover_opening_form_similar():
+    """reasons 至少覆盖：开盘vs即盘、战绩、同赔 三类。"""
+    ctx = _full_context()
+    ctx["european"]["move"] = "主胜降水"
+    ctx["asian"]["water_move"] = "上盘降水"
+    result = forecast(ctx)
+    reasons = " ".join(result["reasons"])
+    assert any(kw in reasons for kw in ("开盘", "初盘", "降水", "水位", "让球"))
+    assert any(kw in reasons for kw in ("近况", "战绩", "状态"))
+    assert any(kw in reasons for kw in ("历史", "同赔", "相似"))

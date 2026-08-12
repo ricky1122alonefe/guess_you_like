@@ -73,6 +73,29 @@ def _summary_row(team: str, matches: list[dict], perspective: str) -> dict:
     }
 
 
+def _sample_rows(team: str, matches: list[dict], perspective: str, max_n: int = 10) -> list[dict]:
+    """取该队近 N 场带 closing 赔率的样本摘要（用于 UI 列表）。"""
+    samples: list[dict] = []
+    for m in matches[:max_n]:
+        is_home = m["home_team"] == team
+        my_score = m["home_score"] if is_home else m["away_score"]
+        opp_score = m["away_score"] if is_home else m["home_score"]
+        result = "W" if my_score > opp_score else ("D" if my_score == opp_score else "L")
+        samples.append({
+            "date": str(m.get("kickoff_at", ""))[:10],
+            "match": f"{m['home_team']} {my_score}-{opp_score} {m['away_team']}",
+            "is_home": is_home,
+            "result": result,
+            "closing_eu_home": _safe_float(m.get("closing_eu_home")),
+            "closing_eu_draw": _safe_float(m.get("closing_eu_draw")),
+            "closing_eu_away": _safe_float(m.get("closing_eu_away")),
+            "closing_ah_line": m.get("closing_ah_line"),
+            "closing_ah_home_water": _safe_float(m.get("closing_ah_home_water")),
+            "closing_ah_away_water": _safe_float(m.get("closing_ah_away_water")),
+        })
+    return samples
+
+
 _LEAGUE_MAP_CACHE: dict | None = None
 
 
@@ -190,23 +213,23 @@ def build_club_form(
     # Overall
     home_all = _query_team_matches(home_resolved, "all", window)
     away_all = _query_team_matches(away_resolved, "all", window)
-    home_overall = _summary_row(home_team, home_all, "all") if home_all else None
-    away_overall = _summary_row(away_team, away_all, "all") if away_all else None
+    home_overall = _summary_row(home_team, home_all, "all")
+    away_overall = _summary_row(away_team, away_all, "all")
 
-    if not home_overall:
+    if not home_overall or home_overall.get("played", 0) == 0:
         missing.append(f"home_overall({home_team})")
-    if not away_overall:
+    if not away_overall or away_overall.get("played", 0) == 0:
         missing.append(f"away_overall({away_team})")
 
     # Split: 主队主场 / 客队客场
     home_home = _query_team_matches(home_resolved, "home", split_n)
     away_away = _query_team_matches(away_resolved, "away", split_n)
-    home_at_home = _summary_row(home_team, home_home, "home") if home_home else None
-    away_at_away = _summary_row(away_team, away_away, "away") if away_away else None
+    home_at_home = _summary_row(home_team, home_home, "home")
+    away_at_away = _summary_row(away_team, away_away, "away")
 
-    if not home_at_home:
+    if not home_at_home or home_at_home.get("played", 0) == 0:
         missing.append(f"home_at_home({home_team})")
-    if not away_at_away:
+    if not away_at_away or away_at_away.get("played", 0) == 0:
         missing.append(f"away_at_away({away_team})")
 
     # 样本带赔率比例
@@ -224,8 +247,14 @@ def build_club_form(
         },
         "split": {
             "home_at_home_last_20": home_at_home,
-            "away_at_away_last_20": away_away,
+            "away_at_away_last_20": away_at_away,
             "split_n": split_n,
+        },
+        "samples": {
+            "home_all": _sample_rows(home_team, home_all, "all"),
+            "away_all": _sample_rows(away_team, away_all, "all"),
+            "home_at_home": _sample_rows(home_team, home_home, "home"),
+            "away_at_away": _sample_rows(away_team, away_away, "away"),
         },
         "eu_coverage": {
             "home_all": _eu_ratio(home_all),

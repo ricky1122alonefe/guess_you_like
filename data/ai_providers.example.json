@@ -1,7 +1,7 @@
 {
   "version": 1,
   "primary_id": "deepseek",
-  "predict_mode": "multi",
+  "predict_mode": "single",
   "providers": [
     {
       "id": "deepseek",
@@ -22,7 +22,7 @@
     {
       "id": "doubao",
       "label": "豆包 精算师",
-      "enabled": true,
+      "enabled": false,
       "model": "doubao-seed-2-0-lite-260428",
       "base_url": "https://ark.cn-beijing.volces.com/api/v3",
       "api_key_env": "ARK_API_KEY",
@@ -39,7 +39,7 @@
     {
       "id": "cursor",
       "label": "Cursor Composer",
-      "enabled": true,
+      "enabled": false,
       "model": "composer-2.5",
       "base_url": "cursor-sdk",
       "api_key_env": "CURSOR_API_KEY",

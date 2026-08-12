@@ -124,8 +124,10 @@ def _build_reasons(context: dict, fused: dict[str, float], sources_used: dict[st
     if bf:
         vp = bf["volume_pct"]
         hot_cn = {"home": "主胜", "draw": "平", "away": "客胜"}.get(bf["hot"], "—")
+        vol = bf.get('volume_total', 0) or 0
+        vol_str = f"{vol/10000:.1f}万" if vol >= 10000 else f"{vol:.0f}"
         reasons.append(
-            f"必发成交{bf['volume_total']/10000:.0f}万，资金倾向{hot_cn}"
+            f"必发成交{vol_str}，资金倾向{hot_cn}"
             f"（{vp['home']:.0%}/{vp['draw']:.0%}/{vp['away']:.0%}）"
         )
     hist = context.get("history_similar")
@@ -233,12 +235,39 @@ def forecast(context: dict[str, Any]) -> dict[str, Any]:
 
     # 分歧检查
     divergence = _check_divergence(context)
-
-    if best_pct < skip_threshold:
-        return _skip_result(context, f"最高概率{best_pct:.0%}低于阈值{skip_threshold:.0%}，建议观望")
+    has_market = bool(context.get("european") or context.get("asian"))
 
     # confidence
-    has_market = bool(context.get("european") or context.get("asian"))
+    if best_pct < skip_threshold:
+        # 阈值以下：仍输出 pick + 真实概率，标低置信度
+        confidence = "low"
+        reasons = _build_reasons(context, fused, source_probs)
+        reasons.append(f"倾向{RESULT_CN.get(best, best)}但 {best_pct:.0%} 未达阈值 {skip_threshold:.0%}，盘口接近、边际不足")
+        if divergence:
+            reasons.append(f"⚠ {divergence}")
+        if not has_market:
+            reasons.append("⚠ 缺盘口验证")
+        return {
+            "pick": best,
+            "pick_cn": f"倾向{RESULT_CN.get(best, best)}（观望）",
+            "p_home": round(fused["home"], 4),
+            "p_draw": round(fused["draw"], 4),
+            "p_away": round(fused["away"], 4),
+            "confidence": confidence,
+            "confidence_cn": {"high": "高", "mid": "中", "low": "低"}.get(confidence, confidence),
+            "reasons": reasons,
+            "factors": {
+                "european": context.get("european"),
+                "asian": context.get("asian"),
+                "betfair": context.get("betfair"),
+                "history_similar": context.get("history_similar"),
+                "recent_form": context.get("recent_form"),
+                "recent_missing_reason": context.get("recent_missing_reason", ""),
+            },
+            "missing": missing,
+            "weights": norm_weights,
+        }
+
     if best_pct >= HIGH_CONFIDENCE and not divergence and has_market:
         confidence = "high"
     elif divergence:
@@ -301,8 +330,80 @@ def _skip_result(context: dict, reason: str) -> dict:
     }
 
 
+def _parse_match_name(match_name: str) -> tuple[str, str]:
+    """从 '主队 vs 客队' / '主队VS客队' 解析主客队名。"""
+    if not match_name:
+        return "", ""
+    import re
+    m = re.split(r"\s*(?:vs|VS|v|V)\s*", match_name, maxsplit=1)
+    if len(m) == 2:
+        return m[0].strip(), m[1].strip()
+    for sep in (" - ", "–", "—"):
+        if sep in match_name:
+            parts = match_name.split(sep, 1)
+            return parts[0].strip(), parts[1].strip()
+    return "", ""
+
+
+def _build_models_for_context(
+    context: dict[str, Any],
+    result: dict[str, Any],
+    prediction: dict | None = None,
+) -> dict[str, Any] | None:
+    """生成轻量模型层：Elo + 泊松 + edge（不压过主结论）。"""
+    home, away = _parse_match_name(context.get("match_name") or "")
+    if not home or not away:
+        p = prediction or {}
+        home = p.get("home_team") or p.get("home") or ""
+        away = p.get("away_team") or p.get("away") or ""
+    if not home or not away:
+        return None
+
+    models: dict[str, Any] = {}
+
+    try:
+        import elo_ratings
+
+        elo_ctx = elo_ratings.match_elo_context(home, away)
+        models["elo"] = elo_ctx
+    except Exception as exc:
+        log.debug("elo model failed: %s", exc)
+        elo_ctx = None
+
+    try:
+        from analysis.quant import poisson
+
+        elo_diff = (elo_ctx or {}).get("elo_diff")
+        poisson_ctx = poisson.build_poisson_matrix(home, away, elo_diff=elo_diff)
+        if poisson_ctx:
+            models["poisson_matrix"] = poisson_ctx
+    except Exception as exc:
+        log.debug("poisson model failed: %s", exc)
+        poisson_ctx = None
+
+    try:
+        from analysis.market import value_edge
+
+        edge_ctx = value_edge.build_model_edges(
+            context, result, poisson_ctx, prediction=prediction
+        )
+        if edge_ctx:
+            models["edge"] = edge_ctx
+    except Exception as exc:
+        log.debug("edge model failed: %s", exc)
+
+    return models or None
+
+
 def forecast_for_match(fixture_id: str, *, index: dict | None = None, prediction: dict | None = None) -> dict:
-    """便捷入口：build context + forecast。"""
+    """便捷入口：build context + forecast + 轻量模型对照。"""
     from analysis.result_forecast.context import build_result_forecast_context
     ctx = build_result_forecast_context(fixture_id, index=index, prediction=prediction)
-    return forecast(ctx)
+    result = forecast(ctx)
+    try:
+        models = _build_models_for_context(ctx, result, prediction=prediction)
+        if models:
+            result.setdefault("secondary", {})["models"] = models
+    except Exception as exc:
+        log.debug("model layer failed: %s", exc)
+    return result

@@ -195,12 +195,49 @@ leagues:
   日职:
     fd_code: J1
     fd_path: japan/j1-league
+    teams:
+      横滨水手: Yokohama F Marinos
+      鹿岛鹿角: Kashima Antlers
+      浦和红钻: Urawa Red Diamonds
+      大阪樱花: Cerezo Osaka
+      大阪钢巴: Gamba Osaka
+      川崎前锋: Kawasaki Frontale
+      东京FC: FC Tokyo
+      名古屋鲸八: Nagoya Grampus
+      神户胜利船: Vissel Kobe
+      广岛三箭: Sanfrecce Hiroshima
+      福冈黄蜂: Avispa Fukuoka
+      湘南海洋: Shonan Bellmare
+      札幌冈萨多: Hokkaido Consadole Sapporo
+      柏太阳神: Kashiwa Reysol
+      大分三神: Oita Trinita
+      清水鼓动: Shimizu S-Pulse
+      磐田喜悦: Jubilo Iwata
+      横滨FC: Yokohama FC
+      京都不死鸟: Kyoto Sanga
+      鸟栖砂岩: Sagan Tosu
+      江原FC: Gangwon FC
+      新潟天鹅: Albirex Niigata
+      町田泽维亚: Machida Zelvia
   日职联:
     fd_code: J1
     fd_path: japan/j1-league
   韩K:
     fd_code: K_LEAGUE
     fd_path: south-korea/k-league-1
+    teams:
+      全北现代: Jeonbuk Hyundai Motors
+      蔚山现代: Ulsan Hyundai
+      浦项制铁: Pohang Steelers
+      首尔FC: FC Seoul
+      水原三星: Suwon Samsung Bluewings
+      大邱FC: Daegu FC
+      仁川联: Incheon United
+      济州联: Jeju United
+      江原FC: Gangwon FC
+      光州FC: Gwangju FC
+      大田市民: Daejeon Citizen
+      金泉尚武: Gimcheon Sangmu
   韩国K联赛:
     fd_code: K_LEAGUE
     fd_path: south-korea/k-league-1

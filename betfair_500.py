@@ -139,11 +139,13 @@ def parse_betfair_html(html: str) -> dict[str, Any]:
         for key, v in zip(_OUTCOME_KEYS, (vol_h, vol_d, vol_a)):
             pct[key] = round((v or 0) / total_vol * 100, 2) if v else None
     else:
+        # 0 成交时禁止用页面百分比冒充热门方向
         for key in _OUTCOME_KEYS:
-            pct[key] = outcome_map[key].get("trade_pct")
+            pct[key] = None
 
     trend = _build_trend(html)
-    has_data = total_vol > 0 or any(trend["labels"])
+    # 无真实成交量 = 无有效必发数据，避免「0 成交 + 热门方向」
+    has_data = total_vol > 0
 
     summary = ""
     for em in soup.select("em.ying, em.shu"):

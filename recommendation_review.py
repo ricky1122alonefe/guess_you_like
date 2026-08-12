@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -197,6 +197,38 @@ def _external_fixture_id(settled: dict) -> str:
     return str(settled.get("external_id") or settled.get("fixture_id") or "")
 
 
+def _ou_hit_from_settled(settled: dict) -> str | None:
+    """Return OU settlement label (over/under/push) from DB column or payload."""
+    if settled.get("hit_ou"):
+        return str(settled["hit_ou"])
+    payload = settled.get("payload") or {}
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            payload = {}
+    hits = payload.get("hits") or {}
+    return hits.get("ou") or None
+
+
+def _closing_ou_line_from_settled(settled: dict) -> float | None:
+    payload = settled.get("payload") or {}
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            payload = {}
+    closing = payload.get("closing_odds") or {}
+    ou = closing.get("ou") or {}
+    line = ou.get("line")
+    if line is None:
+        return None
+    try:
+        return float(line)
+    except (ValueError, TypeError):
+        return None
+
+
 def _row_from_settled(settled: dict, *, output_root: Path) -> dict[str, Any]:
     payload = settled.get("payload") or {}
     if isinstance(payload, str):
@@ -256,6 +288,9 @@ def _row_from_settled(settled: dict, *, output_root: Path) -> dict[str, Any]:
         "hit_score": settled.get("hit_score"),
         "hit_ah": settled.get("hit_ah"),
         "ah_settlement": settled.get("ah_settlement"),
+        "hit_ou": _ou_hit_from_settled(settled),
+        "ou_settlement": settled.get("ou_settlement"),
+        "closing_ou_line": _closing_ou_line_from_settled(settled),
         "compare_summary": _compare_summary(
             pick_cn=str(pick_jc or ""),
             result_cn=str(result_cn),
@@ -301,14 +336,23 @@ def _row_from_settled(settled: dict, *, output_root: Path) -> dict[str, Any]:
     return rec
 
 
-def build_recommendation_review(output_root: str | Path) -> dict[str, Any]:
-    """All settled matches: recommendation vs actual, with tier accuracy."""
+def build_recommendation_review(output_root: str | Path, *, days: int = 14) -> dict[str, Any]:
+    """Settled matches within last `days`: recommendation vs actual, with tier accuracy."""
     root = Path(output_root)
     settled_map = load_settled_map(root)
+    cutoff = datetime.now() - timedelta(days=days)
     records: list[dict[str, Any]] = []
     for fid, settled in settled_map.items():
         if not settled.get("score_text"):
             continue
+        ko = settled.get("kickoff_at")
+        if ko:
+            try:
+                ko_dt = datetime.strptime(str(ko)[:16], "%Y-%m-%d %H:%M")
+                if ko_dt < cutoff:
+                    continue
+            except ValueError:
+                pass
         try:
             rec = _row_from_settled(settled, output_root=root)
             records.append(enrich_settled_with_user_pick(rec, output_root=root))

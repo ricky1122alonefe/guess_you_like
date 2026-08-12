@@ -49,6 +49,22 @@ def ensure_schema() -> None:
     with connect(autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(sql)
+            # lightweight migrations: match_results closing OU + AH/OU settlement fields
+            cur.execute("""
+                ALTER TABLE match_results
+                ADD COLUMN IF NOT EXISTS pick_ah_cn TEXT,
+                ADD COLUMN IF NOT EXISTS hit_ah TEXT,
+                ADD COLUMN IF NOT EXISTS ah_settlement TEXT,
+                ADD COLUMN IF NOT EXISTS hit_ou TEXT,
+                ADD COLUMN IF NOT EXISTS ou_settlement TEXT,
+                ADD COLUMN IF NOT EXISTS hit_jingcai BOOLEAN,
+                ADD COLUMN IF NOT EXISTS closing_ou_line NUMERIC,
+                ADD COLUMN IF NOT EXISTS closing_ou_over NUMERIC,
+                ADD COLUMN IF NOT EXISTS closing_ou_under NUMERIC,
+                ADD COLUMN IF NOT EXISTS closing_ou_open_line NUMERIC,
+                ADD COLUMN IF NOT EXISTS closing_ou_open_over NUMERIC,
+                ADD COLUMN IF NOT EXISTS closing_ou_open_under NUMERIC
+            """)
     log.info("数据库 schema 已就绪")
 
 

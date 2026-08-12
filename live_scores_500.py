@@ -34,6 +34,8 @@ class LiveScore:
     home_name: str = ""
     away_name: str = ""
     source: str = "live_html"
+    is_finished: bool = False
+    score_source: str = ""
 
 
 def _score_tuple(h: int, a: int) -> tuple[int, int, str]:
@@ -123,6 +125,8 @@ def fetch_wc_api_scoreboard(session: requests.Session | None = None) -> dict[str
             home_name=fx.home,
             away_name=fx.away,
             source="wc_api",
+            is_finished=True,
+            score_source="wc_api",
         )
     log.info("500 联赛 API 已完场比分 %d 场", len(out))
     return out
@@ -152,7 +156,8 @@ def fetch_live_html_scoreboard(
             if league not in league_filter:
                 continue
         row_text = tr.get_text("|", strip=True) if tr else ""
-        if "完" not in row_text and "完场" not in row_text:
+        is_finished = "完" in row_text or "完场" in row_text or "结束" in row_text
+        if not is_finished:
             continue
         parsed = _parse_score_from_tr(tr)
         if not parsed:
@@ -169,6 +174,8 @@ def fetch_live_html_scoreboard(
             home_name=home,
             away_name=away,
             source="live_html",
+            is_finished=True,
+            score_source="live_html",
         )
     log.info("live.500 HTML 已完场比分 %d 场", len(out))
     return out

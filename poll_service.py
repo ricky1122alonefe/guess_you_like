@@ -44,6 +44,9 @@ def run_once(*, within_days: float, guard: ScraperGuard, leagues=DEFAULT_LEAGUES
 
     for fx in fixtures:
         try:
+            # 队名修正：统一调 ensure_fixture_identity
+            from poll_500 import ensure_fixture_identity
+            fx = ensure_fixture_identity(session, fx)
             db_id = upsert_fixture(
                 source=SOURCE,
                 external_id=fx.fixture_id,

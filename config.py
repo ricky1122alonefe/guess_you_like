@@ -1,5 +1,7 @@
 """Central tunables for matching, control, traps, confidence, and scores."""
 
+import os
+
 # ── 样本门槛 ──────────────────────────────────────────
 MIN_SAMPLES_FOR_PICK = 100
 SCORE_POOL_TOP_N = 250
@@ -178,3 +180,16 @@ ACCURACY_SP_MIN = 1.30
 ACCURACY_SP_MAX = 1.60
 ACCURACY_SP_SOFT_MAX = 1.85          # 超出甜区但尚可单关的上限提示
 ACCURACY_FIRST_REQUIRE_HIGH_CONF = True  # 「稳胆/稳胆甜区」需置信=高
+
+# ── 轻量模型层（Elo + 泊松 + edge）──────────────────────
+ELO_HOME_ADVANTAGE = float(os.getenv("ELO_HOME_ADVANTAGE", 70.0))
+ELO_K_FACTOR = float(os.getenv("ELO_K_FACTOR", 32.0))
+ELO_DEFAULT_RATING = float(os.getenv("ELO_DEFAULT_RATING", 1500.0))
+ELO_LOGISTIC_SCALE = float(os.getenv("ELO_LOGISTIC_SCALE", 400.0))
+ELO_DRAW_BASE = float(os.getenv("ELO_DRAW_BASE", 0.25))
+
+POISSON_MAX_GOALS = int(os.getenv("POISSON_MAX_GOALS", 5))
+POISSON_ELO_DIFF_SENSITIVITY = float(os.getenv("POISSON_ELO_DIFF_SENSITIVITY", 0.15))
+
+VALUE_EDGE_MAX_KELLY = float(os.getenv("VALUE_EDGE_MAX_KELLY", 0.25))
+VALUE_EDGE_DISCLAIMER = "研究用，非投注建议"

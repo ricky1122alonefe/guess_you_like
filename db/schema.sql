@@ -106,6 +106,8 @@ CREATE TABLE IF NOT EXISTS match_results (
     recommended_scores      TEXT,
     hit_1x2                 BOOLEAN,
     hit_score               BOOLEAN,
+    hit_ou                  TEXT,
+    hit_jingcai             BOOLEAN,
     payload                 JSONB NOT NULL DEFAULT '{}'::jsonb,
     settled_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     source                  TEXT NOT NULL DEFAULT '500'

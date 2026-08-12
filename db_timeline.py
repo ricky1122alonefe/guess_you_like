@@ -45,6 +45,19 @@ def _eu_books_from_tick(t: dict) -> list:
     return []
 
 
+def _ou_from_tick(t: dict) -> dict:
+    raw = _raw_meta_from_tick(t)
+    ou = raw.get("ou") or {}
+    return {
+        "ou_line": _num(t.get("ou_line") or ou.get("ou_line")),
+        "ou_over": _num(t.get("ou_over") or ou.get("ou_over")),
+        "ou_under": _num(t.get("ou_under") or ou.get("ou_under")),
+        "ou_open_line": _num(t.get("ou_open_line") or ou.get("ou_open_line")),
+        "ou_open_over": _num(t.get("ou_open_over") or ou.get("ou_open_over")),
+        "ou_open_under": _num(t.get("ou_open_under") or ou.get("ou_open_under")),
+    }
+
+
 def _odds_from_tick(t: dict) -> dict:
     return {
         "ah_line": _num(t.get("ah_line")),
@@ -59,6 +72,7 @@ def _odds_from_tick(t: dict) -> dict:
         "eu_open_home": _num(t.get("eu_open_home")),
         "eu_open_draw": _num(t.get("eu_open_draw")),
         "eu_open_away": _num(t.get("eu_open_away")),
+        **_ou_from_tick(t),
         "bookmaker": t.get("bookmaker") or "pinnacle",
         "jingcai": _jingcai_from_tick(t),
         "betfair": _betfair_from_tick(t),
@@ -100,9 +114,13 @@ def load_match_index_from_db(external_id: str, *, source: str = "500") -> dict |
             "pick": _pick_from_tick(t),
         })
 
+    home_team = fx.get("home_team") or ""
+    away_team = fx.get("away_team") or ""
     return {
         "fixture_id": str(external_id),
-        "match_name": fx.get("match_name") or f"{fx.get('home_team')}VS{fx.get('away_team')}",
+        "match_name": f"{home_team}VS{away_team}" if home_team and away_team else (fx.get("match_name") or str(external_id)),
+        "home_team": home_team,
+        "away_team": away_team,
         "updated_at": timeline[-1]["ts"],
         "point_count": len(timeline),
         "timeline": timeline,

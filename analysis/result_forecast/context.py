@@ -189,10 +189,13 @@ def _extract_asian(odds: dict) -> dict | None:
 
 
 def _extract_betfair(odds: dict) -> dict | None:
-    """提取必发信号。兼容 volume_pct 和 volume_home/draw/away 两种格式。"""
+    """提取必发信号。volume_total≈0 时不输出热门标签。"""
     bf = odds.get("betfair") or {}
     if not bf.get("has_data") and not bf.get("volume_total"):
         return None
+    vol_total = bf.get("volume_total", 0) or 0
+    if vol_total < 100:
+        return None  # 成交量过低（<100），不输出热门标签
     vol_pct = bf.get("volume_pct") or {}
     vh = _safe_float(vol_pct.get("home")) or 0
     vd = _safe_float(vol_pct.get("draw")) or 0
@@ -399,42 +402,50 @@ def _extract_recent_form(match_name: str) -> dict | None:
     # 2. club_form（联赛队，从 PG match_results）
     try:
         from analysis.team_form.club_form import build_club_form
-        parts = match_name.replace(" VS ", " vs ").replace(" Vs ", " vs ").split(" vs ")
+        # 兼容 "A vs B" / "AVS B" / "A VS B" / "A对B"
+        normalized = match_name
+        for sep in (" VS ", " Vs ", " vs ", "VS", "Vs", "vs", "对"):
+            if sep in normalized:
+                normalized = normalized.replace(sep, "\x00")
+                break
+        parts = normalized.split("\x00")
         if len(parts) == 2:
             home_team, away_team = parts[0].strip(), parts[1].strip()
             cf = build_club_form(home_team, away_team)
-            if cf and not cf.get("missing"):
-                overall = cf.get("overall") or {}
-                split = cf.get("split") or {}
-                h = overall.get("home_team") or {}
-                a = overall.get("away_team") or {}
+            if not isinstance(cf, dict):
+                return None
+            overall = cf.get("overall") or {}
+            split = cf.get("split") or {}
+            h = overall.get("home_team")
+            a = overall.get("away_team")
+            # 有任一侧 played>0 才算有数据
+            if (h and h.get("played")) or (a and a.get("played")):
                 h_home = split.get("home_at_home_last_20") or {}
                 a_away = split.get("away_at_away_last_20") or {}
                 return {
                     "home": {
-                        "label": h.get("team", home_team),
-                        "form_str": h.get("form_str", ""),
-                        "win_rate": h.get("win_rate"),
-                        "goals_for": h.get("goals_for"),
-                        "goals_against": h.get("goals_against"),
-                        "home_at_home": h_home.get("summary_cn", ""),
-                    },
+                        "label": h.get("team", home_team) if h else home_team,
+                        "form_str": h.get("form_str", "") if h else "",
+                        "win_rate": h.get("win_rate") if h else None,
+                        "goals_for": h.get("goals_for") if h else None,
+                        "goals_against": h.get("goals_against") if h else None,
+                        "home_at_home": h_home.get("summary_cn", "") if h_home else "",
+                    } if h else {"label": home_team},
                     "away": {
-                        "label": a.get("team", away_team),
-                        "form_str": a.get("form_str", ""),
-                        "win_rate": a.get("win_rate"),
-                        "goals_for": a.get("goals_for"),
-                        "goals_against": a.get("goals_against"),
-                        "away_at_away": a_away.get("summary_cn", ""),
-                    },
+                        "label": a.get("team", away_team) if a else away_team,
+                        "form_str": a.get("form_str", "") if a else "",
+                        "win_rate": a.get("win_rate") if a else None,
+                        "goals_for": a.get("goals_for") if a else None,
+                        "goals_against": a.get("goals_against") if a else None,
+                        "away_at_away": a_away.get("summary_cn", "") if a_away else "",
+                    } if a else {"label": away_team},
                     "source": "club_form",
                 }
             elif cf and cf.get("missing"):
-                # 有 missing_reason 但无实际战绩 → 仍返回 None（让 missing 进 list）
-                # 但把 reason 存到 context 供 UI 使用
-                log.debug("club_form missing: %s", cf["missing"])
+                log.debug("club_form missing: %s", cf.get("missing"))
     except Exception as exc:
-        log.debug("club_form failed: %s", exc)
+        import traceback
+        log.debug("club_form failed: %s\n%s", exc, traceback.format_exc())
 
     return None
 
@@ -495,8 +506,13 @@ def build_result_forecast_context(
             }
 
     timeline = index.get("timeline") or []
-    match_name = index.get("match_name") or prediction.get("match_name", "") if prediction else index.get("match_name", fixture_id)
-    match_name = match_name or fixture_id
+    # 优先用 home_team/away_team 拼 match_name（DB match_name 可能是联赛名）
+    home_team = index.get("home_team") or ""
+    away_team = index.get("away_team") or ""
+    if home_team and away_team:
+        match_name = f"{home_team}VS{away_team}"
+    else:
+        match_name = index.get("match_name") or (prediction.get("match_name", "") if prediction else "") or fixture_id
 
     # 合并 odds：timeline tick + prediction.odds_snapshot/cur/quant
     tick_odds = _from_tick(timeline)
@@ -515,11 +531,30 @@ def build_result_forecast_context(
 
     history = _extract_history(prediction)
     if not history:
+        try:
+            from analysis.result_forecast.history_similar import build_history_similar
+            history = build_history_similar(fixture_id, phase="open", use_ah=False)
+        except Exception as exc:
+            logger.warning("build_history_similar 失败 %s: %s", fixture_id, exc)
+            history = None
+    if not history:
         missing.append("history_similar")
 
     recent = _extract_recent_form(match_name)
     if not recent:
         missing.append("recent_form")
+
+    # 盘口 lifecycle（开盘 vs 临盘）
+    market_open_close = None
+    try:
+        from analysis.market.odds_lifecycle import get_match_odds_lifecycle
+
+        market_open_close = get_match_odds_lifecycle(str(fixture_id))
+        if market_open_close and market_open_close.get("error"):
+            market_open_close = None
+    except Exception as exc:
+        log.debug("market_open_close failed for %s: %s", fixture_id, exc)
+        market_open_close = None
 
     # 尝试获取 missing_reason 供 UI 展示
     recent_missing_reason = ""
@@ -541,6 +576,7 @@ def build_result_forecast_context(
         "european": european,
         "asian": asian,
         "betfair": betfair,
+        "market_open_close": market_open_close,
         "history_similar": history,
         "recent_form": recent,
         "recent_missing_reason": recent_missing_reason,

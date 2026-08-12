@@ -95,6 +95,8 @@ def build_jingcai_snapshot(
         else:
             handicap_label = "0"
 
+    # 比分/总进球玩法 SP：当前 liveOddsList 未提供，trade 页需独立 playid。
+    # 先占位并诚实标记 has_score_market=false，避免假数据。
     return {
         "match_num": match_num,
         "handicap": handicap,
@@ -107,4 +109,8 @@ def build_jingcai_snapshot(
         "rqsp_away": rq_a,
         "has_sp": sp_h is not None,
         "has_rqsp": rq_h is not None,
+        "has_score_market": False,
+        "score_odds": {},
+        "total_goals_odds": {},
+        "score_market_note": "degraded: 500 liveOddsList 无比分/总进球 SP；未接入独立 trade playid",
     }

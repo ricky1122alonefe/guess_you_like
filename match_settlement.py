@@ -61,10 +61,14 @@ def _pattern_meta(cur: dict) -> dict[str, Any]:
     }
 
 
-def _closing_fields(tick: dict | None) -> dict[str, Any]:
+def _closing_fields(tick: dict | None, fixture_db_id: int | None = None) -> dict[str, Any]:
     if not tick:
         return {}
     ou = _extract_ou(tick)
+    if (ou.get("line") is None) and fixture_db_id:
+        fallback = _last_ou_from_ticks(fixture_db_id)
+        if fallback.get("line") is not None:
+            ou = fallback
     return {
         "closing_captured_at": tick.get("captured_at"),
         "closing_ah_line": tick.get("ah_line"),
@@ -101,6 +105,22 @@ def _extract_ou(tick: dict | None) -> dict[str, Any]:
     }
 
 
+def _last_ou_from_ticks(fixture_db_id: int) -> dict[str, Any]:
+    """从所有历史 ticks 找最后一条带有效 OU 的数据；无则空。"""
+    from db.repository import list_ticks
+
+    try:
+        ticks = list_ticks(fixture_db_id)
+    except Exception as exc:
+        log.debug("list_ticks failed for OU fallback %s: %s", fixture_db_id, exc)
+        return {}
+    for tick in reversed(ticks):
+        ou = _extract_ou(tick)
+        if ou.get("line") is not None:
+            return ou
+    return {}
+
+
 def _build_payload(
     pred: dict | None,
     *,
@@ -108,11 +128,15 @@ def _build_payload(
     closing_tick: dict | None,
     hits: dict[str, Any] | None = None,
     score_source: str = "",
+    score_range: dict | None = None,
+    fixture_db_id: int | None = None,
 ) -> dict[str, Any]:
     opening = _odds_from_tick(opening_tick, opening=True)
     closing = _odds_from_tick(closing_tick, opening=False)
     open_ou = _extract_ou(opening_tick)
     close_ou = _extract_ou(closing_tick)
+    if close_ou.get("line") is None and fixture_db_id:
+        close_ou = _last_ou_from_ticks(fixture_db_id)
     open_cur = {**opening, **{f"ah_open_{k}": v for k, v in opening.items() if k.startswith("ah_")}}
 
     open_mp = _pattern_meta(open_cur) if opening.get("eu_home") else {}
@@ -132,6 +156,7 @@ def _build_payload(
         "ah": ah_settlement_to_label(hits.get("ah_settlement")) if hits else None,
         "ou": hits.get("hit_ou") if hits else None,
         "jingcai": hits.get("hit_jingcai") if hits else None,
+        "score_bands": hits.get("score_bands") if hits else None,
     }
     return {
         "recommendation_source": snap.get("recommendation_source"),
@@ -141,6 +166,7 @@ def _build_payload(
         "closing_odds": {**closing, "ou": close_ou},
         "hits": hits_obj,
         "score_source": score_source,
+        "score_range": score_range,
         "opening_favorite": fav,
         "opening_favorite_cn": RESULT_CN.get(fav) if fav else None,
         "opening_consistency": open_mp.get("consistency"),
@@ -158,14 +184,26 @@ def _result_row(
     pred: dict | None,
     opening_tick: dict | None,
     closing_tick: dict | None,
+    external_id: str | None = None,
 ) -> dict[str, Any]:
     closing_ou = _extract_ou(closing_tick)
+    if closing_ou.get("line") is None and fixture_db_id:
+        closing_ou = _last_ou_from_ticks(fixture_db_id)
+    score_range = None
+    if external_id:
+        try:
+            from analysis.market.score_range import build_score_range_forecast
+
+            score_range = build_score_range_forecast(str(external_id))
+        except Exception as exc:
+            log.debug("settle 时计算 score_range 失败 %s: %s", external_id, exc)
     hits = evaluate_prediction_hits(
         pred,
         home_score=score.home_score,
         away_score=score.away_score,
         ah_line=(closing_tick or {}).get("ah_line"),
         ou_line=closing_ou.get("line"),
+        score_range=score_range,
     )
     payload = _build_payload(
         pred,
@@ -173,6 +211,8 @@ def _result_row(
         closing_tick=closing_tick,
         hits=hits,
         score_source=score.score_source or score.source,
+        score_range=score_range,
+        fixture_db_id=fixture_db_id,
     )
     row = {
         "fixture_id": fixture_db_id,
@@ -194,10 +234,11 @@ def _result_row(
         "hit_ou": hits.get("hit_ou"),
         "ou_settlement": hits.get("ou_settlement"),
         "hit_jingcai": hits.get("hit_jingcai"),
+        "score_bands": hits.get("score_bands"),
         "payload": payload,
         "source": SOURCE,
     }
-    row.update(_closing_fields(closing_tick))
+    row.update(_closing_fields(closing_tick, fixture_db_id))
     return row
 
 
@@ -422,7 +463,14 @@ def settle_fixture(
 
     opening_tick = get_opening_tick(db_id)
     closing_tick = get_closing_tick(db_id, fixture.get("kickoff_at"))
-    row = _result_row(db_id, score, pred=pred, opening_tick=opening_tick, closing_tick=closing_tick)
+    row = _result_row(
+        db_id,
+        score,
+        pred=pred,
+        opening_tick=opening_tick,
+        closing_tick=closing_tick,
+        external_id=ext,
+    )
     upsert_match_result(db_id, row)
     if output_root:
         _save_result_file(Path(output_root), ext, row, fixture)

@@ -406,4 +406,10 @@ def forecast_for_match(fixture_id: str, *, index: dict | None = None, prediction
             result.setdefault("secondary", {})["models"] = models
     except Exception as exc:
         log.debug("model layer failed: %s", exc)
+
+    # 比分区间预测接入 secondary（context 中已计算）
+    score_range = ctx.get("score_range")
+    if score_range:
+        result.setdefault("secondary", {})["score_range"] = score_range
+
     return result

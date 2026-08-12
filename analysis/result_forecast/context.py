@@ -502,6 +502,7 @@ def build_result_forecast_context(
                 "match_name": "",
                 "european": None, "asian": None, "betfair": None,
                 "history_similar": None, "recent_form": None,
+                "score_range": {"missing": ["no_index"], "bands": [], "top_bands": []},
                 "missing": ["european", "asian", "betfair", "history_similar", "recent_form"],
             }
 
@@ -570,7 +571,7 @@ def build_result_forecast_context(
         except Exception:
             pass
 
-    return {
+    ctx = {
         "fixture_id": fixture_id,
         "match_name": match_name,
         "european": european,
@@ -582,3 +583,14 @@ def build_result_forecast_context(
         "recent_missing_reason": recent_missing_reason,
         "missing": missing,
     }
+
+    # 比分区间预测（接入主链，但不压过主结论）
+    try:
+        from analysis.market.score_range import build_score_range_forecast
+
+        ctx["score_range"] = build_score_range_forecast(fixture_id, context=ctx)
+    except Exception as exc:
+        log.debug("score_range 接入 context 失败 %s: %s", fixture_id, exc)
+        ctx["score_range"] = {"missing": ["context_build_error"], "bands": [], "top_bands": []}
+
+    return ctx

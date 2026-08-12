@@ -27,9 +27,16 @@ def _safe_float(v) -> float | None:
 
 
 def _tick_summary(tick: dict | None) -> dict | None:
-    """从 tick 提取欧亚精简摘要（含 OU）。"""
+    """从 tick 提取欧亚精简摘要（含 OU，优先 raw_meta.ou）。"""
     if not tick:
         return None
+    raw = tick.get("raw_meta") or {}
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = {}
+    raw_ou = raw.get("ou") or {}
     return {
         "captured_at": str(tick.get("captured_at", "")),
         "eu_home": _safe_float(tick.get("eu_home")),
@@ -44,9 +51,9 @@ def _tick_summary(tick: dict | None) -> dict | None:
         "ah_open_line": tick.get("ah_open_line"),
         "ah_open_home_water": _safe_float(tick.get("ah_open_home_water")),
         "ah_open_away_water": _safe_float(tick.get("ah_open_away_water")),
-        "ou_line": _safe_float(tick.get("ou_line")),
-        "ou_over": _safe_float(tick.get("ou_over")),
-        "ou_under": _safe_float(tick.get("ou_under")),
+        "ou_line": _safe_float(tick.get("ou_line") or raw_ou.get("ou_line")),
+        "ou_over": _safe_float(tick.get("ou_over") or raw_ou.get("ou_over")),
+        "ou_under": _safe_float(tick.get("ou_under") or raw_ou.get("ou_under")),
     }
 
 

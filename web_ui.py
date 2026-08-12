@@ -7109,6 +7109,57 @@ def _history_similar_card(history_similar: dict | None) -> str:
     )
 
 
+def _score_range_card(score_range):
+    """比分区间折叠块：Top3 band + 精确参考。"""
+    if not score_range:
+        return ""
+    missing = score_range.get("missing") or []
+    top = score_range.get("top_bands") or []
+    total = score_range.get("total_bands") or []
+    exact = score_range.get("exact_top") or []
+    if not top and missing:
+        return (
+            '<details style="margin-top:10px;border:1px solid #e5e7eb;border-radius:6px;padding:8px">'
+            '<summary style="cursor:pointer;color:#1565c0;font-weight:bold">比分区间</summary>'
+            f'<p class="meta" style="font-size:12px">数据不足：{"；".join(_e(m) for m in missing)}</p>'
+            '</details>'
+        )
+    if not top:
+        return ""
+    rows = ""
+    for b in top:
+        rows += (
+            f'<div style="display:flex;align-items:center;gap:6px;margin:2px 0">'
+            f'<span style="width:120px;font-size:12px">{_e(b.get("label_cn", b.get("id", "")))}</span>'
+            '<div style="flex:1;height:12px;background:#eee;border-radius:3px">'
+            f'<div style="width:{b.get("p", 0) * 100:.0f}%;height:100%;background:#2e7d32;border-radius:3px"></div>'
+            '</div>'
+            f'<span style="width:42px;font-size:12px;text-align:right">{b.get("p", 0):.0%}</span>'
+            '</div>'
+        )
+    total_html = ""
+    if total:
+        total_html = '<p class="meta" style="font-size:11px;margin:6px 0 0">总球带：' + ", ".join(
+            f"{_e(t.get('label_cn', t.get('id', '')))} {t.get('p', 0):.0%}"
+            for t in total
+        ) + '</p>'
+    exact_html = ""
+    if exact:
+        exact_html = '<p class="meta" style="font-size:11px;margin:4px 0 0">精确参考：' + ", ".join(
+            f"{_e(e.get('score', ''))} {e.get('p', 0):.0%}"
+            for e in exact[:3]
+        ) + '（仅供参考）</p>'
+    return (
+        '<details style="margin-top:10px;border:1px solid #e5e7eb;border-radius:6px;padding:8px">'
+        '<summary style="cursor:pointer;color:#1565c0;font-weight:bold">比分区间（概率带）</summary>'
+        f'<div style="margin-top:8px">{rows}</div>'
+        f'{total_html}'
+        f'{exact_html}'
+        '<p class="meta" style="font-size:11px;color:#888;margin:6px 0 0">区间非单点预测，无数据时显示 missing。</p>'
+        '</details>'
+    )
+
+
 def _models_detail_card(models):
     """轻量模型对照折叠块：Elo / 泊松λ / edge。"""
     if not models:
@@ -7227,6 +7278,8 @@ def _result_forecast_card(prediction):
 
     models = (rp.get("secondary") or {}).get("models") or {}
     models_detail_html = _models_detail_card(models)
+    score_range = (rp.get("secondary") or {}).get("score_range") or (prediction.get("secondary") or {}).get("score_range")
+    score_range_html = _score_range_card(score_range)
 
     return (
         '<div class="card result-forecast-card" style="border:2px solid #1565c0;border-radius:8px;padding:12px;margin:8px 0">'
@@ -7240,6 +7293,7 @@ def _result_forecast_card(prediction):
         f'{weights_html}'
         f'{missing_html}'
         f'{jc_hint}'
+        f'{score_range_html}'
         f'{models_detail_html}'
         '<p class="meta" style="font-size:11px;margin-top:6px">仅供研究参考，不构成投注建议。规则融合，非 AI 生成。</p>'
         '</div>'

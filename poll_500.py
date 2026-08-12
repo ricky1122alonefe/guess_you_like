@@ -375,6 +375,9 @@ def build_tick(
         "rqsp_draw": jc.get("rqsp_draw"),
         "rqsp_away": jc.get("rqsp_away"),
         "handicap": jc.get("handicap"),
+        "has_score_market": jc.get("has_score_market"),
+        "score_odds": jc.get("score_odds"),
+        "total_goals_odds": jc.get("total_goals_odds"),
     }
     key["betfair"] = {
         "volume_home": bf.get("volume_home"),

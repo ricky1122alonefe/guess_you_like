@@ -72,6 +72,7 @@ def evaluate_prediction_hits(
     ah_line: float | None = None,
     ou_line: float | None = None,
     jingcai_pick_key: str | None = None,
+    score_range: dict | None = None,
 ) -> dict[str, Any]:
     """Compare stored prediction vs actual score; reuse check_results semantics."""
     score_text = f"{home_score}-{away_score}"
@@ -93,7 +94,9 @@ def evaluate_prediction_hits(
         "hit_ah": None,
         "ah_settlement": None,
         "hit_ou": None,
+        "ou_settlement": None,
         "hit_jingcai": None,
+        "score_bands": None,
     }
 
     row = pred.get("predict_row") or {} if pred else {}
@@ -171,5 +174,12 @@ def evaluate_prediction_hits(
                 out["hit_ou"] = "under"
             else:
                 out["hit_ou"] = "push"
+            out["ou_settlement"] = out["hit_ou"]
+
+    # 比分区间命中
+    if score_range:
+        from analysis.market.score_range import evaluate_score_bands
+
+        out["score_bands"] = evaluate_score_bands(score_range, home_score, away_score)
 
     return out

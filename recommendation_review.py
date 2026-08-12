@@ -12,9 +12,15 @@ from typing import Any
 from match_settlement import load_settled_map
 from prediction_archive import load_best_prediction
 from review_agent import build_review_agent_report
-from time_utils import now_beijing_str
+from time_utils import now_beijing, now_beijing_str
 from worldcup_analytics import compute_accuracy_report
 from user_final_picks import enrich_settled_with_user_pick, list_locked_picks, user_pick_accuracy
+
+try:
+    from db.connection import cursor, ping
+except Exception:
+    cursor = None  # type: ignore
+    ping = None  # type: ignore
 
 log = logging.getLogger(__name__)
 
@@ -336,6 +342,62 @@ def _row_from_settled(settled: dict, *, output_root: Path) -> dict[str, Any]:
     return rec
 
 
+def build_score_band_stats(*, days: int = 14) -> dict[str, Any]:
+    """Aggregate hit rates for score_range bands over settled matches in DB."""
+    stats: dict[str, Any] = {"days": days, "total": 0, "bands": []}
+    if ping is None or not ping():
+        return stats
+    try:
+        cutoff = now_beijing() - timedelta(days=days)
+        with cursor() as cur:
+            cur.execute(
+                """
+                SELECT r.payload, f.external_id, f.match_name, f.kickoff_at
+                FROM match_results r
+                JOIN fixtures f ON f.id = r.fixture_id
+                WHERE f.source = %s AND f.kickoff_at >= %s
+                ORDER BY f.kickoff_at DESC
+                """,
+                ("500", cutoff),
+            )
+            rows = cur.fetchall()
+    except Exception as exc:
+        log.debug("score_band_stats query failed: %s", exc)
+        return stats
+
+    band_map: dict[str, dict[str, Any]] = {}
+    total = 0
+    for row in rows:
+        payload = row.get("payload") or {}
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                payload = {}
+        hits = payload.get("hits") or {}
+        bands = hits.get("score_bands") or []
+        if not bands:
+            continue
+        total += 1
+        for b in bands:
+            bid = b.get("id") or b.get("label") or "unknown"
+            entry = band_map.setdefault(
+                bid, {"label": bid, "judged": 0, "hit": 0}
+            )
+            entry["judged"] += 1
+            if b.get("hit"):
+                entry["hit"] += 1
+
+    bands = list(band_map.values())
+    for b in bands:
+        judged = b["judged"]
+        b["rate_pct"] = round(b["hit"] / judged * 100, 1) if judged else None
+    bands.sort(key=lambda x: (-x["judged"], x["label"]))
+    stats["total"] = total
+    stats["bands"] = bands
+    return stats
+
+
 def build_recommendation_review(output_root: str | Path, *, days: int = 14) -> dict[str, Any]:
     """Settled matches within last `days`: recommendation vs actual, with tier accuracy."""
     root = Path(output_root)
@@ -379,11 +441,18 @@ def build_recommendation_review(output_root: str | Path, *, days: int = 14) -> d
     user_locked = list_locked_picks(root)
     user_acc = user_pick_accuracy(records)
 
+    try:
+        score_band_stats = build_score_band_stats(days=days)
+    except Exception as exc:
+        log.debug("score_band_stats failed: %s", exc)
+        score_band_stats = {"days": days, "total": 0, "bands": []}
+
     return {
         "updated_at": now_beijing_str(),
         "total_settled": len(records),
         "with_recommendation": len(judged),
         "accuracy": accuracy,
+        "score_band_stats": score_band_stats,
         "review_agent": build_review_agent_report(records),
         "miss_patterns": [{"pattern": k, "count": v} for k, v in top_misses],
         "error_review": {

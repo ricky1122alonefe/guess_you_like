@@ -584,6 +584,15 @@ def build_result_forecast_context(
         "missing": missing,
     }
 
+    # 欧亚分歧（DB 主链）
+    try:
+        from analysis.market.eu_ah_divergence_ctx import build_eu_ah_divergence
+
+        ctx["divergence"] = build_eu_ah_divergence(str(fixture_id))
+    except Exception as exc:
+        log.debug("divergence 接入 context 失败 %s: %s", fixture_id, exc)
+        ctx["divergence"] = {"missing": ["context_build_error"], "fixture_id": str(fixture_id)}
+
     # 比分区间预测（接入主链，但不压过主结论）
     try:
         from analysis.market.score_range import build_score_range_forecast

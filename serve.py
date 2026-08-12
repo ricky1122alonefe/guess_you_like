@@ -41,6 +41,7 @@ from share_card import (
     html_share_posters_batch,
 )
 from web_ui import html_agent_pipeline_settings, html_agent_workbench, html_ah_analytics, html_ai_settings, html_daily_picks, html_dashboard, html_eu_ah_divergence, html_group_final_copy, html_group_knockout_outlook, html_kelly_calculator, html_match_detail, html_quant_analytics, html_recommendation_review, html_worldcup_ledger
+from apps.api.viz import build_viz_data, get_viz_or_404
 
 
 def _error_html(body: str) -> str:
@@ -66,6 +67,7 @@ _FID_RE = re.compile(r"^/match/(\d+)$")
 _AGENT_WORKBENCH_RE = re.compile(r"^/match/(\d+)/agents$")
 _SHARE_RE = re.compile(r"^/share/match/(\d+)$")
 _API_FID_RE = re.compile(r"^/api/match/(\d+)/timeline$")
+_API_VIZ_RE = re.compile(r"^/api/match/(\d+)/viz$")
 _API_RECOMMEND_RE = re.compile(r"^/api/match/(\d+)/recommend$")
 _API_DEEP_RE = re.compile(r"^/api/match/(\d+)/deep-analyze$")
 _API_AGENT_BOARD_RE = re.compile(r"^/api/match/(\d+)/agent-board$")
@@ -689,12 +691,19 @@ class Handler(BaseHTTPRequestHandler):
                 pred["result_prediction"] = forecast_for_match(fid, index=idx, prediction=pred)
             except Exception:
                 log.exception("result_forecast failed for fid=%s", fid)
+            # 可视化数据：失败不阻塞页面
+            viz: dict | None = None
+            try:
+                viz = build_viz_data(root, fid)
+            except Exception:
+                log.exception("viz build failed for fid=%s", fid)
             self._send_html(html_match_detail(
                 idx, prediction=pred, ai_records=ai_records,
                 deep_records=deep_records, agent_board=agent_board,
                 chief_report=chief_report, agent_workflow=agent_workflow,
                 settled=settled,
                 output_root=root,
+                viz=viz,
             ))
             return
 
@@ -705,6 +714,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "not found"}, 404)
             else:
                 self._send_json(idx)
+            return
+
+        vm = _API_VIZ_RE.match(path)
+        if vm:
+            fid = vm.group(1)
+            data, status = get_viz_or_404(root, fid)
+            self._send_json(data, status)
             return
 
         abm = _API_AGENT_BOARD_RE.match(path)

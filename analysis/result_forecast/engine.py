@@ -157,7 +157,17 @@ def _build_reasons(context: dict, fused: dict[str, float], sources_used: dict[st
 
 
 def _check_divergence(context: dict) -> str | None:
-    """检查欧亚严重分歧。"""
+    """检查欧亚严重分歧，优先使用 DB 主链 divergence。"""
+    div = context.get("divergence")
+    if isinstance(div, dict) and "divergence_score" in div:
+        score = div.get("divergence_score") or 0
+        if score >= 50:
+            severity = div.get("severity_cn", "明显分歧")
+            signals = ", ".join(div.get("signals") or []) or "欧亚不匹配"
+            return f"{severity}（{score} 分）{signals}"
+        return None
+
+    # Fallback legacy direction check
     eu = context.get("european")
     asian = context.get("asian")
     if not eu or not asian:

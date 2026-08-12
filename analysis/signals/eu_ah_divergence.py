@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -290,25 +290,145 @@ def scan_eu_ah_divergence(
     }
 
 
+def _divergence_summary(div: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a divergence dict to report row format."""
+    return {
+        "fixture_id": div.get("fixture_id") or div.get("external_id"),
+        "match": div.get("match"),
+        "kickoff": div.get("kickoff") or "—",
+        "divergence_score": div.get("divergence_score", 0),
+        "severity": div.get("severity"),
+        "severity_cn": div.get("severity_cn"),
+        "consistency": div.get("consistency"),
+        "consistency_cn": div.get("consistency_cn"),
+        "line_gap": div.get("line_gap"),
+        "eu_to_ah_line": div.get("eu_to_ah_line"),
+        "eu_to_ah_line_cn": _line_desc(div.get("eu_to_ah_line")),
+        "ah_line": div.get("ah_line"),
+        "ah_line_cn": _line_desc(div.get("ah_line")),
+        "eu_odds_gap": div.get("eu_odds_gap"),
+        "open_line_gap": div.get("open_line_gap"),
+        "gap_shift": div.get("gap_shift"),
+        "signals": div.get("signals") or [],
+        "pattern_names": div.get("pattern_names") or [],
+        "conversion_summary": div.get("conversion_summary"),
+        "open_eu": div.get("open_eu"),
+        "live_eu": div.get("live_eu"),
+        "open_ah": div.get("open_ah"),
+        "live_ah": div.get("live_ah"),
+        "advice": div.get("advice"),
+    }
+
+
+def _fixtures_with_odds_within(
+    source: str, *, within_days: int = 7, limit: int = 500
+) -> list[dict[str, Any]]:
+    """从 DB 拉取近 N 天有 odds_latest 的 fixtures。"""
+    from db.connection import cursor
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=within_days)
+    with cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                f.id, f.external_id, f.source, f.home_team, f.away_team,
+                f.match_name, f.kickoff_at
+            FROM fixtures f
+            JOIN odds_latest l ON l.fixture_id = f.id
+            WHERE f.source = %s
+              AND f.kickoff_at >= %s
+            ORDER BY f.kickoff_at DESC
+            LIMIT %s
+            """,
+            (source, cutoff, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
 def build_divergence_report(
     output_root: str | Path,
     *,
     within_hours: float | None = None,
     min_score: int | None = None,
     within_days: float | None = None,
+    source: str = "500",
 ) -> dict[str, Any]:
+    """DB-first divergence report, output cache as fallback."""
     from daily_picks import load_dashboard_matches, load_kickoff_map
 
     root = Path(output_root)
     days = within_days if within_days is not None else cfg.SERVICE_WITHIN_DAYS
-    matches = load_dashboard_matches(root, within_days=days)
-    kickoff_map = load_kickoff_map(within_days=days)
-    report = scan_eu_ah_divergence(
-        matches,
-        kickoff_map,
-        within_hours=within_hours,
-        min_score=min_score,
-    )
-    report["updated_at"] = format_beijing(now_beijing())
-    report["scanned"] = len(matches)
+    seen: set[str] = set()
+    matches: list[dict[str, Any]] = []
+
+    # 1. DB 主链
+    try:
+        fixtures = _fixtures_with_odds_within(source, within_days=int(days))
+    except Exception as exc:
+        logger.warning("DB divergence scan failed: %s", exc)
+        fixtures = []
+
+    for fx in fixtures:
+        fid = str(fx.get("external_id"))
+        seen.add(fid)
+        try:
+            from analysis.market.eu_ah_divergence_ctx import build_eu_ah_divergence
+
+            div = build_eu_ah_divergence(fid, fixture=fx)
+        except Exception as exc:
+            logger.debug("divergence build failed %s: %s", fid, exc)
+            continue
+        if div.get("divergence_score", 0) >= (min_score or cfg.EU_AH_DIVERGENCE_MIN_SCORE):
+            matches.append(_divergence_summary(div))
+
+    # 2. output 缓存兜底
+    try:
+        cached_matches = load_dashboard_matches(root, within_days=days)
+        kickoff_map = load_kickoff_map(within_days=days)
+        cached_report = scan_eu_ah_divergence(
+            cached_matches,
+            kickoff_map,
+            within_hours=within_hours,
+            min_score=min_score,
+        )
+    except Exception as exc:
+        logger.warning("output cache divergence scan failed: %s", exc)
+        cached_report = {"matches": []}
+
+    for row in cached_report.get("matches", []):
+        fid = str(row.get("fixture_id") or "")
+        if fid and fid in seen:
+            continue
+        if fid:
+            seen.add(fid)
+        matches.append(row)
+
+    matches.sort(key=lambda r: (-r["divergence_score"], r.get("kickoff") or ""))
+    huge = sum(1 for r in matches if r.get("severity") == "extreme")
+    major = sum(1 for r in matches if r.get("severity") == "major")
+
+    notes = [
+        "欧转亚：由临盘欧赔去水概率粗算「合理亚盘」，与实际亚盘对比得 line_gap。",
+        f"|line_gap| > {cfg.EU_AH_LINE_GAP_TOL} 视为不一致；≥0.5 通常跨一整档盘口，记为巨大分歧。",
+        "亚转欧：由实际亚盘粗推主胜欧赔，与临盘主胜对比，可发现欧热/欧冷。",
+        "盘赔分裂套路（升盘欧升、浅盘+欧热等）会额外加分；仅供风控，非投注建议。",
+    ]
+    headline = "暂无可分析的欧亚盘口样本"
+    if matches:
+        headline = (
+            f"共 {len(matches)} 场达到筛选阈值（≥{min_score or cfg.EU_AH_DIVERGENCE_MIN_SCORE} 分）："
+            f"{huge} 场巨大分歧，{major} 场明显分歧"
+        )
+
+    report = {
+        "scanned": len(seen),
+        "within_days": days,
+        "updated_at": format_beijing(now_beijing()),
+        "matches": matches,
+        "huge": huge,
+        "major": major,
+        "min_score": min_score or cfg.EU_AH_DIVERGENCE_MIN_SCORE,
+        "headline": headline,
+        "notes": notes,
+    }
     return report

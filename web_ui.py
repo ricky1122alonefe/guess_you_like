@@ -36,6 +36,30 @@ def _e(s) -> str:
     return html.escape(str(s) if s is not None else "")
 
 
+def _j(obj) -> str:
+    return json.dumps(obj, ensure_ascii=False, default=str)
+
+
+VIZ_CSS = """
+.viz-grid { display: grid; grid-template-columns: 1fr; gap: 18px; margin-top: 8px; }
+@media (min-width: 768px) { .viz-grid { grid-template-columns: 1fr 1fr; } }
+.viz-block { border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px; background: #fff; }
+.viz-block h4 { margin: 0 0 10px; font-size: 15px; color: #1e293b; }
+.viz-empty { color: #94a3b8; font-size: 13px; padding: 20px 0; text-align: center; }
+.viz-canvas-wrap { position: relative; height: 220px; }
+.viz-canvas-wrap.tall { height: 280px; }
+.heatmap-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 3px; max-width: 320px; }
+.heatmap-cell { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; font-size: 11px; border-radius: 4px; color: #0f172a; }
+.score-track { height: 18px; background: #e2e8f0; border-radius: 9px; overflow: hidden; margin: 6px 0; position: relative; }
+.score-fill { height: 100%; border-radius: 9px; }
+.score-label { position: absolute; right: 8px; top: 0; line-height: 18px; font-size: 11px; color: #0f172a; font-weight: 700; }
+.line-gap-track { height: 10px; background: #e2e8f0; border-radius: 5px; overflow: hidden; margin: 4px 0; }
+.line-gap-fill { height: 100%; border-radius: 5px; background: #ef4444; }
+.divergence-signals { margin: 8px 0 0; padding-left: 18px; font-size: 12px; color: #475569; }
+.divergence-meta { font-size: 12px; color: #64748b; margin-top: 6px; }
+"""
+
+
 def _page_nav(*, extra: str = "", status: str = "", back: bool = False) -> str:
     """Top navigation — 主链只留首页 · 复盘。"""
     main_links = (
@@ -5681,6 +5705,7 @@ def html_recommendation_review(report: dict) -> str:
     misses = report.get("miss_patterns") or []
     error_review = report.get("error_review") or {}
     review_agent = report.get("review_agent") or {}
+    band_stats = report.get("score_band_stats") or {"bands": []}
 
     stats = _stat_grid([
         ("已结算", str(report.get("total_settled") or 0)),
@@ -5711,6 +5736,20 @@ def html_recommendation_review(report: dict) -> str:
         f"<li><strong>{_e(m.get('pattern'))}</strong> × {m.get('count', 0)}</li>"
         for m in misses
     ) or "<li class='meta'>暂无足够样本</li>"
+
+    bands = band_stats.get("bands") or []
+    if bands:
+        band_data_json = _j(band_stats)
+        band_chart_html = f"""
+<div class="card">
+  <h2>比分区间 band 命中率</h2>
+  <div style="position:relative;height:220px"><canvas id="bandHitChart"></canvas></div>
+  <p class="meta">近 {band_stats.get('days', 14)} 天有 score_bands 的已结算场 {band_stats.get('total', 0)} 场 · 灰色柱为样本 &lt;20</p>
+  <script type="application/json" id="band-stats-data">{band_data_json}</script>
+</div>
+"""
+    else:
+        band_chart_html = ""
 
     review_css = _shared_css("""
 .hero-card { background: linear-gradient(135deg, #fefce8 0%, #fff 55%); border: 1px solid #fde047; }
@@ -5759,6 +5798,7 @@ table.review-table th { white-space: nowrap; }
 <style>
 {review_css}
 </style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
 let reviewFilter = 'all';
 let reviewSort = 'kickoff_desc';
@@ -5802,6 +5842,30 @@ function sortReview(kind) {{
   rows.forEach(r => tbody.appendChild(r));
   applyReviewFilter();
 }}
+
+(function(){{
+  const dataEl = document.getElementById('band-stats-data');
+  if (!dataEl || typeof Chart === 'undefined') return;
+  const stats = JSON.parse(dataEl.textContent);
+  const bands = stats.bands || [];
+  if (!bands.length) return;
+  const labels = bands.map(b => b.label);
+  const values = bands.map(b => b.rate_pct == null ? 0 : b.rate_pct);
+  const bg = bands.map(b => b.judged < 20 ? '#cbd5e1' : '#3b82f6');
+  new Chart(document.getElementById('bandHitChart'), {{
+    type: 'bar',
+    data: {{
+      labels,
+      datasets: [{{ label: '命中率 %', data: values, backgroundColor: bg }}]
+    }},
+    options: {{
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {{ y: {{ beginAtZero: true, max: 100, title: {{ display: true, text: '命中率 %' }} }} }},
+      plugins: {{ legend: {{ display: false }} }}
+    }}
+  }});
+}})();
 </script>
 </head><body>
 <p class="back page-nav"><a href="/">← 返回首页</a> · <a href="/review">推荐复盘</a> · <a href="/worldcup">开盘套路</a> · <a href="/quant">量化回测</a></p>
@@ -5813,6 +5877,8 @@ function sortReview(kind) {{
 </div>
 
 {user_stats}
+
+{band_chart_html}
 
 {_review_agent_block(review_agent)}
 
@@ -6002,6 +6068,16 @@ def html_eu_ah_divergence(report: dict) -> str:
     min_score = report.get("min_score", 45)
     updated = report.get("updated_at") or now_beijing_str()
 
+    extreme = sum(1 for r in rows_data if r.get("severity") == "extreme")
+    major = sum(1 for r in rows_data if r.get("severity") == "major")
+    moderate = len(rows_data) - extreme - major
+    summary = f"""
+<div class="summary-row">
+  <span class="sev-badge sev-mod">轻度 {moderate}</span>
+  <span class="sev-badge sev-maj">明显 {major}</span>
+  <span class="sev-badge sev-ext">巨大 {extreme}</span>
+</div>""" if rows_data else ""
+
     if not rows_data:
         table = "<p class='meta empty-hint'>当前窗口内暂无达到阈值的欧亚分歧场次。</p>"
     else:
@@ -6011,11 +6087,21 @@ def html_eu_ah_divergence(report: dict) -> str:
             sev_cls = {"extreme": "sev-extreme", "major": "sev-major", "moderate": "sev-mod"}.get(sev, "")
             sigs = " · ".join(_e(x) for x in (r.get("signals") or [])[:3]) or "—"
             fid = r.get("fixture_id") or ""
+            gap = r.get("line_gap")
+            gap_html = ""
+            if gap is not None:
+                try:
+                    gv = float(gap)
+                    gap_w = min(abs(gv) * 200, 100)
+                    gap_dir = "pos" if gv >= 0 else "neg"
+                    gap_html = f'<div class="gap-bar"><div class="gap-fill {gap_dir}" style="width:{gap_w:.1f}%"></div></div>'
+                except (TypeError, ValueError):
+                    gap_html = ""
             trs += f"""
 <tr class="{sev_cls}">
   <td><span class="score-badge">{r.get('divergence_score', 0)}</span><br><span class="meta">{_e(r.get('severity_cn'))}</span></td>
   <td><a href="/match/{_e(fid)}">{_e(r.get('match'))}</a><br><span class="meta">{_e(r.get('kickoff'))}</span></td>
-  <td>{_e(r.get('consistency_cn'))}<br><span class="meta">gap {_e(r.get('line_gap'))}</span></td>
+  <td>{_e(r.get('consistency_cn'))}{gap_html}<br><span class="meta">gap {_e(gap)}</span></td>
   <td><span class="meta">欧→亚</span> {_e(r.get('eu_to_ah_line_cn'))}<br><span class="meta">实际</span> {_e(r.get('ah_line_cn'))}</td>
   <td><span class="meta">初欧</span> {_e(r.get('open_eu'))}<br><span class="meta">临欧</span> {_e(r.get('live_eu'))}</td>
   <td><span class="meta">初亚</span> {_e(r.get('open_ah'))}<br><span class="meta">临亚</span> {_e(r.get('live_ah'))}</td>
@@ -6033,6 +6119,15 @@ def html_eu_ah_divergence(report: dict) -> str:
 .score-badge { font-size: 1.25rem; font-weight: 800; color: #b91c1c; }
 .sig-cell { font-size: 13px; line-height: 1.5; max-width: 280px; }
 .sig-cell .advice { margin: 6px 0 0; color: #475569; }
+.summary-row { display: flex; gap: 10px; flex-wrap: wrap; margin: 8px 0 16px; }
+.sev-badge { padding: 4px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; }
+.sev-mod { background: #f1f5f9; color: #64748b; }
+.sev-maj { background: #fff7ed; color: #c2410c; }
+.sev-ext { background: #fef2f2; color: #b91c1c; }
+.gap-bar { height: 8px; background: #e2e8f0; border-radius: 4px; margin: 6px 0; overflow: hidden; }
+.gap-fill { height: 100%; border-radius: 4px; }
+.gap-fill.pos { background: #3b82f6; }
+.gap-fill.neg { background: #ef4444; }
 """)
 
     return f"""<!DOCTYPE html>
@@ -6054,6 +6149,7 @@ def html_eu_ah_divergence(report: dict) -> str:
 
 <div class="card">
   <h2>分歧场次（按分数降序）</h2>
+  {summary}
   {table}
 </div>
 
@@ -6867,8 +6963,9 @@ def _market_signal_card(
     prediction: dict | None,
     timeline: list,
     market_open_close: dict | None = None,
+    divergence: dict | None = None,
 ) -> str:
-    """FIX-4 ①盘口信号卡：开盘 vs 临盘 + devig + 亚盘 + 必发。"""
+    """FIX-4 ①盘口信号卡：开盘 vs 临盘 + devig + 亚盘 + 必发 + 欧亚分歧。"""
     rp = (prediction or {}).get("result_prediction") or {}
     factors = rp.get("factors") or {}
     eu = factors.get("european")
@@ -6921,13 +7018,243 @@ def _market_signal_card(
     if not lines:
         lines.append("暂无盘口数据")
 
+    divergence_html = ""
+    div = divergence or {}
+    if div.get("divergence_score"):
+        score = div.get("divergence_score", 0)
+        sev = div.get("severity_cn", "—")
+        advice = div.get("advice", "")
+        sig = "；".join(div.get("signals") or [])
+        color = "#d32f2f" if score >= 70 else "#f57c00" if score >= 50 else "#1565c0"
+        divergence_html = (
+            f'<p style="margin:8px 0 0;font-size:13px;color:{color}">'
+            f'<strong>欧亚分歧 {score} 分（{sev}）</strong>'
+            f' · line_gap {div.get("line_gap")} · {_e(sig)}'
+            f'</p>'
+            f'<p class="meta" style="font-size:12px;margin:2px 0 0">{_e(advice)}</p>'
+        )
+
     items_html = "".join(f"<li>{_e(l)}</li>" for l in lines)
     return (
         '<div class="card" style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0">'
         '<h3 style="margin:0 0 6px">📊 盘口（开盘 vs 即盘）</h3>'
         f'<ul style="margin:4px 0;padding-left:20px;font-size:13px">{items_html}</ul>'
+        f'{divergence_html}'
         '</div>'
     )
+
+
+def _viz_charts_card(viz: dict, fid: str) -> str:
+    """折叠可视化：开盘/分歧/泊松/edge。默认折叠，无数据不画空图。"""
+    if not viz:
+        return '<p class="viz-empty">暂无可视化数据</p>'
+
+    data_json = _j(viz)
+    oc = viz.get("open_close") or {}
+    has_oc = bool(oc.get("opening") or oc.get("closing"))
+    div = viz.get("divergence") or {}
+    has_div = div.get("divergence_score") is not None
+    heat = viz.get("poisson_heatmap") or []
+    has_heat = bool(heat)
+    edges = viz.get("edge_bars") or []
+    has_edge = bool(edges)
+
+    open_close_html = f"""
+<div class="viz-block" id="ocBlock">
+  <h4>开盘对照</h4>
+  <div class="viz-canvas-wrap"><canvas id="ocEuChart"></canvas></div>
+  <div class="divergence-meta" id="ocAhText"></div>
+  <div class="viz-canvas-wrap" style="height:160px"><canvas id="ocAhChart"></canvas></div>
+  <div class="divergence-meta" id="ocOuText"></div>
+  <div class="viz-canvas-wrap" style="height:160px"><canvas id="ocOuChart"></canvas></div>
+</div>
+""" if has_oc else '<div class="viz-block"><h4>开盘对照</h4><p class="viz-empty">暂无开盘/临盘数据</p></div>'
+
+    divergence_html = f"""
+<div class="viz-block" id="divBlock" style="display:none">
+  <h4>欧亚分歧</h4>
+  <div class="score-track"><div class="score-fill" id="divScoreFill"></div><span class="score-label" id="divScoreLabel"></span></div>
+  <div class="divergence-meta" id="divLineGap"></div>
+  <div class="line-gap-track"><div class="line-gap-fill" id="divLineGapFill"></div></div>
+  <div class="viz-canvas-wrap" style="height:160px"><canvas id="divLineChart"></canvas></div>
+  <ul class="divergence-signals" id="divSignals"></ul>
+  <p class="divergence-meta" id="divAdvice"></p>
+</div>
+"""
+
+    poisson_html = f"""
+<div class="viz-block" id="heatBlock" style="display:none">
+  <h4>泊松热力（6×6）</h4>
+  <div class="heatmap-grid" id="poissonHeatmap"></div>
+  <p class="divergence-meta">颜色越深概率越高；仅展示 0–5 球截断区域</p>
+</div>
+"""
+
+    edge_html = f"""
+<div class="viz-block" id="edgeBlock" style="display:none">
+  <h4>模型 edge 对照</h4>
+  <div class="viz-canvas-wrap"><canvas id="edgeBarChart"></canvas></div>
+</div>
+"""
+
+    settled = viz.get("settled_hits") or {}
+    settled_html = ""
+    if settled:
+        settled_html = f"""
+<div class="viz-block">
+  <h4>已结算命中</h4>
+  <pre style="font-size:12px;background:#f8fafc;padding:8px;border-radius:8px;overflow-x:auto">{_e(json.dumps(settled, ensure_ascii=False, indent=2, default=str))}</pre>
+</div>
+"""
+
+    js = f"""
+(function(){{
+  const viz = JSON.parse(document.getElementById('viz-data').textContent);
+  const oc = viz.open_close || {{}};
+  const opening = oc.opening || {{}};
+  const closing = oc.closing || {{}};
+  const chartDefaults = {{ responsive: true, maintainAspectRatio: false, plugins: {{ legend: {{ position: 'bottom', labels: {{ boxWidth: 12, font: {{ size: 11 }} }} }} }}, scales: {{ y: {{ beginAtZero: true }} }} }};
+  const palette = {{ open: '#94a3b8', close: '#2563eb', home: '#3b82f6', draw: '#94a3b8', away: '#ef4444' }};
+
+  function val(v){{ return (v === undefined || v === null) ? 0 : Number(v); }}
+  function maybeChart(id, cfg){{ const c = document.getElementById(id); if (c) try {{ new Chart(c, cfg); }} catch(e) {{ console.warn(e); }} }}
+
+  // 开盘对照：欧赔
+  if (opening.eu_home != null || closing.eu_home != null) {{
+    maybeChart('ocEuChart', {{
+      type: 'bar',
+      data: {{
+        labels: ['主胜', '平局', '客胜'],
+        datasets: [
+          {{ label: '开盘', data: [val(opening.eu_home), val(opening.eu_draw), val(opening.eu_away)], backgroundColor: palette.open }},
+          {{ label: '临盘', data: [val(closing.eu_home), val(closing.eu_draw), val(closing.eu_away)], backgroundColor: palette.close }}
+        ]
+      }},
+      options: {{ ...chartDefaults, plugins: {{ ...chartDefaults.plugins, title: {{ display: true, text: '欧赔', font: {{ size: 13 }} }} }} }}
+    }});
+  }}
+  // 亚盘
+  const ahTxt = [];
+  if (opening.ah_line != null || closing.ah_line != null) {{
+    ahTxt.push('亚盘线：开盘 ' + (opening.ah_line ?? '—') + ' → 临盘 ' + (closing.ah_line ?? '—'));
+    maybeChart('ocAhChart', {{
+      type: 'bar',
+      data: {{
+        labels: ['主水', '客水'],
+        datasets: [
+          {{ label: '开盘', data: [val(opening.ah_home_water), val(opening.ah_away_water)], backgroundColor: palette.open }},
+          {{ label: '临盘', data: [val(closing.ah_home_water), val(closing.ah_away_water)], backgroundColor: palette.close }}
+        ]
+      }},
+      options: chartDefaults
+    }});
+  }}
+  document.getElementById('ocAhText').textContent = ahTxt.join(' · ');
+  // OU
+  const ouTxt = [];
+  if (opening.ou_line != null || closing.ou_line != null) {{
+    ouTxt.push('OU 线：开盘 ' + (opening.ou_line ?? '—') + ' → 临盘 ' + (closing.ou_line ?? '—'));
+    maybeChart('ocOuChart', {{
+      type: 'bar',
+      data: {{
+        labels: ['大球水', '小球水'],
+        datasets: [
+          {{ label: '开盘', data: [val(opening.ou_over), val(opening.ou_under)], backgroundColor: palette.open }},
+          {{ label: '临盘', data: [val(closing.ou_over), val(closing.ou_under)], backgroundColor: palette.close }}
+        ]
+      }},
+      options: chartDefaults
+    }});
+  }}
+  document.getElementById('ocOuText').textContent = ouTxt.join(' · ');
+
+  // 欧亚分歧
+  const div = viz.divergence || {{}};
+  const score = div.divergence_score;
+  if (score != null) {{
+    const block = document.getElementById('divBlock');
+    if (block) block.style.display = '';
+    const fill = document.getElementById('divScoreFill');
+    const label = document.getElementById('divScoreLabel');
+    const color = score >= 62 ? '#ef4444' : score >= 45 ? '#f59e0b' : '#94a3b8';
+    fill.style.width = Math.min(100, Math.max(0, score)) + '%';
+    fill.style.backgroundColor = color;
+    label.textContent = score + ' 分';
+    const gap = div.line_gap;
+    if (gap != null) {{
+      document.getElementById('divLineGap').textContent = 'line_gap ' + gap;
+      const gf = document.getElementById('divLineGapFill');
+      gf.style.width = Math.min(100, Math.abs(Number(gap)) * 200) + '%';
+      gf.style.backgroundColor = Number(gap) < 0 ? '#ef4444' : '#3b82f6';
+    }}
+    document.getElementById('divSignals').innerHTML = (div.signals || []).map(s => '<li>' + s + '</li>').join('');
+    document.getElementById('divAdvice').textContent = div.advice || '';
+    const euLine = div.eu_to_ah_line;
+    const ahLine = div.ah_line;
+    if (euLine != null || ahLine != null) {{
+      maybeChart('divLineChart', {{
+        type: 'bar',
+        data: {{
+          labels: ['欧赔换算线', '实际亚盘线'],
+          datasets: [{{ label: '线', data: [val(euLine), val(ahLine)], backgroundColor: [palette.home, palette.away] }}]
+        }},
+        options: {{ ...chartDefaults, plugins: {{ ...chartDefaults.plugins, title: {{ display: true, text: '欧亚线对照', font: {{ size: 13 }} }} }} }}
+      }});
+    }}
+  }}
+
+  // 泊松热力
+  const heat = viz.poisson_heatmap || [];
+  if (heat.length) {{
+    document.getElementById('heatBlock').style.display = '';
+    const maxP = Math.max(...heat.map(h => h[2]));
+    const grid = document.getElementById('poissonHeatmap');
+    // 6x6 cells with axis labels on first row/col is skipped for simplicity
+    const cells = [];
+    for (let i = 0; i <= 5; i++) {{
+      for (let j = 0; j <= 5; j++) {{
+        const item = heat.find(h => h[0] === i && h[1] === j);
+        const p = item ? item[2] : 0;
+        const alpha = maxP > 0 ? 0.1 + (p / maxP) * 0.85 : 0.1;
+        const text = p > 0 ? (p * 100).toFixed(1) + '%' : '';
+        cells.push('<div class="heatmap-cell" style="background:rgba(37,99,235,' + alpha + ')">' + text + '</div>');
+      }}
+    }}
+    grid.innerHTML = cells.join('');
+  }}
+
+  // Edge bars
+  const edges = viz.edge_bars || [];
+  if (edges.length) {{
+    document.getElementById('edgeBlock').style.display = '';
+    const sources = [...new Set(edges.map(e => e.model_source))];
+    const outcomes = ['home', 'draw', 'away'];
+    const labels = {{ home: '主胜', draw: '平局', away: '客胜' }};
+    const colors = {{ home: '#3b82f6', draw: '#94a3b8', away: '#ef4444' }};
+    const datasets = [];
+    sources.forEach(src => {{
+      const srcEdges = edges.filter(e => e.model_source === src);
+      datasets.push({{ label: src + ' 模型概率', data: outcomes.map(o => {{ const e = srcEdges.find(x => x.outcome === o); return e ? e.p_model : 0; }}), backgroundColor: outcomes.map(o => colors[o]), stack: src }});
+      datasets.push({{ label: src + ' 市场概率', data: outcomes.map(o => {{ const e = srcEdges.find(x => x.outcome === o); return e ? e.p_mkt : 0; }}), backgroundColor: outcomes.map(o => colors[o] + '80'), stack: src + '_mkt' }});
+    }});
+    maybeChart('edgeBarChart', {{ type: 'bar', data: {{ labels: outcomes.map(o => labels[o]), datasets }}, options: chartDefaults }});
+  }}
+}})();
+"""
+
+    return f"""
+<script type="application/json" id="viz-data">{data_json}</script>
+<div class="viz-grid">
+{open_close_html}
+{divergence_html}
+{poisson_html}
+{edge_html}
+{settled_html}
+</div>
+<script>
+{js}
+</script>
+"""
 
 
 def _form_card(match_name: str, prediction: dict | None, club_form: dict | None = None) -> str:
@@ -7311,6 +7638,7 @@ def html_match_detail(
     agent_workflow: dict | None = None,
     settled: dict | None = None,
     output_root: Path | None = None,
+    viz: dict | None = None,
 ) -> str:
     fid = index.get("fixture_id", "")
     name = index.get("match_name") or fid
@@ -7331,10 +7659,20 @@ def html_match_detail(
     market_open_close = forecast_ctx.get("market_open_close") or {}
     club_form = forecast_ctx.get("club_form") or {}
     history_similar = forecast_ctx.get("history_similar") or None
+    if viz is None and output_root is not None:
+        try:
+            from apps.api.viz import build_viz_data
+            viz = build_viz_data(output_root, str(fid))
+        except Exception:
+            viz = {}
+    viz = viz or {}
 
     # FIX-detail-three: 首屏顺序 ①盘口 ②战绩 ③历史同赔 ④规则结论 ⑤AI
     # ①盘口信号卡（开盘 vs 即盘）
-    market_card_html = _market_signal_card(name, prediction, timeline, market_open_close)
+    market_card_html = _market_signal_card(
+        name, prediction, timeline, market_open_close,
+        divergence=forecast_ctx.get("divergence"),
+    )
     market_card = _wrap_export_module("market-signal", market_card_html)
     # ②战绩卡（club_form + samples）
     form_card_html = _form_card(name, prediction, club_form)
@@ -7715,6 +8053,8 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
     qual_fold = _fold("质量评估", qual_banner, muted=True) if qual_banner else ""
     tier_fold = _fold("档位", tier_banner, muted=True) if tier_banner else ""
     ah_detail_fold = _fold("亚盘详情", ah_card, muted=True) if ah_card else ""
+    viz_card = _viz_charts_card(viz or {}, fid)
+    viz_fold = _fold("可视化：开盘/分歧/泊松/Edge", viz_card, muted=True, export_slug="viz")
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head>
@@ -7724,7 +8064,9 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
 {export_script}
 <style>
 {match_css}
+{VIZ_CSS}
 </style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>{_AI_BTN_JS}{_AI_CHAT_JS}</script>
 </head><body>
 {_page_nav(back=True)}
@@ -7745,6 +8087,7 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
 {form_card}
 {history_similar_card}
 {result_forecast_card}
+{viz_fold}
 {ai_payload_card}
 <div class="fold-stack">
 {changes_fold}

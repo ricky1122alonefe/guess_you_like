@@ -53,19 +53,35 @@ def main() -> int:
 
     updated = 0
     skipped = 0
+    missing = 0
     errors = 0
     for r in rows:
         payload = _load_payload(r.get("payload"))
         hits = payload.get("hits") or {}
-        if hits.get("score_bands"):
+        existing_score_range = payload.get("score_range")
+        has_nonempty_score_bands = bool(hits.get("score_bands"))
+        has_score_range = bool(
+            existing_score_range
+            and isinstance(existing_score_range, dict)
+            and not existing_score_range.get("missing")
+            and (existing_score_range.get("bands") or existing_score_range.get("top_bands"))
+        )
+        if has_nonempty_score_bands and has_score_range:
             skipped += 1
             continue
+
         ext = str(r.get("external_id"))
-        try:
-            score_range = build_score_range_forecast(ext)
-        except Exception as exc:
-            print(f"score_range failed {ext}: {exc}")
-            errors += 1
+        if has_score_range:
+            score_range = existing_score_range
+        else:
+            try:
+                score_range = build_score_range_forecast(ext)
+            except Exception as exc:
+                print(f"score_range failed {ext}: {exc}")
+                errors += 1
+                continue
+        if not score_range or score_range.get("missing"):
+            missing += 1
             continue
         score_bands = evaluate_score_bands(
             score_range, int(r["home_score"]), int(r["away_score"])
@@ -87,7 +103,7 @@ def main() -> int:
             )
         updated += 1
 
-    print(f"total={len(rows)}, updated={updated}, skipped={skipped}, errors={errors}")
+    print(f"total={len(rows)}, updated={updated}, skipped={skipped}, missing={missing}, errors={errors}")
     return 0
 
 

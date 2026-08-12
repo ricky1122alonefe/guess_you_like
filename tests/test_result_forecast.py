@@ -381,3 +381,13 @@ def test_forecast_reasons_cover_opening_form_similar():
     assert any(kw in reasons for kw in ("开盘", "初盘", "降水", "水位", "让球"))
     assert any(kw in reasons for kw in ("近况", "战绩", "状态"))
     assert any(kw in reasons for kw in ("历史", "同赔", "相似"))
+
+
+def test_context_returns_market_open_close_for_known_fixture():
+    """第1关：forecast context 必须包含 market_open_close（开盘+临盘）。"""
+    ctx = build_result_forecast_context("1420010")
+    moc = ctx.get("market_open_close") or {}
+    assert moc.get("opening"), "missing opening odds"
+    assert moc.get("latest") or moc.get("closing"), "missing latest/closing odds"
+    assert "eu_home" in moc["opening"]
+    assert "eu_home" in (moc.get("latest") or moc.get("closing") or {})

@@ -132,10 +132,15 @@ def test_hits_payload_structure():
         assert hits["ou"] == "over"
 
 
-def test_no_prediction_yields_null_hits():
+def test_no_prediction_yields_null_hits_but_ou_when_line_present():
     fx = _fixture()
-    score = _score(1, 1, is_finished=True)
-    closing_tick = {"ah_line": 0.0, "ah_home_water": 0.9, "ah_away_water": 0.9}
+    score = _score(3, 1, is_finished=True)
+    closing_tick = {
+        "ah_line": 0.0,
+        "ah_home_water": 0.9,
+        "ah_away_water": 0.9,
+        "raw_meta": {"ou": {"ou_line": "2.5", "ou_over": 0.95, "ou_under": 0.95}},
+    }
     with patch("match_settlement.upsert_match_result") as mock_upsert, \
          patch("match_settlement.get_opening_tick", return_value=None), \
          patch("match_settlement.get_closing_tick", return_value=closing_tick), \
@@ -146,3 +151,24 @@ def test_no_prediction_yields_null_hits():
         assert hits["1x2"] is None
         assert hits["ah"] is None
         assert hits["jingcai"] is None
+        assert hits["ou"] == "over"
+
+
+def test_settle_writes_closing_ou_fields():
+    fx = _fixture()
+    score = _score(1, 0, is_finished=True)
+    closing_tick = {
+        "ah_line": 0.0,
+        "ah_home_water": 0.9,
+        "ah_away_water": 0.9,
+        "raw_meta": {"ou": {"ou_line": "2.5", "ou_over": 0.95, "ou_under": 0.95}},
+    }
+    with patch("match_settlement.upsert_match_result") as mock_upsert, \
+         patch("match_settlement.get_opening_tick", return_value=None), \
+         patch("match_settlement.get_closing_tick", return_value=closing_tick), \
+         patch("poll_500.ensure_fixture_identity"):
+        assert settle_fixture(fx, score, pred=None) is True
+        row = mock_upsert.call_args[0][1]
+        assert row["closing_ou_line"] == 2.5
+        assert row["closing_ou_over"] == 0.95
+        assert row["closing_ou_under"] == 0.95

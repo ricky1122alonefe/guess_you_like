@@ -96,70 +96,69 @@ def evaluate_prediction_hits(
         "hit_jingcai": None,
     }
 
-    if not pred:
-        return out
+    row = pred.get("predict_row") or {} if pred else {}
+    if pred:
+        from jingcai_pick import final_recommendation_cn, jingcai_market_mode, settle_handicap
 
-    row = pred.get("predict_row") or {}
-    from jingcai_pick import final_recommendation_cn, jingcai_market_mode, settle_handicap
+        pick_cn = final_recommendation_cn(pred)
+        info = pred.get("jingcai_pick_info") or {}
+        jc = pred.get("jingcai_snapshot") or {}
+        mode = info.get("jingcai_market") or jingcai_market_mode(jc)
+        pick_key = jingcai_pick_key or info.get("jingcai_pick")
+        out["pick_jingcai_cn"] = pick_cn
+        out["pick_1x2_cn"] = row.get("赛果预测") or pred.get("result_1x2_cn") or row.get("胜平负")
 
-    pick_cn = final_recommendation_cn(pred)
-    info = pred.get("jingcai_pick_info") or {}
-    jc = pred.get("jingcai_snapshot") or {}
-    mode = info.get("jingcai_market") or jingcai_market_mode(jc)
-    pick_key = jingcai_pick_key or info.get("jingcai_pick")
-    out["pick_jingcai_cn"] = pick_cn
-    out["pick_1x2_cn"] = row.get("赛果预测") or pred.get("result_1x2_cn") or row.get("胜平负")
-
-    if pick_key and pick_key != "skip":
-        if mode == "rqsp" and jc.get("handicap") is not None:
-            actual_rq = settle_handicap(home_score, away_score, int(jc["handicap"]))
-            out["hit_1x2"] = pick_key == actual_rq
-            out["hit_jingcai"] = out["hit_1x2"]
-        elif mode == "sp":
-            out["hit_1x2"] = pick_key == actual_1x2
-            out["hit_jingcai"] = out["hit_1x2"]
-        else:
-            legacy = norm_result(pick_cn)
-            if legacy:
-                out["hit_1x2"] = legacy == actual_1x2
+        if pick_key and pick_key != "skip":
+            if mode == "rqsp" and jc.get("handicap") is not None:
+                actual_rq = settle_handicap(home_score, away_score, int(jc["handicap"]))
+                out["hit_1x2"] = pick_key == actual_rq
                 out["hit_jingcai"] = out["hit_1x2"]
+            elif mode == "sp":
+                out["hit_1x2"] = pick_key == actual_1x2
+                out["hit_jingcai"] = out["hit_1x2"]
+            else:
+                legacy = norm_result(pick_cn)
+                if legacy:
+                    out["hit_1x2"] = legacy == actual_1x2
+                    out["hit_jingcai"] = out["hit_1x2"]
 
-    # 若竞彩 pick 不存在，回退到 pick_1x2_cn 中文（如“主胜”）
-    if out["hit_1x2"] is None:
-        pick_1x2 = out["pick_1x2_cn"]
-        if pick_1x2:
-            legacy = norm_result(pick_1x2)
-            if legacy:
-                out["hit_1x2"] = legacy == actual_1x2
+        # 若竞彩 pick 不存在，回退到 pick_1x2_cn 中文（如“主胜”）
+        if out["hit_1x2"] is None:
+            pick_1x2 = out["pick_1x2_cn"]
+            if pick_1x2:
+                legacy = norm_result(pick_1x2)
+                if legacy:
+                    out["hit_1x2"] = legacy == actual_1x2
 
-    from product_focus import score_prediction_enabled
+        from product_focus import score_prediction_enabled
 
-    if score_prediction_enabled():
-        scores_raw = row.get("推荐比分") or ""
-        if not scores_raw:
-            detail = pred.get("likely_scores_detail") or pred.get("likely_scores") or []
-            if isinstance(detail, list):
-                scores_raw = "、".join(str(s) for s in detail)
-        out["recommended_scores"] = scores_raw or None
-        if scores_raw:
-            recommended = [s.split("(")[0].strip() for s in scores_raw.split("、") if s.strip()]
-            out["hit_score"] = score_text in recommended
+        if score_prediction_enabled():
+            scores_raw = row.get("推荐比分") or ""
+            if not scores_raw:
+                detail = pred.get("likely_scores_detail") or pred.get("likely_scores") or []
+                if isinstance(detail, list):
+                    scores_raw = "、".join(str(s) for s in detail)
+            out["recommended_scores"] = scores_raw or None
+            if scores_raw:
+                recommended = [s.split("(")[0].strip() for s in scores_raw.split("、") if s.strip()]
+                out["hit_score"] = score_text in recommended
 
-    pick_ah = pred.get("asian_handicap_pick")
-    out["pick_ah"] = pick_ah if pick_ah in ("home", "away", "skip") else None
-    out["pick_ah_cn"] = pred.get("asian_handicap_cn")
-    if pick_ah in ("home", "away") and ah_line is not None:
-        from ah_analytics import evaluate_ah_pick
+        pick_ah = pred.get("asian_handicap_pick")
+        out["pick_ah"] = pick_ah if pick_ah in ("home", "away", "skip") else None
+        out["pick_ah_cn"] = pred.get("asian_handicap_cn")
+        if pick_ah in ("home", "away") and ah_line is not None:
+            from ah_analytics import evaluate_ah_pick
 
-        ah_eval = evaluate_ah_pick(
-            pick_ah,
-            home_score=home_score,
-            away_score=away_score,
-            line=ah_line,
-        )
-        out["hit_ah"] = ah_eval.get("hit_ah")
-        out["ah_settlement"] = ah_eval.get("ah_settlement")
+            ah_eval = evaluate_ah_pick(
+                pick_ah,
+                home_score=home_score,
+                away_score=away_score,
+                line=ah_line,
+            )
+            out["hit_ah"] = ah_eval.get("hit_ah")
+            out["ah_settlement"] = ah_eval.get("ah_settlement")
 
+    # OU 结果只要有 closing 线就写，不依赖预测
     if ou_line is not None and total_goals is not None:
         try:
             line_f = float(ou_line)

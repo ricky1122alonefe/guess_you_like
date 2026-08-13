@@ -5,8 +5,15 @@ from web_ui import (
     _betfair_cell,
     _dashboard_active_row,
     _devig_cell,
+    _eu_odds_details_cell,
+    _extract_jingcai_from_tick,
+    _jingcai_rqsp_cell,
+    _jingcai_sp_cell,
     _jingcai_sp_line,
     _poll_status_line,
+    _recommendation_text,
+    _snapshot_footnote,
+    _snapshot_recommendation_unchanged,
 )
 
 
@@ -84,4 +91,107 @@ def test_dashboard_active_row_no_snapshot_shows_dash():
 
 def test_poll_status_line_no_state(monkeypatch):
     monkeypatch.setattr("db.repository.get_scraper_state", lambda _key: None)
-    assert "暂无 poll 记录" in _poll_status_line()
+    assert "poll —" in _poll_status_line()
+
+
+def test_extract_jingcai_from_odds():
+    p = {"odds": {"jingcai": {"has_sp": True, "sp_home": 2.1, "sp_draw": 3.2, "sp_away": 3.5}}}
+    jc = _extract_jingcai_from_tick(p)
+    assert jc["has_sp"] is True
+    assert jc["sp_home"] == 2.1
+
+
+def test_extract_jingcai_fallback_to_raw_meta():
+    p = {"odds": {"raw_meta": {"jingcai": {"has_sp": True, "sp_home": 1.9}}}}
+    jc = _extract_jingcai_from_tick(p)
+    assert jc["has_sp"] is True
+    assert jc["sp_home"] == 1.9
+
+
+def test_jingcai_sp_cell_with_sp():
+    assert _jingcai_sp_cell({"has_sp": True, "sp_home": 2.1, "sp_draw": 3.2, "sp_away": 3.5}) == "2.1/3.2/3.5"
+
+
+def test_jingcai_sp_cell_missing_shows_placeholder():
+    cell = _jingcai_sp_cell({})
+    assert "—" in cell
+    assert "未开售/未抓到" in cell
+
+
+def test_jingcai_rqsp_cell_with_rqsp():
+    assert (
+        _jingcai_rqsp_cell({"has_rqsp": True, "rqsp_home": 1.8, "rqsp_draw": 3.4, "rqsp_away": 3.6})
+        == "1.8/3.4/3.6"
+    )
+
+
+def test_jingcai_rqsp_cell_missing_shows_placeholder():
+    cell = _jingcai_rqsp_cell({})
+    assert "—" in cell
+    assert "未开售/未抓到" in cell
+
+
+def test_eu_odds_details_cell():
+    cell = _eu_odds_details_cell({"eu_home": 2.8, "eu_draw": 3.0, "eu_away": 2.25})
+    assert "<details" in cell
+    assert "欧赔对照" in cell
+    assert "2.8/3.0/2.25" in cell
+
+
+def test_recommendation_text():
+    p = {"pick": {"result_1x2_cn": "主胜"}}
+    assert _recommendation_text(p) == "<strong>主胜</strong>"
+
+
+def test_recommendation_text_ai_analyses():
+    p = {"pick": {"ai_analyses": {"a": {"label": "A", "result_1x2_cn": "主胜"}, "b": {"label": "B", "result_1x2_cn": "客胜"}}}}
+    text = _recommendation_text(p)
+    assert "<strong>A</strong>: 主胜" in text
+    assert "<strong>B</strong>: 客胜" in text
+
+
+def test_snapshot_recommendation_unchanged():
+    timeline = [
+        {"pick": {"result_1x2_cn": "主胜"}},
+        {"pick": {"result_1x2_cn": "主胜"}},
+    ]
+    assert _snapshot_recommendation_unchanged(timeline) is True
+
+
+def test_snapshot_recommendation_changed():
+    timeline = [
+        {"pick": {"result_1x2_cn": "主胜"}},
+        {"pick": {"result_1x2_cn": "客胜"}},
+    ]
+    assert _snapshot_recommendation_unchanged(timeline) is False
+
+
+def test_snapshot_footnote_when_odds_unchanged():
+    timeline = [
+        {
+            "odds": {"eu_home": 2.8, "eu_draw": 3.0, "eu_away": 2.25, "jingcai": {"has_sp": True, "sp_home": 2.1, "sp_draw": 3.2, "sp_away": 3.5}},
+            "pick": {"result_1x2_cn": "主胜"},
+        },
+        {
+            "odds": {"eu_home": 2.8, "eu_draw": 3.0, "eu_away": 2.25, "jingcai": {"has_sp": True, "sp_home": 2.1, "sp_draw": 3.2, "sp_away": 3.5}},
+            "pick": {"result_1x2_cn": "主胜"},
+        },
+    ]
+    note = _snapshot_footnote(timeline)
+    assert "源站未调赔" in note
+    assert "必发%仍可能更新" in note
+    assert "非每 tick 重算" in note
+
+
+def test_snapshot_footnote_empty_when_changed():
+    timeline = [
+        {
+            "odds": {"eu_home": 2.8, "eu_draw": 3.0, "eu_away": 2.25, "jingcai": {"has_sp": True, "sp_home": 2.1, "sp_draw": 3.2, "sp_away": 3.5}},
+            "pick": {"result_1x2_cn": "主胜"},
+        },
+        {
+            "odds": {"eu_home": 2.9, "eu_draw": 3.0, "eu_away": 2.25, "jingcai": {"has_sp": True, "sp_home": 2.1, "sp_draw": 3.2, "sp_away": 3.5}},
+            "pick": {"result_1x2_cn": "客胜"},
+        },
+    ]
+    assert _snapshot_footnote(timeline) == ""

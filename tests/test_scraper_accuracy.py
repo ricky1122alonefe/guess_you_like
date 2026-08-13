@@ -6,7 +6,7 @@ from unittest import mock
 
 import pytest
 
-from scripts.scraper_accuracy_audit import _validate_tick
+from analysis.market.tick_quality import validate_tick as _validate_tick
 
 
 def _tick(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from time_utils import beijing_date, format_beijing, now_beijing, now_beijing_str, to_beijing
@@ -21,7 +22,13 @@ from jingcai_pick import (
     jingcai_market_mode,
     market_label,
 )
+from poll_500 import is_dirty_team_label
 import config as app_cfg
+
+# 首页规则倾向真算缓存
+_RESULT_PRED_TTL_SECONDS = 180  # 3 分钟短缓存
+_result_pred_cache: dict[str, tuple[float, dict]] = {}
+
 
 log = logging.getLogger(__name__)
 
@@ -245,6 +252,229 @@ def _load_db_fixture_stubs(*, within_days: float, now: datetime) -> dict[str, di
     return out
 
 
+def _load_db_fixture_names(external_ids: list[str], *, source: str = "500") -> dict[str, dict]:
+    """返回 {external_id: {home, away, match_name, source}}，供首页队名解析。"""
+    out: dict[str, dict] = {}
+    if not external_ids:
+        return out
+    try:
+        from db.connection import cursor
+
+        with cursor() as cur:
+            cur.execute(
+                """
+                SELECT external_id, home_team, away_team, match_name, source
+                FROM fixtures
+                WHERE source = %s AND external_id = ANY(%s)
+                """,
+                (source, [str(x) for x in external_ids]),
+            )
+            for row in cur.fetchall():
+                ext = str(row["external_id"])
+                out[ext] = {
+                    "home": row["home_team"] or "",
+                    "away": row["away_team"] or "",
+                    "match_name": row["match_name"] or "",
+                    "source": row["source"] or source,
+                }
+    except Exception as exc:
+        log.debug("DB fixture names 不可用: %s", exc)
+    return out
+
+
+def _extract_existing_match_name(m: dict) -> tuple[str, str] | None:
+    """从 match / 比赛 / predict_row.比赛 字段解析主客队名。"""
+    candidates = [m.get("match"), m.get("比赛")]
+    pr = m.get("predict_row") or {}
+    if isinstance(pr, dict):
+        candidates.append(pr.get("比赛"))
+    for val in candidates:
+        val = (val or "").strip()
+        if not val:
+            continue
+        parts = [p.strip() for p in re.split(r"\s+[Vv][Ss]\s+", val)]
+        if len(parts) == 2 and parts[0] and parts[1]:
+            return parts[0], parts[1]
+    return None
+
+
+def _try_fix_name_from_500(fid: str) -> tuple[str, str] | None:
+    """从 500 亚盘分析页抓取真实队名；失败或仍脏返回 None。"""
+    try:
+        from download_500 import _session, fetch_match_info
+
+        info = fetch_match_info(_session(), fid)
+    except Exception as exc:
+        log.debug("fetch_match_info fallback failed fid=%s: %s", fid, exc)
+        return None
+    if not info.home or not info.away:
+        return None
+    if is_dirty_team_label(info.home) or is_dirty_team_label(info.away):
+        return None
+    return info.home, info.away
+
+
+def _write_back_clean_name(fid: str, home: str, away: str, source: str) -> None:
+    """把修正后的队名写回 fixtures。"""
+    try:
+        from db.repository import upsert_fixture
+
+        upsert_fixture(
+            source=source,
+            external_id=fid,
+            home_team=home,
+            away_team=away,
+            match_name=f"{home} VS {away}",
+            kickoff_at=None,
+        )
+    except Exception as exc:
+        log.warning("写回干净队名失败 fid=%s: %s", fid, exc)
+
+
+def _resolve_dashboard_name(fid: str, m: dict, db: dict | None) -> str:
+    """首页队名解析优先级：DB 干净名 > 实时修正 > 现有干净名 > 占位符。"""
+    # 1) DB 干净名优先（挡住 live 脏名覆盖）
+    if db and not is_dirty_team_label(db["home"]) and not is_dirty_team_label(db["away"]):
+        return f"{db['home']} VS {db['away']}"
+
+    # 2) DB 脏名尝试实时回填
+    if db and (is_dirty_team_label(db["home"]) or is_dirty_team_label(db["away"])):
+        fixed = _try_fix_name_from_500(fid)
+        if fixed:
+            home, away = fixed
+            _write_back_clean_name(fid, home, away, db.get("source", "500"))
+            return f"{home} VS {away}"
+
+    # 3) 现有名若干净则直接用
+    existing = _extract_existing_match_name(m)
+    if existing and not is_dirty_team_label(existing[0]) and not is_dirty_team_label(existing[1]):
+        return f"{existing[0]} VS {existing[1]}"
+
+    # 4) 无 DB 记录的脏 live 名也尝试实时回填
+    fixed = _try_fix_name_from_500(fid)
+    if fixed:
+        home, away = fixed
+        _write_back_clean_name(fid, home, away, db.get("source", "500") if db else "500")
+        return f"{home} VS {away}"
+
+    # 5) 仍脏 → 占位符
+    m["_team_name_suspicious"] = True
+    return f"队名待核 ({fid})"
+
+
+def _resolve_dashboard_names(matches: list[dict]) -> None:
+    """批量修正首页展示队名并同步 predict_row["比赛"]，标记异常队名。"""
+    if not matches:
+        return
+    fids = [str(m.get("fixture_id") or m.get("fid") or "") for m in matches]
+    db_map = _load_db_fixture_names(fids)
+    for m in matches:
+        fid = str(m.get("fixture_id") or m.get("fid") or "")
+        if not fid:
+            continue
+        resolved = _resolve_dashboard_name(fid, m, db_map.get(fid))
+        m["match"] = resolved
+        pr = dict(m.get("predict_row") or {})
+        pr["比赛"] = resolved
+        m["predict_row"] = pr
+        # 标记主客同名/近同名/脏占位
+        parts = _extract_existing_match_name(m) or ("", "")
+        m["_team_name_suspicious"] = (
+            is_dirty_team_label(parts[0])
+            or is_dirty_team_label(parts[1])
+            or _team_names_suspicious(parts[0], parts[1])
+        )
+
+
+def _get_result_prediction(fid: str, force: bool = False) -> dict | None:
+    """为单场比赛真算规则倾向；force=True 时 bypass 短缓存。"""
+    fid = str(fid)
+    now = time.time()
+
+    if not force:
+        cached_at, cached = _result_pred_cache.get(fid, (0, {}))
+        if now - cached_at < _RESULT_PRED_TTL_SECONDS and cached:
+            return cached
+
+    try:
+        from analysis.result_forecast.engine import forecast_for_match
+
+        rp = forecast_for_match(fid)
+    except Exception as exc:
+        log.warning("真算规则倾向失败 fid=%s: %s", fid, exc)
+        return None
+
+    if not rp:
+        return None
+
+    # 标记分歧
+    reasons = rp.get("reasons") or []
+    rp["_divergent"] = any("分歧" in r or "⚠" in r for r in reasons)
+    rp["_cached_at"] = now
+    _result_pred_cache[fid] = (now, rp)
+
+    return rp
+
+
+def _team_names_suspicious(home: str, away: str) -> bool:
+    """主客同名或近同名（包含关系）视为异常队名。"""
+    h = (home or "").strip()
+    a = (away or "").strip()
+    if not h or not a:
+        return True
+    if h == a:
+        return True
+    # 编辑距离/包含：一方是另一方子串且长度>3
+    if len(h) > 3 and len(a) > 3 and (h in a or a in h):
+        return True
+    return False
+
+
+def _match_finished(m: dict) -> bool:
+    """粗略判断比赛是否已完场。"""
+    status = (m.get("status_phase") or "").lower()
+    if status in ("finished", "ended", "ft", "fulltime", "completed"):
+        return True
+    score = m.get("live_score") or ""
+    if score and "-" in score and status in ("ft", "finished"):
+        return True
+    return False
+
+
+def _enrich_result_predictions(
+    matches: list[dict],
+    *,
+    focus_fids: set[str] | None = None,
+    force_refresh: bool = False,
+) -> None:
+    """对首页可见未完场逐场真算 result_prediction；focus 场优先且 bypass 短缓存。"""
+    focus_fids = focus_fids or set()
+    # focus 场放最前计算
+    ordered = sorted(
+        matches,
+        key=lambda m: (
+            str(m.get("fixture_id") or m.get("fid") or "") in focus_fids
+        ),
+        reverse=True,
+    )
+    for m in ordered:
+        fid = str(m.get("fixture_id") or m.get("fid") or "")
+        if not fid or _match_finished(m):
+            continue
+        force = force_refresh or fid in focus_fids
+        rp = _get_result_prediction(fid, force=force)
+        if rp:
+            m["result_prediction"] = rp
+        else:
+            m["result_prediction"] = {
+                "pick": "skip",
+                "pick_cn": "观望",
+                "confidence_cn": "-",
+                "reasons": ["缺少盘口或计算失败"],
+                "missing": True,
+            }
+
+
 def _load_odds_snapshot_map(external_ids: list[str]) -> dict[str, dict]:
     """Load latest odds snapshot per fixture from PG latest tick."""
     out: dict[str, dict] = {}
@@ -259,7 +489,10 @@ def _load_odds_snapshot_map(external_ids: list[str]) -> dict[str, dict]:
                 SELECT f.external_id, f.kickoff_at, t.captured_at,
                        t.eu_home, t.eu_draw, t.eu_away,
                        t.ah_line, t.ah_home_water, t.ah_away_water,
-                       t.raw_meta
+                       t.raw_meta,
+                       (SELECT COUNT(*) FROM odds_ticks
+                        WHERE fixture_id = f.id
+                          AND captured_at > NOW() - interval '7 days') AS tick_count
                 FROM fixtures f
                 JOIN LATERAL (
                     SELECT * FROM odds_ticks
@@ -302,6 +535,7 @@ def _load_odds_snapshot_map(external_ids: list[str]) -> dict[str, dict]:
             "betfair": betfair,
             "jingcai": jingcai,
             "kickoff_at": row.get("kickoff_at"),
+            "tick_count": row.get("tick_count") or 0,
         }
     return out
 
@@ -316,6 +550,8 @@ def load_dashboard_matches(
     output_root: str | Path,
     *,
     within_days: float | None = None,
+    focus_fids: set[str] | None = None,
+    force_refresh_predictions: bool = False,
 ) -> list[dict]:
     """Upcoming/live fixtures for dashboard — not limited to latest.json."""
     from download_500 import DEFAULT_LEAGUES, fetch_live_fixtures
@@ -375,7 +611,14 @@ def load_dashboard_matches(
         elif m.get("kickoff_at"):
             m["kickoff_label"] = _fmt_kickoff(m["kickoff_at"])
 
-    return list(by_id.values())
+    matches = list(by_id.values())
+    _resolve_dashboard_names(matches)
+    _enrich_result_predictions(
+        matches,
+        focus_fids=focus_fids,
+        force_refresh=force_refresh_predictions,
+    )
+    return matches
 
 
 def _kickoff_date(m: dict, kickoff_map: dict[str, datetime]) -> str | None:

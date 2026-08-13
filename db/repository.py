@@ -22,22 +22,33 @@ def upsert_fixture(
     match_name: str = "",
     kickoff_at: datetime | None = None,
 ) -> int:
-    # 脏名不覆盖真名（与 poll_500 的 _DIRTY_TEAM_EXACT / _DIRTY_TEAM_SUBSTR 对齐）
+    # 脏名不覆盖真名（与 poll_500 的 _DIRTY_TEAM_EXACT / _DIRTY_TEAM_SUBSTR 对齐；修改时请同步 poll_500.py）
     _dirty_exact = (
-        "亚冠杯","欧冠","欧联","欧会","欧超杯","解放者杯","南美杯",
+        "欧罗巴","欧联杯","欧会杯","欧冠","欧冠杯","亚冠","亚冠杯","欧超杯",
+        "解放者杯","南美杯","世界杯","世俱杯",
         "日职","日职联","韩K","英超","西甲","意甲","德甲","法甲",
         "英冠","西乙","荷甲","葡超","苏超","美职","澳超","巴甲","阿甲",
         "附加赛","决赛","半决赛","四分之一决赛","八强","四强",
+        "资格赛","预选赛",
     )
     _dirty_substr = (
         "资格赛", "附加赛", "预选赛", "季后赛", "小组赛", "淘汰赛",
         "第三轮", "第二轮", "第一轮", "第1轮", "第2轮", "第3轮",
+        "职业联赛", "超级联赛", "甲级联赛", "乙级联赛", "冠军联赛",
+        "联赛", "杯赛",
+        "(队名待核)", "队名待核",
+        "欧罗巴", "欧联杯", "欧会杯", "欧冠杯", "亚冠", "解放者杯", "南美杯", "世界杯", "世俱杯",
     )
     _exact_cond = " OR ".join(f"EXCLUDED.{{col}} = '{d}'" for d in _dirty_exact)
     _substr_cond = " OR ".join(f"EXCLUDED.{{col}} LIKE '%%{s}%%'" for s in _dirty_substr)
+    # 第N轮 / 第X轮兜底（与 poll_500.is_dirty_team_label 正则对齐）
+    _round_cond = "EXCLUDED.{col} ~ '第[一二三四五六七八九十零〇0-9]+轮'"
 
     def _guard(col: str) -> str:
-        return f"EXCLUDED.{col} = '' OR {_exact_cond.format(col=col)} OR {_substr_cond.format(col=col)}"
+        return (
+            f"EXCLUDED.{col} = '' OR {_exact_cond.format(col=col)} OR "
+            f"{_substr_cond.format(col=col)} OR {_round_cond.format(col=col)}"
+        )
 
     home_guard = _guard("home_team")
     away_guard = _guard("away_team")

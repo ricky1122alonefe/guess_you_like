@@ -57,6 +57,9 @@ EU_IMPLIED_SUM_WARN_MAX = 115.0
 EU_IMPLIED_PEER_SUM_DEV_PP = 4.0     # 与同业隐含和中位偏差 ≥4pp 记异动
 EU_IMPLIED_SCORE_PENALTY = 1.0       # daily_picks 轻量降权（非否决）
 
+# ── 重点关注配置 ──────────────────────────────────────────
+FOCUS_WATCH = {"max": 10}
+
 # ── 服务赛程窗口（poll / 整点分析 / 首页展示）────────────────
 SERVICE_WITHIN_DAYS = 7.0            # 服务赛程窗口（poll / 整点分析 / 首页展示）
 

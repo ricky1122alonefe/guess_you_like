@@ -49,6 +49,62 @@ def create_app(output_root: Path, *, within_days: float = 7):
         report = build_divergence_report(root, min_score=min_score, within_days=within_days)
         return {"ok": True, **report}
 
+    @app.get("/api/focus-watch")
+    @app.get("/v1/focus-watch")
+    def get_focus_watch():
+        from focus_watch import load_focus_watch
+
+        return {"ok": True, **load_focus_watch(root)}
+
+    @app.post("/api/focus-watch")
+    @app.post("/v1/focus-watch")
+    def post_focus_watch(payload: dict):
+        from fastapi import HTTPException
+
+        from focus_watch import (
+            add_focus_fid,
+            clear_focus,
+            load_focus_watch,
+            remove_focus_fid,
+            set_focus_fids,
+            update_note,
+        )
+
+        action = str(payload.get("action") or "").strip().lower()
+        fids_in = [str(x).strip() for x in payload.get("fids", []) if str(x).strip()]
+        note = payload.get("note")
+        if action == "add":
+            ok, msg = True, ""
+            for fid in fids_in:
+                ok, msg = add_focus_fid(fid, note=note, output_root=root)
+                if not ok:
+                    break
+            return {"ok": ok, "message": msg, "focus_watch": load_focus_watch(root)}
+        if action == "remove":
+            for fid in fids_in:
+                remove_focus_fid(fid, output_root=root)
+            return {"ok": True, "focus_watch": load_focus_watch(root)}
+        if action == "set":
+            notes = payload.get("notes") or {}
+            ok, msg = set_focus_fids(
+                fids_in,
+                notes=notes if isinstance(notes, dict) else None,
+                output_root=root,
+            )
+            if not ok:
+                raise HTTPException(status_code=400, detail=msg)
+            return {"ok": True, "focus_watch": load_focus_watch(root)}
+        if action == "clear":
+            clear_focus(output_root=root)
+            return {"ok": True, "focus_watch": load_focus_watch(root)}
+        if action == "note":
+            fid = (fids_in[0] if fids_in else str(payload.get("fid") or "")).strip()
+            if not fid:
+                raise HTTPException(status_code=400, detail="fid required")
+            ok = update_note(fid, note=str(note or ""), output_root=root)
+            return {"ok": ok, "focus_watch": load_focus_watch(root)}
+        raise HTTPException(status_code=400, detail=f"unknown action: {action}")
+
     return app
 
 

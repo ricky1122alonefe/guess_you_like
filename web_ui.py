@@ -40,20 +40,42 @@ def _j(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, default=str)
 
 
+def _focus_poll_heartbeat_at() -> str:
+    try:
+        from db.repository import get_scraper_state
+
+        hb = get_scraper_state("focus_poll_heartbeat")
+        if hb and hb.get("at"):
+            return format_ts(hb["at"])
+    except Exception:
+        pass
+    return "—"
+
+
 def _poll_status_line() -> str:
     try:
         from db.repository import get_scraper_state
 
         state = get_scraper_state("poll_500_last_run")
         if not state or not state.get("started_at"):
-            return " · 上次 poll：暂无 poll 记录"
+            return " · poll — · 最新盘口 tick —"
         ts = format_ts(state.get("started_at"))
-        ins = state.get("inserted", 0)
-        unc = state.get("unchanged", 0)
-        err = len(state.get("errors", []))
-        return f" · 上次 poll：{ts} · {ins}/{unc}/{err}"
+        last_tick = state.get("last_tick_at") or "—"
+        return f" · poll {ts} · 最新盘口 tick {last_tick}"
     except Exception:
-        return " · 上次 poll：暂无 poll 记录"
+        return " · poll — · 最新盘口 tick —"
+
+
+def _latest_db_tick_at() -> str:
+    try:
+        from db.connection import cursor
+
+        with cursor() as cur:
+            cur.execute("SELECT MAX(captured_at) AS t FROM odds_ticks")
+            row = cur.fetchone()
+            return format_ts(row["t"]) if row and row["t"] else "—"
+    except Exception:
+        return "—"
 
 
 VIZ_CSS = """
@@ -932,6 +954,51 @@ function analyzeListParlayAi() {
 }
 """
 
+_FOCUS_JS = """
+function updateFocusButton(btn, focused) {
+  btn.classList.toggle('focused', focused);
+  btn.textContent = focused ? '★' : '☆';
+  btn.title = focused ? '取消关注' : '加入重点关注';
+}
+
+function toggleFocusWatch(btn) {
+  const fid = btn.dataset.fid;
+  if (!fid) return;
+  const focused = btn.classList.contains('focused');
+  const action = focused ? 'remove' : 'add';
+  fetch('/api/focus-watch', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({action: action, fids: [fid]})
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) { showToast(d.message || d.error || '操作失败', true); return; }
+      updateFocusButton(btn, !focused);
+      const countEl = document.getElementById('focus-count');
+      if (countEl && d.focus_watch) {
+        countEl.textContent = (d.focus_watch.fids || []).length + ' 场';
+      }
+      showToast(!focused ? '已加入重点关注' : '已取消关注');
+    })
+    .catch(e => showToast('请求失败: ' + e, true));
+}
+
+function refreshFocusAnalysis() {
+  const btn = document.querySelector('.btn-focus');
+  if (btn) { btn.disabled = true; btn.textContent = '刷新中…'; }
+  fetch('/?refresh_focus=1')
+    .then(r => {
+      if (!r.ok) throw new Error(r.statusText);
+      window.location.href = '/?refresh_focus=1';
+    })
+    .catch(e => {
+      if (btn) { btn.disabled = false; btn.textContent = '刷新关注分析'; }
+      showToast('刷新失败: ' + e, true);
+    });
+}
+"""
+
 
 
 def _shared_css(*extra: str) -> str:
@@ -947,6 +1014,8 @@ def _shared_css(*extra: str) -> str:
   .toolbar .btn { width: 100%; text-align: center; }
 }
 .meta.warn { color: #fcd34d; font-weight: 600; }
+.eu-fold { font-size: 13px; color: #94a3b8; }
+.eu-fold summary { cursor: pointer; color: #cbd5e1; }
 """,
         *extra,
     )
@@ -1438,6 +1507,48 @@ def _format_pct(v) -> str | None:
     return f"{f:.0f}%" if f > 1 else f"{f * 100:.0f}%"
 
 
+def _bj_time_str(ts) -> str:
+    if not ts:
+        return "—"
+    from datetime import datetime, timezone, timedelta
+
+    if isinstance(ts, str):
+        try:
+            ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except Exception:
+            return ts
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    bj = ts.astimezone(timezone(timedelta(hours=8)))
+    return bj.strftime("%m-%d %H:%M")
+
+
+def _odds_freshness_meta(snapshot: dict) -> str:
+    """返回首页每行盘口新鲜度小字。"""
+    captured = snapshot.get("captured_at")
+    captured_bj = _bj_time_str(captured) if captured else "—"
+    jc = snapshot.get("jingcai") or {}
+    jc_updated = jc.get("source_updated_at") or jc.get("updated_at")
+    if jc_updated:
+        jc_txt = f"竞彩源 {_bj_time_str(jc_updated)}"
+    else:
+        jc_txt = "SP以体彩为准"
+
+    # 欧粘亚动检测：简化版，只看当前 snap 是否欧三向齐全但缺少 delta 上下文
+    # 实际诊断在详情 lifecycle 中做；这里只标存在 AH/SP 源
+    has_ah = snapshot.get("ah_line") is not None
+    has_sp = bool(jc.get("has_sp") or jc.get("sp_home"))
+    if has_ah or has_sp:
+        sticky_note = "欧粘·亚/SP有动" if captured else ""
+    else:
+        sticky_note = ""
+
+    parts = [f"tick {captured_bj}", jc_txt]
+    if sticky_note:
+        parts.append(sticky_note)
+    return " · ".join(parts)
+
+
 def _betfair_cell(snapshot: dict) -> str:
     bf = snapshot.get("betfair") or {}
     if not bf or not bf.get("has_data"):
@@ -1472,6 +1583,106 @@ def _jingcai_sp_line(snapshot: dict) -> str:
     return " · ".join(parts) if parts else ""
 
 
+def _extract_jingcai_from_tick(p: dict) -> dict:
+    """Return jingcai block from odds or raw_meta, normalized."""
+    o = p.get("odds") or {}
+    jc = o.get("jingcai") or {}
+    if not jc:
+        raw = (p.get("raw_meta") or o.get("raw_meta") or {})
+        jc = raw.get("jingcai") or {}
+    return jc
+
+
+def _jingcai_sp_cell(jc: dict) -> str:
+    if not jc or not jc.get("has_sp"):
+        return '—<br><span class="meta">未开售/未抓到</span>'
+    return f"{_e(jc.get('sp_home'))}/{_e(jc.get('sp_draw'))}/{_e(jc.get('sp_away'))}"
+
+
+def _jingcai_rqsp_cell(jc: dict) -> str:
+    if not jc or not jc.get("has_rqsp"):
+        return '—<br><span class="meta">未开售/未抓到</span>'
+    return f"{_e(jc.get('rqsp_home'))}/{_e(jc.get('rqsp_draw'))}/{_e(jc.get('rqsp_away'))}"
+
+
+def _eu_odds_details_cell(o: dict) -> str:
+    eu = f"{_e(o.get('eu_home'))}/{_e(o.get('eu_draw'))}/{_e(o.get('eu_away'))}"
+    return f'<details class="eu-fold"><summary>欧赔对照</summary>{eu}</details>'
+
+
+def _recommendation_text(p: dict) -> str:
+    pk = p.get("pick") or {}
+    ai_pk = pk.get("ai_analyses")
+    if ai_pk:
+        return "<br>".join(
+            f"<strong>{_e(a.get('label', k))}</strong>: {_e(a.get('result_1x2_cn'))}"
+            for k, a in ai_pk.items()
+        )
+    return f"<strong>{_e(pk.get('result_1x2_cn'))}</strong>"
+
+
+def _snapshot_rows_all_same(timeline: list, keys: list) -> bool:
+    if len(timeline) < 2:
+        return False
+    vals = None
+    has_full = False
+    for p in timeline:
+        o = p.get("odds") or {}
+        cur = tuple(o.get(k) for k in keys)
+        if all(v is not None for v in cur):
+            has_full = True
+        if vals is None:
+            vals = cur
+        elif cur != vals:
+            return False
+    return has_full and vals is not None
+
+
+def _snapshot_jingcai_unchanged(timeline: list) -> bool:
+    if len(timeline) < 2:
+        return False
+    keys = ("sp_home", "sp_draw", "sp_away")
+    vals = None
+    has_sp = False
+    for p in timeline:
+        jc = _extract_jingcai_from_tick(p)
+        if jc.get("has_sp"):
+            has_sp = True
+        cur = tuple(jc.get(k) for k in keys)
+        if vals is None:
+            vals = cur
+        elif cur != vals:
+            return False
+    return has_sp and vals is not None
+
+
+def _snapshot_recommendation_unchanged(timeline: list) -> bool:
+    if len(timeline) < 2:
+        return False
+    first = None
+    for p in timeline:
+        txt = _recommendation_text(p)
+        if first is None:
+            first = txt
+        elif txt != first:
+            return False
+    return True
+
+
+def _snapshot_footnote(timeline: list) -> str:
+    eu_unchanged = _snapshot_rows_all_same(timeline, ["eu_home", "eu_draw", "eu_away"])
+    sp_unchanged = _snapshot_jingcai_unchanged(timeline)
+    rec_unchanged = _snapshot_recommendation_unchanged(timeline)
+    notes = []
+    if sp_unchanged and eu_unchanged:
+        notes.append("源站未调赔；必发%仍可能更新")
+    if rec_unchanged:
+        notes.append("推荐列同值时仅最新行显示，来自预测快照/回填，非每 tick 重算")
+    if not notes:
+        return ""
+    return f'<p class="meta">{" · ".join(notes)}</p>'
+
+
 def _dashboard_active_row(
     m: dict,
     indexes: dict,
@@ -1479,6 +1690,7 @@ def _dashboard_active_row(
     *,
     chief_report: dict | None = None,
     agent_board: dict | None = None,
+    focused: bool = False,
 ) -> str:
     from daily_picks import _kickoff_date
 
@@ -1521,7 +1733,7 @@ def _dashboard_active_row(
     grade = m.get("accuracy_grade") or (m.get("accuracy_pick") or {}).get("accuracy_grade") or ""
     sweet_flag = "1" if sweet else "0"
     match_day = _kickoff_date(m, kickoff_map) or ""
-    detail = f'<a href="/match/{_e(fid)}">趋势 ({n_pts})</a>' if fid else "—"
+    detail = f'<a href="/match/{_e(fid)}">详情</a>' if fid else "—"
     cb = (
         f'<input type="checkbox" class="parlay-cb" data-fid="{_e(fid)}" '
         f'data-tier="{_e(m.get("buy_tier") or "")}" '
@@ -1529,6 +1741,16 @@ def _dashboard_active_row(
         f'data-match-date="{_e(match_day)}" '
         f'data-acc-grade="{_e(grade)}" '
         f'data-name="{_e(name)}" onchange="toggleParlayPick(this)" title="勾选：2串1 / 批量推荐图">'
+        if fid else "—"
+    )
+    focus_cls = "focus-star focused" if focused else "focus-star"
+    focus_title = "取消关注" if focused else "加入重点关注"
+    focus_icon = "★" if focused else "☆"
+    focus_btn = (
+        f'<button type="button" class="{focus_cls}" '
+        f'data-fid="{_e(fid)}" onclick="toggleFocusWatch(this)" '
+        f'title="{focus_title}">'
+        f'{focus_icon}</button>'
         if fid else "—"
     )
     pick_plain = _format_dual_pick(m)
@@ -1546,25 +1768,50 @@ def _dashboard_active_row(
     jc_sp_html = f"<br><span class='meta'>{_e(jc_sp_line)}</span>" if jc_sp_line else ""
     kickoff_label = m.get("kickoff_label") or "—"
 
+    # 新鲜度 + 趋势
+    freshness_meta = _odds_freshness_meta(snap)
+    n_pts = snap.get("tick_count") or (indexes.get(fid) or {}).get("point_count", 0)
+    freshness_html = f"<br><span class='meta'>{freshness_meta} · 趋势 ({n_pts})</span>"
+    detail = f'<a href="/match/{_e(fid)}">详情</a>' if fid else "—"
+
     # 预测结论优先保留；盘口字段以 DB 最新为准
     rp = m.get("result_prediction") or {}
+    name_suspicious = m.get("_team_name_suspicious") or False
     rule_pick = rp.get("pick_cn") or pick_plain or "—"
     rule_conf = rp.get("confidence_cn") or conf
+    divergent = rp.get("_divergent") or False
+    divergence_note = " <span class='meta tag-diverge'>与盘口分歧</span>" if divergent else ""
+    missing_note = " <span class='meta tag-missing'>未算</span>" if rp.get("missing") else ""
+    if name_suspicious:
+        rule_pick = "队名异常·仅盘口"
+        rule_conf = "-"
 
+    focus_extra = ""
+    if focused:
+        reasons = (rp.get("reasons") or [])[:2]
+        reason_txt = " · ".join(r for r in reasons if isinstance(r, str))
+        ma_txt = m.get("market_attitude_summary") or ""
+        div_txt = m.get("eu_ah_divergence_summary") or ""
+        extras = [x for x in [reason_txt, ma_txt, div_txt] if x]
+        if extras:
+            focus_extra = "<br><span class='meta focus-reason'>" + " · ".join(extras) + "</span>"
+
+    row_cls = "dash-row focused" if focused else "dash-row"
     return (
-        f"<tr class='dash-row' data-sweet='{sweet_flag}' "
+        f"<tr class='{row_cls}' data-sweet='{sweet_flag}' "
         f"data-acc-grade='{_e(grade)}' data-tier='{_e(m.get('buy_tier') or '')}' "
         f"data-fid='{_e(fid)}' data-name='{_e(name)}' data-pick='{_e(pick_plain)}' "
         f"data-sp='{_e(sp_val)}' data-tier-cn='{_e(tier_cn)}' data-scores='{_e(scores)}' "
         f"data-ah='{_e(ah_str)}' data-conf='{_e(conf)}' data-match-date='{_e(match_day)}' "
         f"data-chief='{_e(chief_decision)}' data-chief-summary='{_e(chief_summary[:80])}'>"
         f"<td class='parlay-pick'>{cb}</td>"
-        f"<td><a href=\"/match/{_e(fid)}\">{_e(name)}</a>{phase_tag}{tier_tag}{acc_tag}{alert_tag}{jc_sp_html}</td>"
+        f"<td class='focus-cell'>{focus_btn}</td>"
+        f"<td><a href=\"/match/{_e(fid)}\">{_e(name)}</a>{phase_tag}{tier_tag}{acc_tag}{alert_tag}{jc_sp_html}{freshness_html}{focus_extra}</td>"
         f"<td class='meta'>{_e(kickoff_label)}</td>"
         f"<td>{_e(devig_str)}</td>"
         f"<td>{_e(ah_str)}</td>"
         f"<td>{_e(bf_str)}</td>"
-        f"<td><strong>{_e(rule_pick)}</strong> <span class='meta'>{_e(rule_conf)}</span></td>"
+        f"<td><strong>{_e(rule_pick)}</strong> <span class='meta'>{_e(rule_conf)}</span>{divergence_note}{missing_note}</td>"
         f"<td>{detail}</td></tr>\n"
     )
 
@@ -1666,6 +1913,8 @@ def html_dashboard(
     within_days: float | None = None,
     match_date: str | None = None,
     show_all: bool = False,
+    focus_watch: dict | None = None,
+    force_refresh_predictions: bool = False,
 ) -> str:
     import config as app_cfg
     from ai_schedule import format_ai_interval
@@ -1681,7 +1930,14 @@ def html_dashboard(
     from match_timeline import list_match_indexes
 
     window = within_days if within_days is not None else app_cfg.SERVICE_WITHIN_DAYS
-    matches = load_dashboard_matches(output_root, within_days=window)
+    focus_watch = focus_watch or {"fids": [], "notes": {}}
+    focus_set = {str(x) for x in focus_watch.get("fids", []) if x}
+    matches = load_dashboard_matches(
+        output_root,
+        within_days=window,
+        focus_fids=focus_set,
+        force_refresh_predictions=force_refresh_predictions,
+    )
     indexes = {x.get("fixture_id"): x for x in list_match_indexes(output_root)}
     settled_map = load_settled_map(output_root)
     kickoff_map = load_kickoff_map(within_days=window)
@@ -1721,24 +1977,53 @@ def html_dashboard(
     chief_map = load_chief_report_map(output_root, chief_fids)
     board_map = load_agent_board_map(output_root, chief_fids)
 
-    active_rows = "".join(
-        _dashboard_active_row(
-            m,
-            indexes,
-            kickoff_map,
-            chief_report=chief_map.get(str(m.get("fixture_id") or "")),
-            agent_board=board_map.get(str(m.get("fixture_id") or "")),
+    focus_active = [m for m in all_active_enriched if str(m.get("fixture_id") or "") in focus_set]
+    normal_active = [m for m in all_active_enriched if str(m.get("fixture_id") or "") not in focus_set]
+
+    def _active_rows(group: list[dict], *, focused: bool) -> str:
+        if not group:
+            return ""
+        return "".join(
+            _dashboard_active_row(
+                m,
+                indexes,
+                kickoff_map,
+                chief_report=chief_map.get(str(m.get("fixture_id") or "")),
+                agent_board=board_map.get(str(m.get("fixture_id") or "")),
+                focused=focused,
+            )
+            for m in group
         )
-        for m in all_active_enriched
-    )
-    if not active_rows:
+
+    focus_rows = _active_rows(focus_active, focused=True)
+    normal_rows = _active_rows(normal_active, focused=False)
+
+    if not focus_rows and not normal_rows:
         if not all_active and _focus_jingcai_only() and not show_all:
-            active_rows = (
-                "<tr><td colspan='8'>暂无竞彩在售比赛 · "
+            normal_rows = (
+                "<tr><td colspan='9'>暂无竞彩在售比赛 · "
                 "<a href='/?all=1'>显示全部场次</a></td></tr>"
             )
         else:
-            active_rows = "<tr><td colspan='8'>暂无未开赛/进行中比赛</td></tr>"
+            normal_rows = "<tr><td colspan='9'>暂无未开赛/进行中比赛</td></tr>"
+
+    focus_section = ""
+    if focus_rows:
+        focus_section = f"""
+<div class="card focus-card">
+  <h2>★ 重点关注（{len(focus_active)} 场）</h2>
+  <div class="focus-toolbar">
+    <span class="meta">已关注 <strong id="focus-count">{len(focus_active)} 场</strong> · 关注=跟踪盘口/规则 · 串关=算 EV · 上次优先抓取 {_e(_focus_poll_heartbeat_at())}</span>
+    <button type="button" class="btn btn-sm btn-focus" onclick="refreshFocusAnalysis()">刷新关注分析</button>
+  </div>
+  <table class="dashboard-table">
+    <tr><th title="勾选场次">选</th><th title="重点关注">关</th><th>比赛</th><th>开赛</th><th>欧去水/倾向</th><th>亚盘</th><th>必发热</th><th>规则倾向</th><th>详情</th></tr>
+    {focus_rows}
+  </table>
+</div>
+"""
+
+    active_rows = normal_rows
 
     finished_rows = "".join(
         _dashboard_finished_row(
@@ -1771,6 +2056,7 @@ def html_dashboard(
     db_count = len(matches) if matches else 0
 
     poll_line = _poll_status_line()
+    latest_tick_at = _latest_db_tick_at()
     if app_cfg.AI_AUTO_ENABLED:
         ai_schedule_txt = f"定时 AI 每 {format_ai_interval()}"
     else:
@@ -1784,6 +2070,7 @@ def html_dashboard(
      · AI {lr.get('ai_called', 0)} 次
      {'· 结算 ' + str(lr.get('settled_count', 0)) + ' 场' if lr.get('settled_count') else ''}</p>
   <p class="meta">{ai_schedule_txt} · 仅 <strong>24h 内</strong>开赛 · poll 窗口 {window:g} 天</p>
+  <p class="meta">最新盘口 tick：{_e(latest_tick_at)}</p>
   <p class="meta" id="db-line">数据库：加载中…</p>
   <p class="meta">
     <button type="button" class="btn btn-sm" style="background:#059669" data-label="抓取完赛赛果"
@@ -1873,6 +2160,17 @@ def html_dashboard(
         ".dashboard-table td:nth-child(8) { min-width: 160px; max-width: 260px; }"
         ".dep-foot { margin-top: 12px; padding-top: 10px; border-top: 1px dashed rgba(255,255,255,0.12); "
         "text-align: center; font-size: 11px; color: #64748b; }"
+        ".focus-star { background: none; border: none; cursor: pointer; font-size: 18px; color: #94a3b8; line-height: 1; padding: 2px; }"
+        ".focus-star:hover { color: #f59e0b; }"
+        ".focus-star.focused { color: #f59e0b; }"
+        ".focus-cell { text-align: center; width: 32px; }"
+        ".focus-card { border-left: 4px solid #f59e0b; background: linear-gradient(135deg, #1e1b12 0%, #14161f 100%); }"
+        ".focus-toolbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }"
+        ".focus-reason { display:block; margin-top:4px; color:#94a3b8; font-size:12px; line-height:1.4; }"
+        ".tag-diverge { color: #f87171; font-size: 12px; }"
+        ".tag-missing { color: #94a3b8; font-size: 12px; }"
+        ".btn-focus { background: #f59e0b; color: #1f2937; }"
+        "tr.focused td { background: rgba(245,158,11,0.05); }"
     )
 
     dash_export = long_image_export_script(root_id="dash-list-export-root", filename="dash-picks")
@@ -1886,13 +2184,14 @@ def html_dashboard(
 <style>
 {dash_css}
 </style>
-<script>{_AI_BTN_JS}{_AI_CHAT_JS}{_DASH_FILTER_JS}{_PARLAY_JS}</script>
+<script>{_AI_BTN_JS}{_AI_CHAT_JS}{_DASH_FILTER_JS}{_PARLAY_JS}{_FOCUS_JS}</script>
 </head><body>
 <h1 class="text-gradient">竞彩盘口 · 赛果预测</h1>
 <p class="meta">{_e(run_status)} · 库内 {_e(db_count)} 场{_e(poll_line)}{(' · 仅显示竞彩在售 · <a href="/?all=1">显示全部</a>' if _focus_jingcai_only() and not show_all else (' · <a href="/">仅竞彩</a>' if show_all else ''))}</p>
 {_page_nav()}
 <button class="btn" style="margin-bottom:14px" onclick="fetch('/api/run',{{method:'POST'}}).then(r=>r.json()).then(d=>showToast(d.message||d.error||'已触发', !d.ok))">刷新分析</button>
 <a class="btn" href="/daily" style="margin-bottom:14px">当日推荐</a>
+{focus_section}
 <div class="card">
   <h2>{_e(active_title)}</h2>
   <div class="parlay-toolbar">
@@ -1904,7 +2203,7 @@ def html_dashboard(
   </div>
   <div class="card parlay-result" id="parlay-result"></div>
   <table class="dashboard-table">
-    <tr><th title="勾选场次">选</th><th>比赛</th><th>开赛</th><th>欧去水/倾向</th><th>亚盘</th><th>必发热</th><th>规则倾向</th><th>详情</th></tr>
+    <tr><th title="勾选场次">选</th><th title="重点关注">关</th><th>比赛</th><th>开赛</th><th>欧去水/倾向</th><th>亚盘</th><th>必发热</th><th>规则倾向</th><th>详情</th></tr>
     {active_rows}
   </table>
 </div>
@@ -7953,28 +8252,27 @@ def html_match_detail(
     ah_hw = [(p.get("odds") or {}).get("ah_home_water") for p in timeline]
     ah_aw = [(p.get("odds") or {}).get("ah_away_water") for p in timeline]
 
+    rec_same = _snapshot_recommendation_unchanged(timeline)
+    latest_idx = len(timeline) - 1
+
     tbl_rows = ""
-    for p in timeline:
+    for idx, p in enumerate(timeline):
         o, pk = p.get("odds") or {}, p.get("pick") or {}
         bf_row = o.get("betfair") or {}
         pct = bf_row.get("volume_pct") or {}
         bf_txt = "—"
         if bf_row.get("has_data"):
             bf_txt = f"{pct.get('home', '—')}/{pct.get('draw', '—')}/{pct.get('away', '—')}%"
-        ai_pk = pk.get("ai_analyses")
-        if ai_pk:
-            rec_txt = "<br>".join(
-                f"<strong>{_e(a.get('label', k))}</strong>: {_e(a.get('result_1x2_cn'))}"
-                for k, a in ai_pk.items()
-            )
-        else:
-            rec_txt = f"<strong>{_e(pk.get('result_1x2_cn'))}</strong>"
+        jc = _extract_jingcai_from_tick(p)
+        rec_txt = _recommendation_text(p) if (not rec_same or idx == latest_idx) else "—"
         tbl_rows += (
             f"<tr><td>{_e(format_ts(p.get('ts')))}</td>"
             f"<td>{_e(o.get('ah_line'))}</td>"
             f"<td>{_e(o.get('ah_home_water'))}/{_e(o.get('ah_away_water'))}</td>"
-            f"<td>{_e(o.get('eu_home'))}/{_e(o.get('eu_draw'))}/{_e(o.get('eu_away'))}</td>"
+            f"<td>{_jingcai_sp_cell(jc)}</td>"
+            f"<td>{_jingcai_rqsp_cell(jc)}</td>"
             f"<td>{bf_txt}</td>"
+            f"<td>{_eu_odds_details_cell(o)}</td>"
             f"<td>{rec_txt}</td>"
             f"<td>{_e(pk.get('likely_scores'))}</td>"
             f"<td>{_e(pk.get('confidence_cn'))}</td></tr>\n"
@@ -8030,12 +8328,13 @@ def html_match_detail(
         muted=True,
         export_slug="changes",
     )
+    snapshot_footnote = _snapshot_footnote(timeline)
     snapshot_fold = _fold(
         f"Poll 快照明细（{len(timeline)} 条）",
         f"""<table>
-    <tr><th>时间</th><th>亚盘</th><th>水位</th><th>欧赔</th><th>必发%</th><th>推荐</th><th>比分</th><th>置信</th></tr>
+    <tr><th>时间</th><th>亚盘</th><th>水位</th><th>竞彩SP</th><th>让球SP</th><th>必发%</th><th>欧赔对照</th><th>推荐</th><th>比分</th><th>置信</th></tr>
     {tbl_rows}
-  </table>""",
+  </table>{snapshot_footnote}""",
         muted=True,
         export_slug="snapshot",
     )

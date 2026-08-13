@@ -384,34 +384,34 @@ def _save_result_file(output_root: Path, external_id: str, row: dict, fixture: d
 
 
 def _is_dirty_name(name: str | None) -> bool:
-    if not name:
-        return True
-    dirty_exact = (
-        "亚冠杯","欧冠","欧联","欧会","欧超杯","解放者杯","南美杯",
-        "附加赛","决赛","半决赛","四分之一决赛","八强","四强",
-    )
-    dirty_substr = (
-        "资格赛", "附加赛", "预选赛", "季后赛", "小组赛", "淘汰赛",
-        "第三轮", "第二轮", "第一轮", "第1轮", "第2轮", "第3轮",
-    )
-    name = str(name).strip()
-    if name in dirty_exact:
-        return True
-    return any(s in name for s in dirty_substr)
+    from poll_500 import is_dirty_team_label
+
+    return is_dirty_team_label(name or "")
 
 
-def ensure_fixture_identity(fixture_id: str, output_root: str | Path | None = None) -> dict | None:
+def ensure_fixture_identity(
+    fixture_id: str,
+    source: str | None = None,
+    output_root: str | Path | None = None,
+) -> dict | None:
     """如果 fixtures 表中的队名被识别为脏名，尝试从 500 亚盘分析页回填真实队名。
 
     返回更新后的 fixture 字典；回填失败或队名不脏则返回 None（表示无需修正）。
     """
     from download_500 import _session, fetch_match_info
 
+    ext = str(fixture_id)
     with cursor() as cur:
-        cur.execute(
-            "SELECT id, external_id, home_team, away_team, match_name, kickoff_at FROM fixtures WHERE external_id=%s",
-            (str(fixture_id),),
-        )
+        if source:
+            cur.execute(
+                "SELECT id, external_id, home_team, away_team, match_name, kickoff_at FROM fixtures WHERE external_id=%s AND source=%s",
+                (ext, source),
+            )
+        else:
+            cur.execute(
+                "SELECT id, external_id, home_team, away_team, match_name, kickoff_at FROM fixtures WHERE external_id=%s",
+                (ext,),
+            )
         row = cur.fetchone()
     if not row:
         return None
@@ -422,9 +422,9 @@ def ensure_fixture_identity(fixture_id: str, output_root: str | Path | None = No
 
     try:
         session = _session()
-        info = fetch_match_info(session, str(fixture_id))
+        info = fetch_match_info(session, ext)
     except Exception as exc:
-        log.warning("无法从 500 回填 %s 队名: %s", fixture_id, exc)
+        log.warning("无法从 500 回填 %s 队名: %s", ext, exc)
         return None
 
     real_home = info.home or ""
@@ -432,16 +432,16 @@ def ensure_fixture_identity(fixture_id: str, output_root: str | Path | None = No
     if not real_home or not real_away:
         return None
     if _is_dirty_name(real_home) or _is_dirty_name(real_away):
-        log.warning("500 回填队名仍脏 %s: %s vs %s", fixture_id, real_home, real_away)
+        log.warning("500 回填队名仍脏 %s: %s vs %s", ext, real_home, real_away)
         return None
 
-    match_name = f"{real_home} vs {real_away}"
+    match_name = f"{real_home} VS {real_away}"
     with cursor() as cur:
         cur.execute(
             "UPDATE fixtures SET home_team=%s, away_team=%s, match_name=%s, updated_at=NOW() WHERE id=%s",
             (real_home, real_away, match_name, row["id"]),
         )
-    log.info("已回填 %s 队名: %s", fixture_id, match_name)
+    log.info("已回填 %s 队名: %s", ext, match_name)
     row["home_team"] = real_home
     row["away_team"] = real_away
     row["match_name"] = match_name

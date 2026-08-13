@@ -32,6 +32,15 @@ from match_timeline import load_ai_records, load_deep_analyses, load_match_index
 from timeline_merge import load_latest_poll_meta, merge_match_indexes
 from time_utils import now_beijing
 from daily_picks import load_daily_picks_from_output, save_daily_picks
+from focus_watch import (
+    add_focus_fid,
+    clear_focus,
+    focus_fids,
+    load_focus_watch,
+    remove_focus_fid,
+    set_focus_fids,
+    update_note,
+)
 from share_card import (
     build_ai_summary_context,
     build_parlay_share_context,
@@ -82,6 +91,7 @@ _API_SIMILARITY_AI_RE = re.compile(r"^/api/match/(\d+)/similarity-ai$")
 _API_FIFA_PREVIEW_RE = re.compile(r"^/api/match/(\d+)/fifa-preview$")
 _API_SPORTTERY_INTEL_RE = re.compile(r"^/api/match/(\d+)/sporttery-intel$")
 _API_VIEWING_NOTE_RE = re.compile(r"^/api/match/(\d+)/viewing-note$")
+_API_FOCUS_WATCH_RE = re.compile(r"^/api/focus-watch(?:/(\d+))?$")
 _daily_ai_lock = threading.Lock()
 _daily_ai_running = False
 
@@ -918,11 +928,14 @@ class Handler(BaseHTTPRequestHandler):
             qs = parse_qs(urlparse(self.path).query)
             match_date = qs.get("date", [None])[0]
             show_all = qs.get("all", ["0"])[0] in ("1", "true", "yes")
+            force_refresh = qs.get("refresh_focus", ["0"])[0] in ("1", "true", "yes")
             self._send_html(html_dashboard(
                 get_state(), latest, output_root=root,
                 within_days=self.within_days,
                 match_date=match_date,
                 show_all=show_all,
+                focus_watch=load_focus_watch(root),
+                force_refresh_predictions=force_refresh,
             ))
             return
         if path == "/api/dashboard/chat-stream":
@@ -1295,11 +1308,16 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._send_json({"error": str(exc)}, 500)
             return
+        fwr = _API_FOCUS_WATCH_RE.match(path)
+        if fwr:
+            self._send_json(load_focus_watch())
+            return
         self._send_json({"error": "not found", "path": path}, 404)
 
     def do_POST(self):
         path = urlparse(self.path).path.rstrip("/")
         qs = parse_qs(urlparse(self.path).query)
+        root = self.output_root
         if path == "/api/run":
             force_ai = qs.get("force_ai", ["0"])[0] in ("1", "true", "yes")
             self._send_json(self._trigger_run(background=True, force_ai=force_ai))
@@ -2008,6 +2026,50 @@ class Handler(BaseHTTPRequestHandler):
                 })
             except Exception as exc:
                 log.exception("单场补抓失败 fid=%s", fid)
+                self._send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        fwr = _API_FOCUS_WATCH_RE.match(path)
+        if fwr:
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b"{}"
+                payload = json.loads(raw.decode("utf-8"))
+            except Exception as exc:
+                self._send_json({"ok": False, "error": f"JSON 解析失败: {exc}"}, 400)
+                return
+            action = str(payload.get("action") or "").strip().lower()
+            fids_in = [str(x).strip() for x in payload.get("fids", []) if str(x).strip()]
+            note = payload.get("note")
+            try:
+                if action == "add":
+                    ok, msg = True, ""
+                    for fid in fids_in:
+                        ok, msg = add_focus_fid(fid, note=note, output_root=root)
+                        if not ok:
+                            break
+                    self._send_json({"ok": ok, "message": msg, "focus_watch": load_focus_watch(root)})
+                elif action == "remove":
+                    for fid in fids_in:
+                        remove_focus_fid(fid, output_root=root)
+                    self._send_json({"ok": True, "focus_watch": load_focus_watch(root)})
+                elif action == "set":
+                    notes = payload.get("notes") or {}
+                    ok, msg = set_focus_fids(fids_in, notes=notes if isinstance(notes, dict) else None, output_root=root)
+                    self._send_json({"ok": ok, "message": msg, "focus_watch": load_focus_watch(root)})
+                elif action == "clear":
+                    clear_focus(output_root=root)
+                    self._send_json({"ok": True, "focus_watch": load_focus_watch(root)})
+                elif action == "note":
+                    fid = (fids_in[0] if fids_in else str(fwr.group(1) or "")).strip()
+                    if not fid:
+                        self._send_json({"ok": False, "error": "fid required"}, 400)
+                        return
+                    ok = update_note(fid, note=str(note or ""), output_root=root)
+                    self._send_json({"ok": ok, "focus_watch": load_focus_watch(root)})
+                else:
+                    self._send_json({"ok": False, "error": f"未知 action: {action}"}, 400)
+            except Exception as exc:
+                log.exception("focus-watch POST 失败")
                 self._send_json({"ok": False, "error": str(exc)}, 500)
             return
         self._send_json({"error": "not found"}, 404)

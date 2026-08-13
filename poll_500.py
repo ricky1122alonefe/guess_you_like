@@ -54,14 +54,28 @@ def _is_plausible_ou_water(v: float | None) -> bool:
 
 # live.500 常见：联赛/阶段名被拆成「主客」
 _DIRTY_TEAM_EXACT = frozenset({
-    "亚冠杯", "欧冠", "欧联", "欧会", "欧超杯", "解放者杯", "南美杯",
+    # 洲际/国际杯赛（单名占位）
+    "欧罗巴", "欧联杯", "欧会杯", "欧冠", "欧冠杯", "亚冠", "亚冠杯", "欧超杯",
+    "解放者杯", "南美杯", "世界杯", "世俱杯",
+    # 联赛简称占位
     "日职", "日职联", "韩K", "英超", "西甲", "意甲", "德甲", "法甲",
     "英冠", "西乙", "荷甲", "葡超", "苏超", "美职", "澳超", "巴甲", "阿甲",
+    # 赛段占位
     "附加赛", "决赛", "半决赛", "四分之一决赛", "八强", "四强",
+    "资格赛", "预选赛",
 })
 _DIRTY_TEAM_SUBSTR = (
+    # 赛段
     "资格赛", "附加赛", "预选赛", "季后赛", "小组赛", "淘汰赛",
+    # 轮次（中文数字/阿拉伯数字）
     "第三轮", "第二轮", "第一轮", "第1轮", "第2轮", "第3轮",
+    # 完整赛事名后缀
+    "职业联赛", "超级联赛", "甲级联赛", "乙级联赛", "冠军联赛",
+    "联赛", "杯赛",
+    # 占位标记
+    "(队名待核)", "队名待核",
+    # 赛事名兜底（与 exact 互补）
+    "欧罗巴", "欧联杯", "欧会杯", "欧冠杯", "亚冠", "解放者杯", "南美杯", "世界杯", "世俱杯",
 )
 
 
@@ -76,8 +90,14 @@ def is_dirty_team_label(name: str) -> bool:
         return True
     if any(s in n for s in _DIRTY_TEAM_SUBSTR):
         return True
-    # 极短且以杯/联结尾，多半是赛事名
+    # 轮次兜底：第N轮 / 第X轮（避免误伤「第戎」等真实队名）
+    if re.search(r"第[一二三四五六七八九十零〇\d]+轮", n):
+        return True
+    # 极短且以杯/联/超/冠结尾，多半是赛事名
     if len(n) <= 4 and n.endswith(("杯", "联", "超", "冠")):
+        return True
+    # 避免误伤真实俱乐部：若队名明显是「地名+职业联赛」等完整赛事名才判脏
+    if n.endswith("职业联赛") or n.endswith("超级联赛") or n.endswith("甲级联赛") or n.endswith("乙级联赛"):
         return True
     return False
 
@@ -87,7 +107,7 @@ def needs_name_fix(fixture: MatchFixture) -> bool:
 
 
 def ensure_fixture_real_teams(session, fixture: MatchFixture) -> MatchFixture:
-    """live 脏队名 → 分析页真实主客。失败则原样返回。"""
+    """live 脏队名 → 分析页真实主客。干净原名不会被脏 fetched 名覆盖。失败则原样返回。"""
     from download_500 import fetch_match_info
 
     if not needs_name_fix(fixture):
@@ -101,14 +121,20 @@ def ensure_fixture_real_teams(session, fixture: MatchFixture) -> MatchFixture:
         return fixture
     if is_dirty_team_label(info.home) and is_dirty_team_label(info.away):
         return fixture
-    fixture.home = info.home
-    fixture.away = info.away
+
+    before = (fixture.home, fixture.away)
+    # 仅当 fetched 名为干净且优于原名时才覆盖
+    if is_dirty_team_label(fixture.home or "") and not is_dirty_team_label(info.home):
+        fixture.home = info.home
+    if is_dirty_team_label(fixture.away or "") and not is_dirty_team_label(info.away):
+        fixture.away = info.away
     if getattr(info, "label", None):
         fixture.label = info.label
-    log.info(
-        "队名修正 fid=%s → %s vs %s",
-        fixture.fixture_id, fixture.home, fixture.away,
-    )
+    if (fixture.home, fixture.away) != before:
+        log.info(
+            "队名修正 fid=%s → %s vs %s",
+            fixture.fixture_id, fixture.home, fixture.away,
+        )
     return fixture
 
 

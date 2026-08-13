@@ -15,6 +15,7 @@ from review_agent import build_review_agent_report
 from time_utils import now_beijing, now_beijing_str
 from worldcup_analytics import compute_accuracy_report
 from user_final_picks import enrich_settled_with_user_pick, list_locked_picks, user_pick_accuracy
+from focus_watch import focus_fids
 
 try:
     from db.connection import cursor, ping
@@ -421,6 +422,10 @@ def build_recommendation_review(output_root: str | Path, *, days: int = 14) -> d
         except Exception as exc:
             log.warning("复盘行构建失败 %s: %s", fid, exc)
 
+    # focus 复盘标记
+    focus_set = set(focus_fids(output_root))
+    for rec in records:
+        rec["focus"] = str(rec.get("fixture_id") or "") in focus_set
     records.sort(key=lambda r: r.get("kickoff_at") or "", reverse=True)
     judged = [r for r in records if r.get("pick_jingcai_cn") and r["pick_jingcai_cn"] not in SKIP_PICKS]
     accuracy = compute_accuracy_report(records)

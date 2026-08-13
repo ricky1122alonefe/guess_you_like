@@ -60,10 +60,13 @@ def _build_snapshot(
     fixture: dict[str, Any],
 ) -> dict[str, Any] | None:
     """Compose cur dict compatible with analyze_eu_ah_divergence."""
+    source = "postgres_latest_tick"
     snap = _odds_from_latest(fixture_db_id)
     if snap is None:
+        source = "postgres_tick_fallback"
         snap = _latest_valid_tick(fixture_db_id)
     if snap is None:
+        source = "postgres_closing_tick"
         closing = get_closing_tick(fixture_db_id, fixture.get("kickoff_at"))
         if closing:
             snap = {k: _to_float(closing.get(k)) for k in (
@@ -76,6 +79,7 @@ def _build_snapshot(
         return None
     # odds_latest uses ah_open_home/away; analyzer expects ah_open_home_water/away_water
     return {
+        "source": source,
         "eu_home": snap.get("eu_home"),
         "eu_draw": snap.get("eu_draw"),
         "eu_away": snap.get("eu_away"),
@@ -109,6 +113,7 @@ def _build_snapshot_from_cur(
     return {
         "fixture_id": div.fixture_id,
         "match": div.match,
+        "source": cur.get("source", "unknown"),
         "divergence_score": div.divergence_score,
         "severity": div.severity,
         "severity_cn": div.severity_cn,

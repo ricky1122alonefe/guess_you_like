@@ -121,6 +121,20 @@ def _last_ou_from_ticks(fixture_db_id: int) -> dict[str, Any]:
     return {}
 
 
+def _extract_jingcai_sp(tick: dict | None) -> dict[str, Any]:
+    """从 tick.raw_meta.jingcai 提取竞彩 SP。"""
+    if not tick:
+        return {}
+    raw = tick.get("raw_meta") or {}
+    jc = raw.get("jingcai") or {}
+    sp = {}
+    for k in ("sp_home", "sp_draw", "sp_away", "rqsp_home", "rqsp_draw", "rqsp_away"):
+        v = jc.get(k)
+        if v not in (None, "", "-"):
+            sp[k] = v
+    return sp
+
+
 def _build_payload(
     pred: dict | None,
     *,
@@ -130,6 +144,7 @@ def _build_payload(
     score_source: str = "",
     score_range: dict | None = None,
     fixture_db_id: int | None = None,
+    score: LiveScore | None = None,
 ) -> dict[str, Any]:
     opening = _odds_from_tick(opening_tick, opening=True)
     closing = _odds_from_tick(closing_tick, opening=False)
@@ -158,7 +173,7 @@ def _build_payload(
         "jingcai": hits.get("hit_jingcai") if hits else None,
         "score_bands": hits.get("score_bands") if hits else None,
     }
-    return {
+    payload: dict[str, Any] = {
         "recommendation_source": snap.get("recommendation_source"),
         "run_id": snap.get("run_id"),
         "prediction": snap,
@@ -175,6 +190,19 @@ def _build_payload(
         "opening_routines": open_mp.get("routine_notes") or [],
         "line_move": line_move,
     }
+    jingcai_sp = _extract_jingcai_sp(closing_tick) or _extract_jingcai_sp(opening_tick)
+    if jingcai_sp:
+        payload["jingcai_sp"] = jingcai_sp
+    # 0-0 完场二次可信度盖章
+    if (
+        score is not None
+        and score.home_score == 0
+        and score.away_score == 0
+        and score.is_finished
+    ):
+        payload["verified_0_0"] = True
+        payload["verified_at"] = now_beijing_str()
+    return payload
 
 
 def _result_row(
@@ -213,6 +241,7 @@ def _result_row(
         score_source=score.score_source or score.source,
         score_range=score_range,
         fixture_db_id=fixture_db_id,
+        score=score,
     )
     row = {
         "fixture_id": fixture_db_id,

@@ -55,22 +55,23 @@ def main() -> int:
     skipped = 0
     missing = 0
     errors = 0
+    missing_reasons: dict[str, int] = {}
     for r in rows:
         payload = _load_payload(r.get("payload"))
         hits = payload.get("hits") or {}
         existing_score_range = payload.get("score_range")
         has_nonempty_score_bands = bool(hits.get("score_bands"))
+        # 只要有 bands 就复用，minor missing（如 sample_small）不影响评估
         has_score_range = bool(
             existing_score_range
             and isinstance(existing_score_range, dict)
-            and not existing_score_range.get("missing")
             and (existing_score_range.get("bands") or existing_score_range.get("top_bands"))
         )
+        ext = str(r.get("external_id"))
         if has_nonempty_score_bands and has_score_range:
             skipped += 1
             continue
 
-        ext = str(r.get("external_id"))
         if has_score_range:
             score_range = existing_score_range
         else:
@@ -82,6 +83,11 @@ def main() -> int:
                 continue
         if not score_range or score_range.get("missing"):
             missing += 1
+            reason = "unknown"
+            if isinstance(score_range, dict):
+                reason = ",".join(score_range.get("missing") or ["empty"])
+            missing_reasons[reason] = missing_reasons.get(reason, 0) + 1
+            print(f"  MISSING {ext}: {reason}")
             continue
         score_bands = evaluate_score_bands(
             score_range, int(r["home_score"]), int(r["away_score"])
@@ -102,8 +108,11 @@ def main() -> int:
                 (json.dumps(payload, ensure_ascii=False, default=str), r["fixture_id"]),
             )
         updated += 1
+        print(f"  UPDATED {ext}: score_bands={len(score_bands)}")
 
     print(f"total={len(rows)}, updated={updated}, skipped={skipped}, missing={missing}, errors={errors}")
+    if missing_reasons:
+        print("missing_reasons:", missing_reasons)
     return 0
 
 

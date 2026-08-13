@@ -369,7 +369,7 @@ def _extract_history(prediction: dict | None) -> dict | None:
     return None
 
 
-def _extract_recent_form(match_name: str) -> dict | None:
+def _extract_recent_form(match_name: str, home_team: str | None = None, away_team: str | None = None) -> dict | None:
     """尝试获取近期战绩：优先 team_recent_form（国际队），回落 club_form（联赛队）。"""
     # 1. team_recent_form（世界杯/国际队）
     try:
@@ -402,47 +402,53 @@ def _extract_recent_form(match_name: str) -> dict | None:
     # 2. club_form（联赛队，从 PG match_results）
     try:
         from analysis.team_form.club_form import build_club_form
-        # 兼容 "A vs B" / "AVS B" / "A VS B" / "A对B"
-        normalized = match_name
-        for sep in (" VS ", " Vs ", " vs ", "VS", "Vs", "vs", "对"):
-            if sep in normalized:
-                normalized = normalized.replace(sep, "\x00")
-                break
-        parts = normalized.split("\x00")
-        if len(parts) == 2:
-            home_team, away_team = parts[0].strip(), parts[1].strip()
-            cf = build_club_form(home_team, away_team)
-            if not isinstance(cf, dict):
+        # 优先使用外部传入的队名
+        if home_team and away_team:
+            home_team = home_team.strip()
+            away_team = away_team.strip()
+        else:
+            # 兼容 "A vs B" / "AVS B" / "A VS B" / "A对B"
+            normalized = match_name
+            for sep in (" VS ", " Vs ", " vs ", "VS", "Vs", "vs", "对"):
+                if sep in normalized:
+                    normalized = normalized.replace(sep, "\x00")
+                    break
+            parts = normalized.split("\x00")
+            if len(parts) != 2:
                 return None
-            overall = cf.get("overall") or {}
-            split = cf.get("split") or {}
-            h = overall.get("home_team")
-            a = overall.get("away_team")
-            # 有任一侧 played>0 才算有数据
-            if (h and h.get("played")) or (a and a.get("played")):
-                h_home = split.get("home_at_home_last_20") or {}
-                a_away = split.get("away_at_away_last_20") or {}
-                return {
-                    "home": {
-                        "label": h.get("team", home_team) if h else home_team,
-                        "form_str": h.get("form_str", "") if h else "",
-                        "win_rate": h.get("win_rate") if h else None,
-                        "goals_for": h.get("goals_for") if h else None,
-                        "goals_against": h.get("goals_against") if h else None,
-                        "home_at_home": h_home.get("summary_cn", "") if h_home else "",
-                    } if h else {"label": home_team},
-                    "away": {
-                        "label": a.get("team", away_team) if a else away_team,
-                        "form_str": a.get("form_str", "") if a else "",
-                        "win_rate": a.get("win_rate") if a else None,
-                        "goals_for": a.get("goals_for") if a else None,
-                        "goals_against": a.get("goals_against") if a else None,
-                        "away_at_away": a_away.get("summary_cn", "") if a_away else "",
-                    } if a else {"label": away_team},
-                    "source": "club_form",
-                }
-            elif cf and cf.get("missing"):
-                log.debug("club_form missing: %s", cf.get("missing"))
+            home_team, away_team = parts[0].strip(), parts[1].strip()
+        cf = build_club_form(home_team, away_team)
+        if not isinstance(cf, dict):
+            return None
+        overall = cf.get("overall") or {}
+        split = cf.get("split") or {}
+        h = overall.get("home_team")
+        a = overall.get("away_team")
+        # 有任一侧 played>0 才算有数据
+        if (h and h.get("played")) or (a and a.get("played")):
+            h_home = split.get("home_at_home_last_20") or {}
+            a_away = split.get("away_at_away_last_20") or {}
+            return {
+                "home": {
+                    "label": h.get("team", home_team) if h else home_team,
+                    "form_str": h.get("form_str", "") if h else "",
+                    "win_rate": h.get("win_rate") if h else None,
+                    "goals_for": h.get("goals_for") if h else None,
+                    "goals_against": h.get("goals_against") if h else None,
+                    "home_at_home": h_home.get("summary_cn", "") if h_home else "",
+                } if h else {"label": home_team},
+                "away": {
+                    "label": a.get("team", away_team) if a else away_team,
+                    "form_str": a.get("form_str", "") if a else "",
+                    "win_rate": a.get("win_rate") if a else None,
+                    "goals_for": a.get("goals_for") if a else None,
+                    "goals_against": a.get("goals_against") if a else None,
+                    "away_at_away": a_away.get("summary_cn", "") if a_away else "",
+                } if a else {"label": away_team},
+                "source": "club_form",
+            }
+        elif cf and cf.get("missing"):
+            log.debug("club_form missing: %s", cf.get("missing"))
     except Exception as exc:
         import traceback
         log.debug("club_form failed: %s\n%s", exc, traceback.format_exc())
@@ -493,8 +499,27 @@ def build_result_forecast_context(
                 pass
 
     if not index:
-        # 最后回落：只用 prediction
-        if prediction:
+        # 尝试从 DB fixtures 拿队名（无 timeline 也能继续算 club_form）
+        fixture = None
+        try:
+            from db.connection import cursor
+            with cursor() as cur:
+                cur.execute(
+                    "SELECT external_id, match_name, home_team, away_team, source FROM fixtures WHERE external_id = %s",
+                    (fixture_id,),
+                )
+                fixture = cur.fetchone()
+        except Exception:
+            fixture = None
+        if fixture and (fixture.get("home_team") or fixture.get("match_name")):
+            index = {
+                "fixture_id": fixture_id,
+                "match_name": fixture.get("match_name", ""),
+                "home_team": fixture.get("home_team", ""),
+                "away_team": fixture.get("away_team", ""),
+                "timeline": [],
+            }
+        elif prediction:
             index = {"fixture_id": fixture_id, "match_name": prediction.get("match_name", ""), "timeline": []}
         else:
             return {
@@ -541,7 +566,7 @@ def build_result_forecast_context(
     if not history:
         missing.append("history_similar")
 
-    recent = _extract_recent_form(match_name)
+    recent = _extract_recent_form(match_name, home_team=home_team, away_team=away_team)
     if not recent:
         missing.append("recent_form")
 
@@ -574,6 +599,8 @@ def build_result_forecast_context(
     ctx = {
         "fixture_id": fixture_id,
         "match_name": match_name,
+        "home_team": home_team,
+        "away_team": away_team,
         "european": european,
         "asian": asian,
         "betfair": betfair,
@@ -592,6 +619,22 @@ def build_result_forecast_context(
     except Exception as exc:
         log.debug("divergence 接入 context 失败 %s: %s", fixture_id, exc)
         ctx["divergence"] = {"missing": ["context_build_error"], "fixture_id": str(fixture_id)}
+
+    # 市场态度（赔率变动）
+    try:
+        from analysis.market import market_attitude
+
+        ma_features = market_attitude.build_move_features(str(fixture_id))
+        if "missing" not in ma_features:
+            ctx["market_attitude"] = {
+                "features": ma_features,
+                "attitude": market_attitude.classify_attitude(ma_features),
+            }
+        else:
+            ctx["market_attitude"] = {"missing": ma_features["missing"], "external_id": str(fixture_id)}
+    except Exception as exc:
+        log.debug("market_attitude 接入 context 失败 %s: %s", fixture_id, exc)
+        ctx["market_attitude"] = {"missing": ["context_build_error"], "fixture_id": str(fixture_id)}
 
     # 比分区间预测（接入主链，但不压过主结论）
     try:

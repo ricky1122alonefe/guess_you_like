@@ -156,6 +156,21 @@ def _build_reasons(context: dict, fused: dict[str, float], sources_used: dict[st
     return reasons
 
 
+def _append_market_attitude(
+    reasons: list[str], ma_ctx: dict, ma_nudge: float, ma_calib_note: str
+) -> None:
+    """追加市场态度解释句；nudge>0 表示已调分。"""
+    ma = ma_ctx.get("attitude") if isinstance(ma_ctx, dict) else None
+    if not ma:
+        return
+    narrative = ma.get("narrative", "")
+    if ma_nudge:
+        reasons.append(f"市场态度：{narrative}；{ma_calib_note}（soft nudge +{ma_nudge:.0%}）")
+    else:
+        note = (ma.get("calib") or {}).get("note", "样本或强度不足，未调分")
+        reasons.append(f"市场态度：{narrative}；{note}，未调分")
+
+
 def _check_divergence(context: dict) -> str | None:
     """检查欧亚严重分歧，优先使用 DB 主链 divergence。"""
     div = context.get("divergence")
@@ -239,6 +254,34 @@ def forecast(context: dict[str, Any]) -> dict[str, Any]:
     if total > 0:
         fused = {k: v / total for k, v in fused.items()}
 
+    # 市场态度 soft nudge（≤0.03，仅 mid/strong + 校准样本足够；与欧亚分歧冲突时降级）
+    ma_ctx = context.get("market_attitude") or {}
+    ma = ma_ctx.get("attitude") if isinstance(ma_ctx, dict) else None
+    ma_features = ma_ctx.get("features") if isinstance(ma_ctx, dict) else None
+    ma_nudge = 0.0
+    ma_calib_note = ""
+    if ma:
+        from analysis.market import market_attitude
+
+        calib = market_attitude.apply_calibration(ma)
+        ma["calib"] = calib
+        divergence = _check_divergence(context)
+        if divergence:
+            ma["strength"] = "weak"
+            labels = ma.setdefault("labels", [])
+            if "与欧亚分歧并存" not in labels:
+                labels.append("与欧亚分歧并存")
+            ma["narrative"] = (ma.get("narrative", "") + "；与欧亚分歧并存，市场态度降级").lstrip("；")
+        elif ma.get("strength") in ("mid", "strong") and calib.get("reliable"):
+            side = ma.get("supported_side")
+            if side and side in fused:
+                ma_nudge = 0.03 if ma["strength"] == "strong" else 0.02
+                fused[side] += ma_nudge
+                total2 = sum(fused.values())
+                if total2 > 0:
+                    fused = {k: v / total2 for k, v in fused.items()}
+                ma_calib_note = calib.get("note", "")
+
     # pick
     best = max(fused, key=fused.get)
     best_pct = fused[best]
@@ -252,6 +295,7 @@ def forecast(context: dict[str, Any]) -> dict[str, Any]:
         # 阈值以下：仍输出 pick + 真实概率，标低置信度
         confidence = "low"
         reasons = _build_reasons(context, fused, source_probs)
+        _append_market_attitude(reasons, ma_ctx, ma_nudge, ma_calib_note)
         reasons.append(f"倾向{RESULT_CN.get(best, best)}但 {best_pct:.0%} 未达阈值 {skip_threshold:.0%}，盘口接近、边际不足")
         if divergence:
             reasons.append(f"⚠ {divergence}")
@@ -273,6 +317,7 @@ def forecast(context: dict[str, Any]) -> dict[str, Any]:
                 "history_similar": context.get("history_similar"),
                 "recent_form": context.get("recent_form"),
                 "recent_missing_reason": context.get("recent_missing_reason", ""),
+                "market_attitude": ma_ctx,
             },
             "missing": missing,
             "weights": norm_weights,
@@ -290,6 +335,7 @@ def forecast(context: dict[str, Any]) -> dict[str, Any]:
         confidence = "low"
 
     reasons = _build_reasons(context, fused, source_probs)
+    _append_market_attitude(reasons, ma_ctx, ma_nudge, ma_calib_note)
     if divergence:
         reasons.append(f"⚠ {divergence}，置信度降级")
     if not has_market:
@@ -311,6 +357,7 @@ def forecast(context: dict[str, Any]) -> dict[str, Any]:
             "history_similar": context.get("history_similar"),
             "recent_form": context.get("recent_form"),
             "recent_missing_reason": context.get("recent_missing_reason", ""),
+            "market_attitude": ma_ctx,
         },
         "missing": missing,
         "weights": norm_weights,
@@ -421,5 +468,10 @@ def forecast_for_match(fixture_id: str, *, index: dict | None = None, prediction
     score_range = ctx.get("score_range")
     if score_range:
         result.setdefault("secondary", {})["score_range"] = score_range
+
+    # 市场态度接入 secondary
+    market_attitude = (result.get("factors") or {}).get("market_attitude") or ctx.get("market_attitude")
+    if market_attitude:
+        result.setdefault("secondary", {})["market_attitude"] = market_attitude
 
     return result

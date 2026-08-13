@@ -245,6 +245,73 @@ def _load_db_fixture_stubs(*, within_days: float, now: datetime) -> dict[str, di
     return out
 
 
+def _load_odds_snapshot_map(external_ids: list[str]) -> dict[str, dict]:
+    """Load latest odds snapshot per fixture from PG latest tick."""
+    out: dict[str, dict] = {}
+    if not external_ids:
+        return out
+    try:
+        from db.connection import cursor
+
+        with cursor() as cur:
+            cur.execute(
+                """
+                SELECT f.external_id, f.kickoff_at, t.captured_at,
+                       t.eu_home, t.eu_draw, t.eu_away,
+                       t.ah_line, t.ah_home_water, t.ah_away_water,
+                       t.raw_meta
+                FROM fixtures f
+                JOIN LATERAL (
+                    SELECT * FROM odds_ticks
+                    WHERE fixture_id = f.id
+                    ORDER BY captured_at DESC
+                    LIMIT 1
+                ) t ON true
+                WHERE f.source = '500' AND f.external_id = ANY(%s)
+                """,
+                (external_ids,),
+            )
+            rows = cur.fetchall()
+    except Exception as exc:
+        log.debug("DB odds snapshot 不可用: %s", exc)
+        return out
+
+    for row in rows:
+        ext = str(row.get("external_id") or "")
+        if not ext:
+            continue
+        raw = row.get("raw_meta") or {}
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                raw = {}
+        betfair = raw.get("betfair") or {}
+        if not betfair and isinstance(raw, dict):
+            betfair = raw.get("raw_meta", {}).get("betfair") or {}
+        jingcai = raw.get("jingcai") or {}
+        out[ext] = {
+            "eu_home": row.get("eu_home"),
+            "eu_draw": row.get("eu_draw"),
+            "eu_away": row.get("eu_away"),
+            "ah_line": row.get("ah_line"),
+            "ah_home_water": row.get("ah_home_water"),
+            "ah_away_water": row.get("ah_away_water"),
+            "captured_at": row.get("captured_at"),
+            "raw_meta": raw,
+            "betfair": betfair,
+            "jingcai": jingcai,
+            "kickoff_at": row.get("kickoff_at"),
+        }
+    return out
+
+
+def _fmt_kickoff(dt: datetime | None) -> str:
+    if not isinstance(dt, datetime):
+        return "—"
+    return format_beijing(dt, "%m-%d %H:%M")
+
+
 def load_dashboard_matches(
     output_root: str | Path,
     *,
@@ -295,6 +362,18 @@ def load_dashboard_matches(
             ko_bj <= ref + timedelta(days=days)
         ):
             by_id.setdefault(fid, pred)
+
+    # 合并 PG 最新盘口 + 开赛时间（无预测缓存也能显示）
+    snap_map = _load_odds_snapshot_map(list(by_id.keys()))
+    for fid, m in by_id.items():
+        snap = snap_map.get(fid)
+        if snap:
+            m["odds_snapshot"] = snap
+            if snap.get("kickoff_at"):
+                m["kickoff_at"] = snap["kickoff_at"]
+                m["kickoff_label"] = _fmt_kickoff(snap["kickoff_at"])
+        elif m.get("kickoff_at"):
+            m["kickoff_label"] = _fmt_kickoff(m["kickoff_at"])
 
     return list(by_id.values())
 

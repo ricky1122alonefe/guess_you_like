@@ -447,12 +447,21 @@ def build_recommendation_review(output_root: str | Path, *, days: int = 14) -> d
         log.debug("score_band_stats failed: %s", exc)
         score_band_stats = {"days": days, "total": 0, "bands": []}
 
+    try:
+        from analysis.market.odds_bucket_stats import build_bucket_stats
+
+        odds_bucket_stats = build_bucket_stats(days=90)
+    except Exception as exc:
+        log.debug("odds_bucket_stats failed: %s", exc)
+        odds_bucket_stats = {"home": [], "draw": [], "fav": [], "ah": []}
+
     return {
         "updated_at": now_beijing_str(),
         "total_settled": len(records),
         "with_recommendation": len(judged),
         "accuracy": accuracy,
         "score_band_stats": score_band_stats,
+        "odds_bucket_stats": odds_bucket_stats,
         "review_agent": build_review_agent_report(records),
         "miss_patterns": [{"pattern": k, "count": v} for k, v in top_misses],
         "error_review": {

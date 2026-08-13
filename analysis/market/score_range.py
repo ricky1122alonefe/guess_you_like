@@ -381,24 +381,116 @@ def _extract_poisson(context: dict) -> dict | None:
     if pm:
         return pm
 
-    # 3) 现场算：需要 club_form + elo
-    club_form = context.get("club_form")
-    if not club_form:
-        return None
-    elo_ctx = context.get("elo_context") or {}
-    elo_diff = elo_ctx.get("elo_diff")
-    try:
-        from analysis.quant.poisson import build_poisson_matrix
+    # 3) 现场算：需要队名（从 club_form/recent_form 或 match_name 解析）
+    home_team = context.get("home_team", "")
+    away_team = context.get("away_team", "")
+    if not home_team or not away_team:
+        match_name = context.get("match_name") or ""
+        for sep in (" VS ", " Vs ", " vs ", "VS", "Vs", "vs", "对"):
+            if sep in match_name:
+                parts = match_name.split(sep, 1)
+                home_team, away_team = parts[0].strip(), parts[1].strip()
+                break
+    if home_team and away_team:
+        elo_ctx = context.get("elo_context") or {}
+        elo_diff = elo_ctx.get("elo_diff")
+        try:
+            from analysis.quant.poisson import build_poisson_matrix
 
-        return build_poisson_matrix(
-            context.get("home_team", ""),
-            context.get("away_team", ""),
-            club_form=club_form,
-            elo_diff=elo_diff,
-        )
-    except Exception as exc:
-        log.debug("score_range 现场计算泊松失败: %s", exc)
+            # 不直接传 club_form：内部会按标准结构重新取，避免 recent_form 结构不一致
+            pm = build_poisson_matrix(
+                home_team,
+                away_team,
+                elo_diff=elo_diff,
+            )
+            if pm:
+                return pm
+        except Exception as exc:
+            log.debug("score_range 现场计算泊松失败: %s", exc)
+
+    # 4) history_similar 经验分布
+    history = context.get("history_similar") or []
+    if history:
+        pm = _poisson_from_history(history)
+        if pm:
+            return pm
+
+    # 5) 1X2 去水概率拟合泊松（现有 build_score_model，非新模型）
+    european = context.get("european") or {}
+    implied = european.get("implied") or {}
+    if all(implied.get(k) is not None for k in ("home", "draw", "away")):
+        try:
+            from score_models import build_score_model, score_matrix
+
+            model = build_score_model(
+                fair_home_pct=float(implied["home"]) * 100,
+                fair_draw_pct=float(implied["draw"]) * 100,
+                fair_away_pct=float(implied["away"]) * 100,
+            )
+            if model:
+                cells = score_matrix(
+                    float(model.get("lambda_home")),
+                    float(model.get("lambda_away")),
+                )
+                if cells:
+                    matrix = {
+                        f"{i}-{j}": round(float(p), 5)
+                        for (i, j), p in cells.items()
+                    }
+                    return {"score_matrix": matrix, "source": "1x2_implied"}
+        except Exception as exc:
+            log.debug("score_range 1x2 拟合失败: %s", exc)
+
+    return None
+
+
+def _poisson_from_history(history: dict | list) -> dict | None:
+    """Build an empirical score matrix from similar matches' final scores."""
+    if isinstance(history, dict):
+        # 优先使用聚合后的 top_scores 分布
+        top_scores = history.get("top_scores") or []
+        if top_scores:
+            matrix: dict[str, float] = {}
+            for item in top_scores:
+                score = item.get("score") or ""
+                pct = item.get("pct") or item.get("prob_pct")
+                if not score or pct is None:
+                    continue
+                if "-" not in score:
+                    continue
+                try:
+                    h, a = score.split("-", 1)
+                    int(h), int(a)
+                except (TypeError, ValueError):
+                    continue
+                matrix[score] = round(float(pct) / 100.0, 5)
+            if matrix:
+                return {"score_matrix": matrix, "source": "history_similar_top_scores"}
+        samples = history.get("samples") or []
+    else:
+        samples = history
+
+    counts: dict[tuple[int, int], int] = {}
+    total = 0
+    for m in samples:
+        if not isinstance(m, dict):
+            continue
+        try:
+            h = int(m.get("home_score") or m.get("home") or m.get("score_home") or -1)
+            a = int(m.get("away_score") or m.get("away") or m.get("score_away") or -1)
+        except (TypeError, ValueError):
+            continue
+        if h < 0 or a < 0:
+            continue
+        counts[(h, a)] = counts.get((h, a), 0) + 1
+        total += 1
+    if not total:
         return None
+    matrix = {
+        f"{h}-{a}": round(c / total, 5)
+        for (h, a), c in counts.items()
+    }
+    return {"score_matrix": matrix, "source": "history_similar_empirical"}
 
 
 def _extract_similar(context: dict) -> dict | None:

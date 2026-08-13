@@ -77,6 +77,20 @@ def test_settle_allows_zero_zero_when_finished():
         assert row["score_text"] == "0-0"
 
 
+def test_settle_zero_zero_stamps_verified_0_0():
+    fx = _fixture()
+    score = _score(0, 0, is_finished=True, source="500_data_page")
+    with patch("match_settlement.upsert_match_result") as mock_upsert, \
+         patch("match_settlement.get_opening_tick", return_value=None), \
+         patch("match_settlement.get_closing_tick", return_value=None), \
+         patch("poll_500.ensure_fixture_identity"):
+        assert settle_fixture(fx, score) is True
+        row = mock_upsert.call_args[0][1]
+        assert row["payload"]["verified_0_0"] is True
+        assert row["payload"]["verified_at"]
+        assert row["payload"]["score_source"] == "500_data_page"
+
+
 def test_settle_rejects_dirty_team_names():
     fx = _fixture(home="解放者杯", away="小组赛")
     score = _score(2, 1, is_finished=True)

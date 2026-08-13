@@ -13,7 +13,7 @@ from analysis.market.score_range import build_score_range_forecast
 from analysis.market.value_edge import build_model_edges
 from analysis.result_forecast.context import build_result_forecast_context
 from analysis.result_forecast.engine import forecast_for_match
-from db.connection import ping
+from db.connection import cursor, ping
 from db.repository import get_fixture_by_external, get_match_result_by_external
 from db_timeline import load_match_index_from_db
 from match_timeline import load_match_index as _load_match_index_file
@@ -167,6 +167,122 @@ def _poisson_heatmap(poisson: dict | None) -> list[list] | None:
     return heat or None
 
 
+def _rebuild_poisson_from_teams(
+    fixture_id: str,
+    home_team: str | None,
+    away_team: str | None,
+) -> dict | None:
+    """Last resort: build poisson matrix directly from club form + team names."""
+    if not home_team or not away_team:
+        # try loading from fixtures table
+        try:
+            fx = get_fixture_by_external("500", fixture_id)
+            if not fx:
+                with cursor() as cur:
+                    cur.execute(
+                        "SELECT home_team, away_team, match_name FROM fixtures WHERE external_id = %s",
+                        (fixture_id,),
+                    )
+                    fx = cur.fetchone()
+            if fx:
+                home_team = fx.get("home_team") or home_team
+                away_team = fx.get("away_team") or away_team
+                if not (home_team and away_team):
+                    match_name = fx.get("match_name") or ""
+                    for sep in (" VS ", " Vs ", " vs ", "VS", "Vs", "vs", "对"):
+                        if sep in match_name:
+                            parts = match_name.split(sep, 1)
+                            home_team, away_team = parts[0].strip(), parts[1].strip()
+                            break
+        except Exception as exc:
+            log.debug("load fixture for poisson fallback failed fid=%s: %s", fixture_id, exc)
+    if not home_team or not away_team:
+        return None
+    try:
+        from analysis.quant.poisson import build_poisson_matrix
+
+        return build_poisson_matrix(home_team, away_team)
+    except Exception as exc:
+        log.debug("build_poisson_matrix fallback failed fid=%s: %s", fixture_id, exc)
+        return None
+
+
+def _poisson_from_1x2(context: dict | None, result_forecast: dict | None) -> dict | None:
+    """Fallback: fit a score matrix from existing 1X2 probabilities (elo model or market)."""
+    probs = None
+    if result_forecast:
+        secondary = result_forecast.get("secondary") or {}
+        models = secondary.get("models") or {}
+        elo = models.get("elo") or {}
+        probs = elo.get("p_elo_1x2") or {}
+    if not probs and context:
+        european = context.get("european") or {}
+        if european and european.get("home") is not None:
+            probs = {
+                "home": european.get("home"),
+                "draw": european.get("draw"),
+                "away": european.get("away"),
+            }
+    if not probs:
+        return None
+    try:
+        from score_models import build_score_model, score_matrix
+    except Exception:
+        return None
+    try:
+        model = build_score_model(
+            fair_home_pct=float(probs.get("home", 0)) * 100,
+            fair_draw_pct=float(probs.get("draw", 0)) * 100,
+            fair_away_pct=float(probs.get("away", 0)) * 100,
+        )
+    except Exception as exc:
+        log.debug("build_score_model fallback failed: %s", exc)
+        return None
+    if not model:
+        return None
+    lam_h = model.get("lambda_home")
+    lam_a = model.get("lambda_away")
+    if lam_h is None or lam_a is None:
+        return None
+    cells = score_matrix(float(lam_h), float(lam_a))
+    if not cells:
+        return None
+    matrix = {f"{i}-{j}": round(float(p), 5) for (i, j), p in cells.items()}
+    return {"score_matrix": matrix, "source": "1x2_fitted"}
+
+
+def _resolve_poisson(
+    fixture_id: str,
+    context: dict | None,
+    result_forecast: dict | None,
+    index: dict | None,
+) -> dict | None:
+    """Resolve poisson matrix from multiple fallbacks, no new models."""
+    # 1) context poisson
+    poisson = (context or {}).get("poisson")
+    if poisson:
+        return poisson
+    # 2) result_forecast top-level poisson
+    poisson = (result_forecast or {}).get("poisson")
+    if poisson:
+        return poisson
+    # 3) result_forecast secondary models poisson_matrix
+    if result_forecast:
+        secondary = result_forecast.get("secondary") or {}
+        models = secondary.get("models") or {}
+        poisson = models.get("poisson_matrix")
+        if poisson:
+            return poisson
+    # 4) build from club_form / team names
+    home_team = (context or {}).get("home_team") or (index or {}).get("home_team")
+    away_team = (context or {}).get("away_team") or (index or {}).get("away_team")
+    poisson = _rebuild_poisson_from_teams(fixture_id, home_team, away_team)
+    if poisson:
+        return poisson
+    # 5) fit from existing 1X2 probabilities (elo/market)
+    return _poisson_from_1x2(context, result_forecast)
+
+
 def _edge_bars(
     context: dict, result_forecast: dict, poisson: dict | None
 ) -> list[dict] | None:
@@ -255,6 +371,21 @@ def build_viz_data(output_root: str | Path, fixture_id: str) -> dict[str, Any]:
     if not divergence or divergence.get("missing"):
         missing.append("divergence")
 
+    market_attitude_data = None
+    if context:
+        ma_ctx = context.get("market_attitude") or {}
+        if ma_ctx and "attitude" in ma_ctx:
+            attitude = ma_ctx["attitude"]
+            market_attitude_data = {
+                "labels": attitude.get("labels", []),
+                "supported_side": attitude.get("supported_side"),
+                "strength": attitude.get("strength"),
+                "narrative": attitude.get("narrative"),
+                "evidence": attitude.get("evidence"),
+            }
+    if not market_attitude_data:
+        missing.append("market_attitude")
+
     open_close = _open_close(fid)
     if not open_close:
         missing.append("open_close")
@@ -264,14 +395,13 @@ def build_viz_data(output_root: str | Path, fixture_id: str) -> dict[str, Any]:
     if not any(timeline.values()):
         missing.append("timeline")
 
-    poisson = (context or {}).get("poisson") or (result_forecast or {}).get("poisson")
-    if not poisson and result_forecast:
-        secondary = result_forecast.get("secondary") or {}
-        models = secondary.get("models") or {}
-        poisson = models.get("poisson_matrix")
+    poisson = _resolve_poisson(fid, context, result_forecast, index)
     heatmap = _poisson_heatmap(poisson)
     if not heatmap:
-        missing.append("poisson_heatmap")
+        if not poisson:
+            missing.append("poisson_build_no_inputs")
+        else:
+            missing.append("poisson_heatmap_empty")
 
     edge_bars = None
     if context and result_forecast:
@@ -299,6 +429,7 @@ def build_viz_data(output_root: str | Path, fixture_id: str) -> dict[str, Any]:
         "timeline": timeline,
         "open_close": open_close,
         "divergence": divergence,
+        "market_attitude": market_attitude_data,
         "score_range": sr_out,
         "poisson_heatmap": heatmap,
         "edge_bars": edge_bars,

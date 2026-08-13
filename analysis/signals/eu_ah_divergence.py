@@ -295,6 +295,7 @@ def _divergence_summary(div: dict[str, Any]) -> dict[str, Any]:
     return {
         "fixture_id": div.get("fixture_id") or div.get("external_id"),
         "match": div.get("match"),
+        "source": div.get("source", "unknown"),
         "kickoff": div.get("kickoff") or "—",
         "divergence_score": div.get("divergence_score", 0),
         "severity": div.get("severity"),

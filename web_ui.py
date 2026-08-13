@@ -40,6 +40,22 @@ def _j(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, default=str)
 
 
+def _poll_status_line() -> str:
+    try:
+        from db.repository import get_scraper_state
+
+        state = get_scraper_state("poll_500_last_run")
+        if not state or not state.get("started_at"):
+            return " · 上次 poll：暂无 poll 记录"
+        ts = format_ts(state.get("started_at"))
+        ins = state.get("inserted", 0)
+        unc = state.get("unchanged", 0)
+        err = len(state.get("errors", []))
+        return f" · 上次 poll：{ts} · {ins}/{unc}/{err}"
+    except Exception:
+        return " · 上次 poll：暂无 poll 记录"
+
+
 VIZ_CSS = """
 .viz-grid { display: grid; grid-template-columns: 1fr; gap: 18px; margin-top: 8px; }
 @media (min-width: 768px) { .viz-grid { grid-template-columns: 1fr 1fr; } }
@@ -1373,6 +1389,89 @@ def _chief_report_list_cell(
     )
 
 
+def _to_float(v) -> float | None:
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _devig_cell(snapshot: dict) -> tuple[str, str]:
+    """Return (devig text, favorite cn) from odds_snapshot eu odds."""
+    h = _to_float(snapshot.get("eu_home"))
+    d = _to_float(snapshot.get("eu_draw"))
+    a = _to_float(snapshot.get("eu_away"))
+    if not (h and d and a):
+        return "—", ""
+    try:
+        from analysis.market.devig import devig_1x2
+
+        probs = devig_1x2(h, d, a)
+        fav_key = max(["p_home", "p_draw", "p_away"], key=lambda k: probs.get(k, 0))
+        fav_cn = {"p_home": "主", "p_draw": "平", "p_away": "客"}.get(fav_key, "")
+        return (
+            f"主{probs['p_home']:.0%} / 平{probs['p_draw']:.0%} / 客{probs['p_away']:.0%}",
+            fav_cn,
+        )
+    except Exception:
+        return "—", ""
+
+
+def _ah_cell(snapshot: dict) -> str:
+    line = snapshot.get("ah_line")
+    hw = _to_float(snapshot.get("ah_home_water"))
+    aw = _to_float(snapshot.get("ah_away_water"))
+    if line is None:
+        return "—"
+    hw_txt = f"{hw:.2f}" if hw is not None else "—"
+    aw_txt = f"{aw:.2f}" if aw is not None else "—"
+    return f"{_e(line)} 主{hw_txt} / 客{aw_txt}"
+
+
+def _format_pct(v) -> str | None:
+    f = _to_float(v)
+    if f is None:
+        return None
+    # 兼容 0.62 与 62 两种表示
+    return f"{f:.0f}%" if f > 1 else f"{f * 100:.0f}%"
+
+
+def _betfair_cell(snapshot: dict) -> str:
+    bf = snapshot.get("betfair") or {}
+    if not bf or not bf.get("has_data"):
+        return "—"
+    hot_key = bf.get("hot")
+    pct_map = bf.get("volume_pct") or {}
+    hot_pct = None
+    if isinstance(pct_map, dict) and hot_key in pct_map:
+        hot_pct = _format_pct(pct_map[hot_key])
+    if hot_pct is None and pct_map:
+        vals = [_format_pct(v) for v in pct_map.values() if _to_float(v) is not None]
+        hot_pct = vals[0] if vals else None
+    hot_cn = {"home": "主", "draw": "平", "away": "客"}.get(hot_key, hot_key or "")
+    if hot_cn and hot_pct is not None:
+        return f"{hot_cn} {hot_pct}"
+    return hot_cn or bf.get("summary") or "—"
+
+
+def _jingcai_sp_line(snapshot: dict) -> str:
+    jc = snapshot.get("jingcai") or {}
+    if not jc or (not jc.get("has_sp") and not jc.get("has_rqsp")):
+        return ""
+    parts = []
+    if jc.get("has_sp"):
+        parts.append(
+            f"SP {_e(jc.get('sp_home') or '—')}/{_e(jc.get('sp_draw') or '—')}/{_e(jc.get('sp_away') or '—')}"
+        )
+    if jc.get("has_rqsp"):
+        parts.append(
+            f"让{_e(jc.get('rqsp_home') or '—')}/{_e(jc.get('rqsp_draw') or '—')}/{_e(jc.get('rqsp_away') or '—')}"
+        )
+    return " · ".join(parts) if parts else ""
+
+
 def _dashboard_active_row(
     m: dict,
     indexes: dict,
@@ -1395,7 +1494,6 @@ def _dashboard_active_row(
     elif jc_play == "胜平负":
         pick_cell = f"{pick_cell}<br><span class='meta'>竞彩 SP</span>"
     scores = row.get("推荐比分") or "、".join(m.get("likely_scores_detail") or [])
-    ah = row.get("亚盘") or m.get("asian_handicap_cn") or "—"
     conf = row.get("置信度") or m.get("confidence_cn") or "—"
     tier_cn = m.get("buy_tier_cn") or row.get("购买档位") or "—"
     n_pts = (indexes.get(fid) or {}).get("point_count", 0)
@@ -1424,11 +1522,6 @@ def _dashboard_active_row(
     sweet_flag = "1" if sweet else "0"
     match_day = _kickoff_date(m, kickoff_map) or ""
     detail = f'<a href="/match/{_e(fid)}">趋势 ({n_pts})</a>' if fid else "—"
-    ai_btn = (
-        f'<button type="button" class="btn btn-sm btn-ai" '
-        f'onclick="aiRecommend(\'{_e(fid)}\', this)">AI推荐</button>'
-        if fid else "—"
-    )
     cb = (
         f'<input type="checkbox" class="parlay-cb" data-fid="{_e(fid)}" '
         f'data-tier="{_e(m.get("buy_tier") or "")}" '
@@ -1438,44 +1531,39 @@ def _dashboard_active_row(
         f'data-name="{_e(name)}" onchange="toggleParlayPick(this)" title="勾选：2串1 / 批量推荐图">'
         if fid else "—"
     )
-    sp_cell = _e(sp_val) if sp_val else "—"
     pick_plain = _format_dual_pick(m)
-    chief_cell = _chief_report_list_cell(fid, chief_report, board=agent_board, match=m)
     analysis, _ = _resolve_list_verdict(chief_report, board=agent_board, match=m)
     chief_summary = analysis.get("summary") or ""
     chief_decision = analysis.get("buy_decision") or ""
 
-    # P0: 欧去水/倾向 + 必发热
+    snap = m.get("odds_snapshot") or {}
+    devig_str, devig_fav = _devig_cell(snap)
+    if devig_fav:
+        devig_str += f" · 倾向{devig_fav}"
+    ah_str = _ah_cell(snap)
+    bf_str = _betfair_cell(snap)
+    jc_sp_line = _jingcai_sp_line(snap)
+    jc_sp_html = f"<br><span class='meta'>{_e(jc_sp_line)}</span>" if jc_sp_line else ""
+    kickoff_label = m.get("kickoff_label") or "—"
+
+    # 预测结论优先保留；盘口字段以 DB 最新为准
     rp = m.get("result_prediction") or {}
-    devig_str = "—"
-    if rp.get("p_home"):
-        devig_str = f"主{rp['p_home']:.0%}/平{rp['p_draw']:.0%}/客{rp['p_away']:.0%}"
-    elif m.get("devig_pct"):
-        d = m["devig_pct"]
-        devig_str = f"主{d.get('home',0):.0%}/平{d.get('draw',0):.0%}/客{d.get('away',0):.0%}"
     rule_pick = rp.get("pick_cn") or pick_plain or "—"
     rule_conf = rp.get("confidence_cn") or conf
-
-    # 必发热
-    bf_hot = "—"
-    factors = rp.get("factors") or {}
-    bf = factors.get("betfair")
-    if bf and bf.get("hot"):
-        hot_cn = {"home": "主", "draw": "平", "away": "客"}.get(bf["hot"], "—")
-        bf_hot = f"{hot_cn}{bf['volume_pct'][bf['hot']]:.0%}"
 
     return (
         f"<tr class='dash-row' data-sweet='{sweet_flag}' "
         f"data-acc-grade='{_e(grade)}' data-tier='{_e(m.get('buy_tier') or '')}' "
         f"data-fid='{_e(fid)}' data-name='{_e(name)}' data-pick='{_e(pick_plain)}' "
         f"data-sp='{_e(sp_val)}' data-tier-cn='{_e(tier_cn)}' data-scores='{_e(scores)}' "
-        f"data-ah='{_e(ah)}' data-conf='{_e(conf)}' data-match-date='{_e(match_day)}' "
+        f"data-ah='{_e(ah_str)}' data-conf='{_e(conf)}' data-match-date='{_e(match_day)}' "
         f"data-chief='{_e(chief_decision)}' data-chief-summary='{_e(chief_summary[:80])}'>"
         f"<td class='parlay-pick'>{cb}</td>"
-        f"<td><a href=\"/match/{_e(fid)}\">{_e(name)}</a>{phase_tag}{tier_tag}{acc_tag}{alert_tag}</td>"
+        f"<td><a href=\"/match/{_e(fid)}\">{_e(name)}</a>{phase_tag}{tier_tag}{acc_tag}{alert_tag}{jc_sp_html}</td>"
+        f"<td class='meta'>{_e(kickoff_label)}</td>"
         f"<td>{_e(devig_str)}</td>"
-        f"<td>{_e(ah)}</td>"
-        f"<td>{_e(bf_hot)}</td>"
+        f"<td>{_e(ah_str)}</td>"
+        f"<td>{_e(bf_str)}</td>"
         f"<td><strong>{_e(rule_pick)}</strong> <span class='meta'>{_e(rule_conf)}</span></td>"
         f"<td>{detail}</td></tr>\n"
     )
@@ -1646,11 +1734,11 @@ def html_dashboard(
     if not active_rows:
         if not all_active and _focus_jingcai_only() and not show_all:
             active_rows = (
-                "<tr><td colspan='7'>暂无竞彩在售比赛 · "
+                "<tr><td colspan='8'>暂无竞彩在售比赛 · "
                 "<a href='/?all=1'>显示全部场次</a></td></tr>"
             )
         else:
-            active_rows = "<tr><td colspan='7'>暂无未开赛/进行中比赛</td></tr>"
+            active_rows = "<tr><td colspan='8'>暂无未开赛/进行中比赛</td></tr>"
 
     finished_rows = "".join(
         _dashboard_finished_row(
@@ -1681,6 +1769,8 @@ def html_dashboard(
     lr = state.get("last_run") or {}
     run_status = "运行中" if state.get("running") else "空闲"
     db_count = len(matches) if matches else 0
+
+    poll_line = _poll_status_line()
     if app_cfg.AI_AUTO_ENABLED:
         ai_schedule_txt = f"定时 AI 每 {format_ai_interval()}"
     else:
@@ -1799,7 +1889,7 @@ def html_dashboard(
 <script>{_AI_BTN_JS}{_AI_CHAT_JS}{_DASH_FILTER_JS}{_PARLAY_JS}</script>
 </head><body>
 <h1 class="text-gradient">竞彩盘口 · 赛果预测</h1>
-<p class="meta">{_e(run_status)} · 库内 {_e(db_count)} 场{(' · 仅显示竞彩在售 · <a href="/?all=1">显示全部</a>' if _focus_jingcai_only() and not show_all else (' · <a href="/">仅竞彩</a>' if show_all else ''))}</p>
+<p class="meta">{_e(run_status)} · 库内 {_e(db_count)} 场{_e(poll_line)}{(' · 仅显示竞彩在售 · <a href="/?all=1">显示全部</a>' if _focus_jingcai_only() and not show_all else (' · <a href="/">仅竞彩</a>' if show_all else ''))}</p>
 {_page_nav()}
 <button class="btn" style="margin-bottom:14px" onclick="fetch('/api/run',{{method:'POST'}}).then(r=>r.json()).then(d=>showToast(d.message||d.error||'已触发', !d.ok))">刷新分析</button>
 <a class="btn" href="/daily" style="margin-bottom:14px">当日推荐</a>
@@ -1814,7 +1904,7 @@ def html_dashboard(
   </div>
   <div class="card parlay-result" id="parlay-result"></div>
   <table class="dashboard-table">
-    <tr><th title="勾选场次">选</th><th>比赛</th><th>欧去水/倾向</th><th>亚盘</th><th>必发热</th><th>规则倾向</th><th>详情</th></tr>
+    <tr><th title="勾选场次">选</th><th>比赛</th><th>开赛</th><th>欧去水/倾向</th><th>亚盘</th><th>必发热</th><th>规则倾向</th><th>详情</th></tr>
     {active_rows}
   </table>
 </div>
@@ -1894,7 +1984,7 @@ def _fallback_safe_card(tier: dict | None, *, target: str) -> str:
         '📷 保存保底 2串1 成图</a></p>'
     )
     note = (
-        '<p class="meta floor-note">保底候选：只在同日可售竞彩中选“相对最稳”的两场，'
+        '<p class="meta floor-note">保底候选：只在同日可售竞彩中选"相对最稳"的两场，'
         '用于观望较多时参考，仍建议小仓位。</p>'
     )
     return f'<section class="floor-section"><h2>🛟 最保底 2串1</h2>{note}{share}{card}</section>'
@@ -2758,7 +2848,7 @@ def _agent_final_panel(chief_report: dict | None) -> str:
         return """
 <div class="workbench-final missing">
   <h2>暂无最终报告</h2>
-  <p>请先点击“运行多 Agent 总分析”，系统会生成专家证据板、Prompt、AI 原始输出和最终结构化结论。</p>
+  <p>请先点击"运行多 Agent 总分析"，系统会生成专家证据板、Prompt、AI 原始输出和最终结构化结论。</p>
 </div>"""
     report = _e(analysis.get("final_report_md") or "")
     conflicts = "".join(f"<li>{_e(x)}</li>" for x in (analysis.get("conflicts") or [])[:8])
@@ -2820,7 +2910,7 @@ def _ai_model_tabs(prediction: dict | None, ai_records: list[dict] | None, deep_
         return """
 <div class="card ai-tabs-card">
   <h3>多 AI 分析 Tabs</h3>
-  <p class="meta">暂无多模型 AI 记录。先在单场页运行“AI 推荐本场”或“AI 深度分析”。</p>
+  <p class="meta">暂无多模型 AI 记录。先在单场页运行"AI 推荐本场"或"AI 深度分析"。</p>
 </div>"""
     btns = ""
     panels = ""
@@ -5751,6 +5841,9 @@ def html_recommendation_review(report: dict) -> str:
     else:
         band_chart_html = ""
 
+    odds_bucket_stats = report.get("odds_bucket_stats") or {}
+    odds_bucket_html = _odds_bucket_review_html(odds_bucket_stats)
+
     review_css = _shared_css("""
 .hero-card { background: linear-gradient(135deg, #fefce8 0%, #fff 55%); border: 1px solid #fde047; }
 .cmp-ok { color: #047857; font-weight: 700; }
@@ -5880,6 +5973,8 @@ function sortReview(kind) {{
 
 {band_chart_html}
 
+{odds_bucket_html}
+
 {_review_agent_block(review_agent)}
 
 {_error_review_block(error_review)}
@@ -5925,6 +6020,108 @@ function sortReview(kind) {{
   <p class="meta">预判取自 settle 时归档的开球前 Agent 分析；点击比赛名可看演变与 AI 记录。</p>
 </div>
 </body></html>"""
+
+
+def _odds_bucket_review_html(stats: dict) -> str:
+    import config as app_cfg
+
+    if not stats:
+        return ""
+    home = stats.get("home") or []
+    fav = stats.get("fav") or []
+    if not home and not fav:
+        return ""
+
+    def rows(buckets: list[dict], fav: bool = False) -> str:
+        out = ""
+        for b in buckets:
+            n = b.get("n", 0)
+            reliable = b.get("reliable", False)
+            style = "color:#64748b" if not reliable else ""
+            cells = [
+                f"<td>{_e(b.get('bucket'))}</td>",
+                f"<td>{n}</td>",
+                f"<td>{_pct(b.get('rate_home'))}</td>",
+                f"<td>{_pct(b.get('rate_draw'))}</td>",
+                f"<td>{_pct(b.get('rate_away'))}</td>",
+            ]
+            if fav:
+                cells.append(f"<td>{_pct(b.get('fav_hit_rate'))}</td>")
+            cells += [
+                f"<td>{_pct(b.get('mkt_implied_avg'))}</td>",
+                f"<td>{_edge(b.get('edge_vs_mkt'))}</td>",
+                f"<td style='{style}'>{'可靠' if reliable else '小样本'}</td>",
+            ]
+            out += "<tr>" + "".join(cells) + "</tr>"
+        return out
+
+    home_rows = rows(home)
+    fav_rows = rows(fav, fav=True)
+    return f"""
+<div class="card">
+  <h2>赔率桶命中率</h2>
+  <p class="meta">近 90 天已结算样本；灰色为样本 &lt;{stats.get('meta', {}).get('min_n', getattr(app_cfg, 'ODDS_BUCKET_MIN_N', 20))}。</p>
+  <div class="review-table-wrap">
+  <table class="review-table">
+    <thead>
+      <tr><th>主胜赔桶</th><th>n</th><th>主%</th><th>平%</th><th>客%</th><th>去水隐含%</th><th>edge</th><th>可靠</th></tr>
+    </thead>
+    <tbody>{home_rows}</tbody>
+  </table>
+  </div>
+  <div class="review-table-wrap" style="margin-top:12px">
+  <table class="review-table">
+    <thead>
+      <tr><th>热门最短赔桶</th><th>n</th><th>主%</th><th>平%</th><th>客%</th><th>热门命中%</th><th>去水隐含%</th><th>edge</th><th>可靠</th></tr>
+    </thead>
+    <tbody>{fav_rows}</tbody>
+  </table>
+  </div>
+</div>
+"""
+
+
+def _edge(v) -> str:
+    if v is None:
+        return "—"
+    sign = "+" if v >= 0 else ""
+    return f"{sign}{v:.1%}"
+
+
+def _odds_bucket_context_line(fixture_id: str) -> str:
+    try:
+        from analysis.market.odds_bucket_stats import build_odds_bucket_context
+
+        ctx = build_odds_bucket_context(fixture_id)
+    except Exception:
+        return ""
+    if not ctx or ctx.get("home_odds") is None:
+        return ""
+    home_bucket = ctx.get("home_bucket") or {}
+    fav_bucket = ctx.get("fav_bucket") or {}
+    notes = ctx.get("notes") or []
+    ah_bucket = ctx.get("ah_bucket") or {}
+    source = ctx.get("source") or ""
+
+    def rate(v):
+        if v is None:
+            return "—"
+        return f"{v:.0%}"
+
+    parts = [
+        f"主胜赔 {ctx['home_odds']:.2f}（{source}）→ 桶 {home_bucket.get('bucket', '—')}",
+        f"历史主/平/客 {rate(home_bucket.get('rate_home'))} / {rate(home_bucket.get('rate_draw'))} / {rate(home_bucket.get('rate_away'))}（n={home_bucket.get('n', 0)}）",
+    ]
+    if home_bucket.get("edge_vs_mkt") is not None:
+        parts.append(f"去水 edge {home_bucket['edge_vs_mkt']:+.1%}")
+    if fav_bucket:
+        parts.append(f"热门桶 {fav_bucket.get('bucket', '—')} 命中 {rate(fav_bucket.get('fav_hit_rate'))}")
+    if ah_bucket:
+        parts.append(f"亚盘桶 {ah_bucket.get('bucket', '—')} 主/平/客 {rate(ah_bucket.get('rate_home'))} / {rate(ah_bucket.get('rate_draw'))} / {rate(ah_bucket.get('rate_away'))}")
+    note_html = ""
+    if notes:
+        note_html = '<span class="tag warn">' + "</span> <span class=\"tag warn\">".join(_e(n) for n in notes) + "</span>"
+    return f'<div class="card"><p class="meta">{" · ".join(parts)}</p>{note_html}</div>'
 
 
 def html_quant_analytics(report: dict) -> str:
@@ -8056,6 +8253,8 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
     viz_card = _viz_charts_card(viz or {}, fid)
     viz_fold = _fold("可视化：开盘/分歧/泊松/Edge", viz_card, muted=True, export_slug="viz")
 
+    odds_bucket_line = _odds_bucket_context_line(str(fid))
+
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head>
 <meta charset="utf-8"/>
@@ -8087,6 +8286,7 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
 {form_card}
 {history_similar_card}
 {result_forecast_card}
+{odds_bucket_line}
 {viz_fold}
 {ai_payload_card}
 <div class="fold-stack">

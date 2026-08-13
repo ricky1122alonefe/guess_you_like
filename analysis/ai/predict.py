@@ -60,6 +60,8 @@ def run_one_match(
     provider_id: str = "deepseek",
     provider_label: str = "DeepSeek 精算师",
     poll_meta: dict | None = None,
+    fixture_id: str | None = None,
+    output_root: str | Path | None = None,
     verbose: bool = True,
 ) -> tuple[dict, dict, dict]:
     """单场比赛的完整 AI 分析流程。
@@ -80,9 +82,17 @@ def run_one_match(
     )
     if poll_meta:
         payload["poll_meta"] = poll_meta
+    if fixture_id:
+        payload["fixture_id"] = fixture_id
     rec = build_recommendation(payload)
     baseline = recommendation_to_baseline(rec)
-    ctx = enrich_analysis_context(payload, baseline=baseline, mode=mode)
+    ctx = enrich_analysis_context(
+        payload,
+        baseline=baseline,
+        mode=mode,
+        fixture_id=fixture_id,
+        output_root=output_root or "output/service",
+    )
 
     system_prompt = EXPERT_SYSTEM_PROMPT if mode == "expert" else LOCKED_SYSTEM_PROMPT
 
@@ -128,7 +138,13 @@ def run_one_match(
     content = chat(
         [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": build_user_prompt(payload, baseline, mode=mode)},
+            {
+                "role": "user",
+                "content": build_user_prompt(
+                    payload, baseline, mode=mode,
+                    fixture_id=fixture_id, output_root=output_root or "output/service",
+                ),
+            },
         ],
         model=model,
         temperature=0.2 if mode == "expert" else 0.1,

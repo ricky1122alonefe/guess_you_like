@@ -299,7 +299,10 @@ def _extract_existing_match_name(m: dict) -> tuple[str, str] | None:
 
 
 def _try_fix_name_from_500(fid: str) -> tuple[str, str] | None:
-    """从 500 亚盘分析页抓取真实队名；失败或仍脏返回 None。"""
+    """从 500 亚盘分析页抓取真实队名；失败或仍脏返回 None。
+
+    注意：会打外网，首页默认路径不要调用（见 allow_network）。
+    """
     try:
         from download_500 import _session, fetch_match_info
 
@@ -331,38 +334,47 @@ def _write_back_clean_name(fid: str, home: str, away: str, source: str) -> None:
         log.warning("写回干净队名失败 fid=%s: %s", fid, exc)
 
 
-def _resolve_dashboard_name(fid: str, m: dict, db: dict | None) -> str:
-    """首页队名解析优先级：DB 干净名 > 实时修正 > 现有干净名 > 占位符。"""
+def _resolve_dashboard_name(
+    fid: str,
+    m: dict,
+    db: dict | None,
+    *,
+    allow_network: bool = False,
+) -> str:
+    """首页队名解析优先级：DB 干净名 > 现有干净名 >（可选）实时修正 > 占位符。"""
     # 1) DB 干净名优先（挡住 live 脏名覆盖）
     if db and not is_dirty_team_label(db["home"]) and not is_dirty_team_label(db["away"]):
         return f"{db['home']} VS {db['away']}"
 
-    # 2) DB 脏名尝试实时回填
-    if db and (is_dirty_team_label(db["home"]) or is_dirty_team_label(db["away"])):
-        fixed = _try_fix_name_from_500(fid)
-        if fixed:
-            home, away = fixed
-            _write_back_clean_name(fid, home, away, db.get("source", "500"))
-            return f"{home} VS {away}"
-
-    # 3) 现有名若干净则直接用
+    # 2) 现有名若干净则直接用（首页默认不打外网）
     existing = _extract_existing_match_name(m)
     if existing and not is_dirty_team_label(existing[0]) and not is_dirty_team_label(existing[1]):
         return f"{existing[0]} VS {existing[1]}"
 
-    # 4) 无 DB 记录的脏 live 名也尝试实时回填
-    fixed = _try_fix_name_from_500(fid)
-    if fixed:
-        home, away = fixed
-        _write_back_clean_name(fid, home, away, db.get("source", "500") if db else "500")
-        return f"{home} VS {away}"
+    # 3) 可选：脏名实时回填（仅允许网络时）
+    if allow_network:
+        if db and (is_dirty_team_label(db["home"]) or is_dirty_team_label(db["away"])):
+            fixed = _try_fix_name_from_500(fid)
+            if fixed:
+                home, away = fixed
+                _write_back_clean_name(fid, home, away, db.get("source", "500"))
+                return f"{home} VS {away}"
+        fixed = _try_fix_name_from_500(fid)
+        if fixed:
+            home, away = fixed
+            _write_back_clean_name(fid, home, away, db.get("source", "500") if db else "500")
+            return f"{home} VS {away}"
 
-    # 5) 仍脏 → 占位符
+    # 4) 仍脏 → 占位符（不阻塞首页）
     m["_team_name_suspicious"] = True
+    if existing:
+        return f"{existing[0]} VS {existing[1]}"
+    if db:
+        return f"{db['home']} VS {db['away']}"
     return f"队名待核 ({fid})"
 
 
-def _resolve_dashboard_names(matches: list[dict]) -> None:
+def _resolve_dashboard_names(matches: list[dict], *, allow_network: bool = False) -> None:
     """批量修正首页展示队名并同步 predict_row["比赛"]，标记异常队名。"""
     if not matches:
         return
@@ -372,7 +384,9 @@ def _resolve_dashboard_names(matches: list[dict]) -> None:
         fid = str(m.get("fixture_id") or m.get("fid") or "")
         if not fid:
             continue
-        resolved = _resolve_dashboard_name(fid, m, db_map.get(fid))
+        resolved = _resolve_dashboard_name(
+            fid, m, db_map.get(fid), allow_network=allow_network,
+        )
         m["match"] = resolved
         pr = dict(m.get("predict_row") or {})
         pr["比赛"] = resolved
@@ -411,9 +425,64 @@ def _get_result_prediction(fid: str, force: bool = False) -> dict | None:
     reasons = rp.get("reasons") or []
     rp["_divergent"] = any("分歧" in r or "⚠" in r for r in reasons)
     rp["_cached_at"] = now
+    rp.pop("_approx", None)
+    rp.pop("missing", None)
     _result_pred_cache[fid] = (now, rp)
 
     return rp
+
+
+def _peek_cached_result_prediction(fid: str) -> dict | None:
+    """仅读短缓存，不触发真算。"""
+    fid = str(fid)
+    cached_at, cached = _result_pred_cache.get(fid, (0, {}))
+    if cached and time.time() - cached_at < _RESULT_PRED_TTL_SECONDS:
+        return cached
+    return None
+
+
+def _cheap_result_prediction_from_match(m: dict) -> dict:
+    """首页非关注场：用欧赔/竞彩 SP 瞬时倾向，避免 sync forecast_for_match。"""
+    pick_key = _market_favorite_key(m)
+    snap = m.get("odds_snapshot") or {}
+    jc = snap.get("jingcai") if isinstance(snap.get("jingcai"), dict) else {}
+    if not jc:
+        jc = m.get("jingcai_snapshot") if isinstance(m.get("jingcai_snapshot"), dict) else {}
+    # 竞彩 SP 优先：最低 SP 作倾向
+    sp_vals = []
+    for key, cn in (("sp_home", "主胜"), ("sp_draw", "平局"), ("sp_away", "客胜")):
+        try:
+            v = float(jc.get(key)) if jc.get(key) not in (None, "", "—") else None
+        except (TypeError, ValueError):
+            v = None
+        if v and v > 1.0:
+            sp_vals.append((v, key.replace("sp_", ""), cn))
+    if sp_vals:
+        sp_vals.sort(key=lambda x: x[0])
+        pick_key = sp_vals[0][1]
+        pick_cn = sp_vals[0][2]
+        reason = f"竞彩SP瞬时倾向（未全量规则）"
+    elif pick_key:
+        pick_cn = KEY_TO_CN.get(pick_key, "观望")
+        reason = "欧赔瞬时倾向（未全量规则）"
+    else:
+        return {
+            "pick": "skip",
+            "pick_cn": "观望",
+            "confidence_cn": "-",
+            "reasons": ["首页轻量模式·缺少盘口"],
+            "missing": True,
+            "_approx": True,
+        }
+
+    return {
+        "pick": pick_key,
+        "pick_cn": pick_cn,
+        "confidence_cn": "低",
+        "reasons": [reason],
+        "_approx": True,
+        "_divergent": False,
+    }
 
 
 def _team_names_suspicious(home: str, away: str) -> bool:
@@ -447,9 +516,11 @@ def _enrich_result_predictions(
     focus_fids: set[str] | None = None,
     force_refresh: bool = False,
 ) -> None:
-    """对首页可见未完场逐场真算 result_prediction；focus 场优先且 bypass 短缓存。"""
+    """首页规则倾向：关注场（或强制刷新）真算；其余用缓存或盘口轻量倾向。
+
+    全量 sync forecast_for_match 约数秒/场，会拖垮首页。
+    """
     focus_fids = focus_fids or set()
-    # focus 场放最前计算
     ordered = sorted(
         matches,
         key=lambda m: (
@@ -461,18 +532,37 @@ def _enrich_result_predictions(
         fid = str(m.get("fixture_id") or m.get("fid") or "")
         if not fid or _match_finished(m):
             continue
-        force = force_refresh or fid in focus_fids
-        rp = _get_result_prediction(fid, force=force)
-        if rp:
-            m["result_prediction"] = rp
-        else:
-            m["result_prediction"] = {
+
+        # 强制刷新：仍真算全部（测试 / 手动刷新）
+        if force_refresh:
+            rp = _get_result_prediction(fid, force=True)
+            m["result_prediction"] = rp or {
                 "pick": "skip",
                 "pick_cn": "观望",
                 "confidence_cn": "-",
                 "reasons": ["缺少盘口或计算失败"],
                 "missing": True,
             }
+            continue
+
+        # 关注场：真算（可走短缓存）
+        if fid in focus_fids:
+            rp = _get_result_prediction(fid, force=False)
+            m["result_prediction"] = rp or {
+                "pick": "skip",
+                "pick_cn": "观望",
+                "confidence_cn": "-",
+                "reasons": ["缺少盘口或计算失败"],
+                "missing": True,
+            }
+            continue
+
+        # 普通场：缓存命中用真算结果，否则盘口轻量倾向（不阻塞）
+        cached = _peek_cached_result_prediction(fid)
+        if cached:
+            m["result_prediction"] = cached
+        else:
+            m["result_prediction"] = _cheap_result_prediction_from_match(m)
 
 
 def _load_odds_snapshot_map(external_ids: list[str]) -> dict[str, dict]:

@@ -214,7 +214,10 @@ def _format_samples(matches: pd.DataFrame, limit: int) -> list[dict]:
     cols = [
         "date", "home", "away", "score_h", "score_a",
         "result_1x2", "ah_line", "ah_home_water", "ah_away_water",
-        "eu_home", "eu_draw", "eu_away", "competition", "source",
+        "eu_home", "eu_draw", "eu_away",
+        "eu_home_open", "eu_draw_open", "eu_away_open",
+        "ah_line_open", "ah_home_water_open", "ah_away_water_open",
+        "competition", "source",
         "ah_home_result", "ah_away_result", "_similarity_dist",
     ]
     pick = [c for c in cols if c in matches.columns]

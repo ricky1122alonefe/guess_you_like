@@ -44,6 +44,17 @@ def _compact_sample(row: dict) -> dict:
             if row.get("eu_home") is not None
             else "—"
         ),
+        "eu_open": (
+            f"{_fmt_num(row.get('eu_home_open'))}/{_fmt_num(row.get('eu_draw_open'))}/{_fmt_num(row.get('eu_away_open'))}"
+            if row.get("eu_home_open") is not None
+            else "—"
+        ),
+        "ah_open": _fmt_num(row.get("ah_line_open")),
+        "ah_open_water": (
+            f"{_fmt_num(row.get('ah_home_water_open'))}/{_fmt_num(row.get('ah_away_water_open'))}"
+            if row.get("ah_home_water_open") is not None or row.get("ah_away_water_open") is not None
+            else "—"
+        ),
         "similarity": row.get("similarity_dist"),
         "source": "/".join(str(x) for x in (row.get("competition"), row.get("source")) if x),
     }

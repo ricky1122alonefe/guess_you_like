@@ -424,7 +424,7 @@ def build_viz_data(output_root: str | Path, fixture_id: str) -> dict[str, Any]:
         sr_out["exact_top"] = score_range.get("exact_top") or []
         sr_out["missing"] = score_range.get("missing") or []
 
-    return {
+    viz = {
         "fixture_id": fid,
         "timeline": timeline,
         "open_close": open_close,
@@ -436,6 +436,13 @@ def build_viz_data(output_root: str | Path, fixture_id: str) -> dict[str, Any]:
         "settled_hits": settled_hits,
         "missing": missing,
     }
+    try:
+        from analysis.result_forecast.viz_summary import build_viz_summary
+
+        viz["summary"] = build_viz_summary(viz)
+    except Exception:
+        viz["summary"] = None
+    return viz
 
 
 def get_viz_or_404(output_root: str | Path, fixture_id: str) -> tuple[dict, int]:

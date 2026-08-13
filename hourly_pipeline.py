@@ -197,6 +197,7 @@ def _predict_one(
     ai_base_url: str | None,
     ai_profile: AiProfile | None = None,
     fixture_id: str | None = None,
+    output_root: str | Path | None = None,
 ):
     cur = parse_match_pair(str(ah_path), str(eu_path))
     predict_date = now_beijing_str("%Y-%m-%d")
@@ -225,6 +226,8 @@ def _predict_one(
             provider_id=prof.provider_id,
             provider_label=prof.label,
             poll_meta=poll_meta or None,
+            fixture_id=fixture_id,
+            output_root=output_root,
             verbose=False,
         )
         rec = recommendation_from_dict(result)
@@ -280,6 +283,7 @@ def _predict_multi_ai(
     ai_mode: str,
     profiles: list[AiProfile],
     fixture_id: str | None = None,
+    output_root: str | Path | None = None,
 ) -> dict:
     analyses: dict[str, dict] = {}
     errors: list[str] = []
@@ -294,6 +298,7 @@ def _predict_multi_ai(
                 ai_base_url=prof.base_url,
                 ai_profile=prof,
                 fixture_id=fixture_id,
+                output_root=output_root,
             )
             analyses[prof.provider_id] = pred
             log.info("AI %s → %s", prof.label, final_recommendation_cn(pred))
@@ -361,6 +366,7 @@ def run_single_match_ai(
                 ai_base_url=profiles[0].base_url,
                 ai_profile=profiles[0],
                 fixture_id=fid,
+                output_root=root,
             )
         else:
             pred = _predict_multi_ai(
@@ -369,6 +375,7 @@ def run_single_match_ai(
                 ai_mode=ai_mode,
                 profiles=profiles,
                 fixture_id=fid,
+                output_root=root,
             )
         pred["fixture_id"] = fid
         pred["run_id"] = run_id
@@ -568,6 +575,7 @@ def run_hourly_job(
                             ai_mode=ai_mode,
                             profiles=profiles,
                             fixture_id=fid,
+                            output_root=output_root,
                         )
                         summary.ai_called += len(profiles)
                     else:
@@ -580,6 +588,7 @@ def run_hourly_job(
                             ai_base_url=ai_base_url,
                             ai_profile=profiles[0] if profiles else None,
                             fixture_id=fid,
+                            output_root=output_root,
                         )
                         if ai_for_match:
                             summary.ai_called += 1

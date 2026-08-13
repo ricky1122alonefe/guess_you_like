@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -22,14 +24,54 @@ from ai_schema import (
     VALID_CONF,
     VALID_OU,
 )
+from analysis.market.devig import devig_1x2
 from analysis_context import build_analysis_context
 
-EXPERT_SYSTEM_PROMPT = """你现在是一位拥有 20 年经验的顶级体育赛事精算师（Actuary）与风控复核员。
-你的工作不是「预测」比赛一定会发生什么，而是汇总系统提供的结构化数据，给出概率上的大概方向、期望值（Expected Value, EV）与风险决策。
+
+def _json_default(obj: Any) -> Any:
+    """JSON 序列化兜底：Decimal → float，datetime → isoformat，其余 → str。"""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    iso = getattr(obj, "isoformat", None)
+    if callable(iso):
+        try:
+            return iso()
+        except Exception:
+            pass
+    return str(obj)
+
+
+def _json_dumps_safe(obj: Any, *, ensure_ascii: bool = False, indent: int = 2) -> str:
+    """json.dumps 的容错封装，避免因 Decimal/datetime 等非原生类型导致 500。"""
+    return json.dumps(obj, ensure_ascii=ensure_ascii, indent=indent, default=_json_default)
+
+EXPERT_SYSTEM_PROMPT = """你现在是一位拥有 20 年经验的顶级足球盘口精算师兼风控复核员。
+你不是球迷解说，只根据系统桌面提供的结构化数据做概率与 EV 判断。
+工作输入仅限：竞彩SP/RQSP、水位、欧亚分歧、变盘/市场态度、同赔与预计算EV、（有则）战绩。
+禁止新闻臆造、禁止无数据编近况、禁止把欧赔方向当成用户可购推荐。
 你必须绝对理性，摒弃任何球迷情感与主观偏好。
 
 ══════════════════════════════════════
-〇、竞彩投注（最高优先级）
+〇、精算师桌：输入顺序（actuary_input）
+══════════════════════════════════════
+系统会按以下桌面顺序喂料，禁止跳过或自行补充未提供的数据：
+1) 竞彩：SP开→临、水位/让球、去水%、可售玩法
+2) 分歧：eu_ah_divergence 分数+一句 advice
+3) 水位/变盘：亚盘水与线、market_attitude 一句
+4) 规则桌：result_forecast pick/p/reasons（供复核）
+5) 同赔+EV+诱盘（辅助）
+6) missing[] 显式；missing 项禁止编造
+
+══════════════════════════════════════
+〇点五、专家口头推理顺序（写入 actuary_reasoning / analysis_basis）
+══════════════════════════════════════
+按以下顺序压缩输出你的判断过程：
+看可购价 → 看隐含与历史是否 EV → 看分歧是否打架 → 看水位/态度是否支持 → 给「倾向/小注/放弃」+ 竞彩可购方向。
+
+══════════════════════════════════════
+一、竞彩投注（最高优先级）
 ══════════════════════════════════════
 用户只购买国内竞彩。最终推荐必须对应 actuary_input.竞彩SP 中「可售玩法」：
 - 有胜平负 SP → recommendation / result_1x2_cn 即竞彩胜平负（主胜/平局/客胜）
@@ -38,7 +80,7 @@ EXPERT_SYSTEM_PROMPT = """你现在是一位拥有 20 年经验的顶级体育�
 禁止输出用户无法购买的欧赔/亚盘方向作为最终推荐。
 
 ══════════════════════════════════════
-一、核心原则
+二、核心原则
 ══════════════════════════════════════
 1. 只做概率评估与 EV 判断，不做情绪化赛果猜测。
 2. 所有数字（概率、样本量、盘口、水位、比分）只能来自用户提供的 actuary_input 与 structured_data，禁止编造。
@@ -47,7 +89,7 @@ EXPERT_SYSTEM_PROMPT = """你现在是一位拥有 20 年经验的顶级体育�
 5. 只返回下方 JSON，禁止额外文字、markdown 代码块。
 
 ══════════════════════════════════════
-二、强制推理步骤（必须按序完成，写在 actuary_reasoning / analysis_basis 中）
+三、强制推理步骤（必须按序完成，写在 actuary_reasoning / analysis_basis 中）
 ══════════════════════════════════════
 Step 1 基准概率：引用 actuary_input / structured_data 中代码预计算的去水隐含概率 → implied_probability，禁止自行重算或改写数字。
 Step 2 历史修正：引用 precomputed_ev / historical_similar_samples 的实际打出频率；若历史概率显著高于隐含概率，可能存在 EV+。
@@ -58,14 +100,14 @@ Step 6 EV 决策：比较 adjusted_probability 与隐含概率，判定 value_be
 Step 7 结果表述：final_verdict 必须写成「倾向/大概方向 + 风险条件」，不得写成确定性断言。
 
 ══════════════════════════════════════
-三、输入数据说明
+四、输入数据说明
 ══════════════════════════════════════
 用户会提供 actuary_input（人类可读标签）与 structured_data（完整 JSON）。
 优先阅读 actuary_input；需要细节时查 structured_data。
 external_factors 中未提供的项（如天气/新闻）不得臆造，应标注「数据未接入」。
 
 ══════════════════════════════════════
-四、必须输出的 JSON（精算师报告 + 投注建议）
+五、必须输出的 JSON（精算师报告 + 投注建议）
 ══════════════════════════════════════
 【精算师核心 — 必填】
 - implied_probability: {"主胜":"x%","平":"y%","客胜":"z%"}  ← 去水后的欧赔隐含概率
@@ -105,7 +147,7 @@ external_factors 中未提供的项（如天气/新闻）不得臆造，应标�
 - analysis_basis: 4-7 条，【层级】格式，含【EV结论】与【综合结论】
 
 ══════════════════════════════════════
-五、一致性约束
+六、一致性约束
 ══════════════════════════════════════
 - recommendation 与 result_1x2 / result_1x2_cn 必须一致
 - confidence_level 与 confidence / confidence_cn 必须一致
@@ -119,7 +161,7 @@ external_factors 中未提供的项（如天气/新闻）不得臆造，应标�
 - 禁止使用「稳胆」「必出」「确定」「稳赢」等确定性表述
 
 ══════════════════════════════════════
-六、输出 JSON 结构示例
+七、输出 JSON 结构示例
 ══════════════════════════════════════
 {
   "implied_probability": {"主胜":"42.3%","平":"28.1%","客胜":"29.6%"},
@@ -906,11 +948,440 @@ def build_writing_templates(ctx: dict) -> dict:
     }
 
 
+def _devig_probabilities(
+    home: float | None, draw: float | None, away: float | None
+) -> dict:
+    """Compute devigged probabilities from 1x2 odds and return human-readable dict."""
+    try:
+        h = float(home)
+        d = float(draw)
+        a = float(away)
+        probs = devig_1x2([h, d, a])
+        margin = round((1 / h + 1 / d + 1 / a - 1) * 100, 2)
+        return {
+            "主胜": f"{_pct_num(probs[0])}%" if probs[0] is not None else "—",
+            "平": f"{_pct_num(probs[1])}%" if probs[1] is not None else "—",
+            "客胜": f"{_pct_num(probs[2])}%" if probs[2] is not None else "—",
+            "margin_percent": margin,
+        }
+    except Exception:
+        return {
+            "主胜": "—",
+            "平": "—",
+            "客胜": "—",
+            "margin_percent": None,
+            "error": "去水失败",
+        }
+
+
+def _build_jingcai_block(ctx: dict) -> dict:
+    jc = ctx.get("jingcai") or {}
+    if not jc:
+        return {"available": False, "note": "未抓取到竞彩数据"}
+
+    play_types = []
+    if jc.get("has_sp"):
+        play_types.append("胜平负")
+    if jc.get("has_rqsp"):
+        play_types.append("让球胜平负")
+
+    sp_open = {
+        "主胜": jc.get("sp_home_open") or "—",
+        "平": jc.get("sp_draw_open") or "—",
+        "客胜": jc.get("sp_away_open") or "—",
+    }
+    sp_live = {
+        "主胜": jc.get("sp_home") or "—",
+        "平": jc.get("sp_draw") or "—",
+        "客胜": jc.get("sp_away") or "—",
+    }
+    if all(v == "—" for v in sp_open.values()):
+        sp_open = "未抓取开盘SP，仅展示临盘"
+
+    rqsp_open = {
+        "主胜": jc.get("rqsp_home_open") or "—",
+        "平": jc.get("rqsp_draw_open") or "—",
+        "客胜": jc.get("rqsp_away_open") or "—",
+    }
+    rqsp_live = {
+        "主胜": jc.get("rqsp_home") or "—",
+        "平": jc.get("rqsp_draw") or "—",
+        "客胜": jc.get("rqsp_away") or "—",
+    }
+    if all(v == "—" for v in rqsp_open.values()):
+        rqsp_open = "未抓取开盘RQSP，仅展示临盘"
+
+    devig = {}
+    if jc.get("has_sp"):
+        devig["胜平负"] = _devig_probabilities(
+            jc.get("sp_home"), jc.get("sp_draw"), jc.get("sp_away")
+        )
+    if jc.get("has_rqsp"):
+        devig["让球胜平负"] = _devig_probabilities(
+            jc.get("rqsp_home"), jc.get("rqsp_draw"), jc.get("rqsp_away")
+        )
+
+    return {
+        "available": bool(play_types),
+        "match_num": jc.get("match_num") or jc.get("match_number") or "—",
+        "play_types": play_types,
+        "sp_open_live": {"open": sp_open, "live": sp_live},
+        "rqsp_open_live": {
+            "open": rqsp_open,
+            "live": rqsp_live,
+            "handicap": jc.get("handicap") or jc.get("handicap_label") or "—",
+        },
+        "devig_probabilities": devig,
+        "note": "竞彩SP/RQSP为可购价格，去水概率供隐含概率参考",
+    }
+
+
+def _build_divergence_block(ctx: dict) -> dict:
+    div = ctx.get("divergence") or {}
+    if not div:
+        return {"available": False, "note": "未计算欧亚分歧"}
+    return {
+        "available": True,
+        "score": div.get("divergence_score"),
+        "severity": div.get("severity_cn"),
+        "advice": div.get("advice") or "—",
+        "signals": (div.get("signals") or [])[:5],
+        "line_gap": div.get("line_gap"),
+        "consistency": div.get("consistency"),
+    }
+
+
+def _build_market_block(ctx: dict) -> dict:
+    cur = ctx.get("current_odds") or {}
+    ah_open = cur.get("asian_handicap_open") or {}
+    ah_live = cur.get("asian_handicap_live") or {}
+    movement = ctx.get("odds_movement") or {}
+    ma = ctx.get("market_attitude") or {}
+    return {
+        "available": bool(ah_open or ah_live or ma),
+        "ah_open": {
+            "line": ah_open.get("line") or "—",
+            "home_water": ah_open.get("home_water") or "—",
+            "away_water": ah_open.get("away_water") or "—",
+        },
+        "ah_live": {
+            "line": ah_live.get("line") or "—",
+            "home_water": ah_live.get("home_water") or "—",
+            "away_water": ah_live.get("away_water") or "—",
+        },
+        "market_attitude": {
+            "labels": (ma.get("labels") or [])[:4],
+            "supported_side": ma.get("supported_side"),
+            "strength": ma.get("strength"),
+            "narrative": ma.get("narrative") or "—",
+        },
+        "live_movement": (movement.get("asian_handicap") or [])[:4],
+    }
+
+
+def _build_result_forecast_block(ctx: dict) -> dict:
+    rf = ctx.get("result_forecast") or {}
+    if not rf:
+        rf = ctx.get("reference_baseline") or {}
+    if not rf:
+        return {"available": False, "note": "未生成规则桌预测"}
+    return {
+        "available": True,
+        "pick": rf.get("result_1x2_cn") or rf.get("pick") or "—",
+        "p": rf.get("p") if rf.get("p") is not None else rf.get("confidence", "—"),
+        "reasons": (rf.get("reasons") or [])[:6],
+        "score_range": rf.get("score_range"),
+        "baseline_evidence": rf.get("evidence", [])[:6],
+    }
+
+
+def _build_similar_ev_trap_block(ctx: dict) -> dict:
+    hist = (
+        ctx.get("history_similar")
+        or ctx.get("historical_open_asian")
+        or ctx.get("historical_open_eu")
+        or {}
+    )
+    ev = ctx.get("precomputed_ev") or ctx.get("ev_data") or {}
+    control = ctx.get("control_analysis") or {}
+    trap = ctx.get("trap_analysis") or {}
+    mp = ctx.get("market_patterns") or {}
+    form = ctx.get("form") or ctx.get("recent_form") or ctx.get("club_form") or {}
+    external = ctx.get("external_factors") or {}
+    betfair = ctx.get("betfair") or {}
+
+    def _hist_summary(h: dict) -> str:
+        if not h:
+            return "无历史同赔样本"
+        n = h.get("sample_count") or h.get("n") or 0
+        home_rate = h.get("home_win_rate") or h.get("主胜")
+        draw_rate = h.get("draw_rate") or h.get("平局")
+        away_rate = h.get("away_win_rate") or h.get("客胜")
+        return (
+            f"同赔样本 {n} 场，主胜 {home_rate or '—'}，平局 {draw_rate or '—'}，"
+            f"客胜 {away_rate or '—'}；场均进球 {h.get('avg_total_goals', '—')}"
+        )
+
+    return {
+        "similar_summary": _hist_summary(hist),
+        "ev": {
+            "edge_side": ev.get("edge_side") or ev.get("side"),
+            "edge_pp": ev.get("edge_pp") if ev.get("edge_pp") is not None else ev.get("edge"),
+            "value_bet": ev.get("value_bet"),
+            "confidence": ev.get("confidence"),
+            "implied_probabilities": ev.get("implied_probabilities", {}),
+            "adjusted_probabilities": ev.get("adjusted_probabilities", {}),
+        },
+        "trap_control": {
+            "control_level": control.get("level_cn", "—"),
+            "control_score": control.get("score"),
+            "patterns": [
+                p.get("name")
+                for p in (mp.get("patterns") or [])
+                if p.get("name")
+            ][:4],
+            "trap_notes": trap.get("notes", [])[:4]
+            if isinstance(trap.get("notes"), list)
+            else [],
+        },
+        "form": {
+            "available": bool(form),
+            "home": str(form.get("home_form") or form.get("home") or "—")[:120],
+            "away": str(form.get("away_form") or form.get("away") or "—")[:120],
+        },
+        "betfair": betfair if betfair else "未接入必发数据",
+        "external_factors": external if external else "未接入外部因素",
+    }
+
+
+def _collect_missing(ctx: dict) -> list[str]:
+    missing = []
+    jc = ctx.get("jingcai") or {}
+    if not jc.get("has_sp") and not jc.get("has_rqsp"):
+        missing.append("jingcai")
+    if not ctx.get("divergence"):
+        missing.append("divergence")
+    if not ctx.get("market_attitude"):
+        missing.append("market_attitude")
+    if not ctx.get("result_forecast") and not ctx.get("reference_baseline"):
+        missing.append("result_forecast")
+    hist = (
+        ctx.get("history_similar")
+        or ctx.get("historical_open_asian")
+        or ctx.get("historical_open_eu")
+    )
+    if not hist:
+        missing.append("historical_similar_samples")
+    ev = ctx.get("precomputed_ev") or ctx.get("ev_data")
+    if not ev:
+        missing.append("precomputed_ev")
+    form = ctx.get("form") or ctx.get("recent_form") or ctx.get("club_form")
+    if not form:
+        missing.append("team_recent_form/club_form")
+    if jc.get("has_rqsp") and not (jc.get("handicap") or jc.get("handicap_label")):
+        missing.append("jingcai_handicap")
+    return missing
+
+
+def build_ai_expert_desk_payload(ctx: dict) -> dict:
+    """Build the actuary desk payload in the required desktop order.
+
+    1) 竞彩
+    2) 分歧
+    3) 水位/变盘
+    4) 规则桌
+    5) 同赔+EV+诱盘
+    6) missing[]
+    """
+    return {
+        "jingcai": _build_jingcai_block(ctx),
+        "divergence": _build_divergence_block(ctx),
+        "market": _build_market_block(ctx),
+        "result_forecast": _build_result_forecast_block(ctx),
+        "similar_ev_trap": _build_similar_ev_trap_block(ctx),
+        "missing": _collect_missing(ctx),
+    }
+
+
+def attach_expert_desk_sources(
+    ctx: dict,
+    *,
+    fixture_id: str | None = None,
+    prediction: dict | None = None,
+    output_root: str | Path | None = None,
+) -> dict:
+    """Populate expert desk sources into ctx before build_ai_expert_desk_payload.
+
+    Sources are filled only when missing/empty. Order matches the desktop:
+    1) jingcai
+    2) divergence
+    3) market_attitude
+    4) result_forecast
+    5) club_form / recent_form
+    6) current_odds / odds_movement / precomputed_ev / history_similar /
+       control_analysis / market_patterns / trap_analysis / external_factors / betfair
+    """
+    pred = prediction or {}
+    factors = (
+        (pred.get("result_prediction") or {}).get("factors")
+        or (pred.get("result_forecast") or {}).get("factors")
+        or {}
+    )
+    fid = fixture_id
+
+    # 1) jingcai
+    if not ctx.get("jingcai"):
+        jc = (
+            pred.get("jingcai")
+            or (pred.get("poll_meta") or {}).get("jingcai")
+            or (pred.get("result_prediction") or {}).get("jingcai")
+        )
+        if not jc and fid:
+            try:
+                from timeline_merge import load_latest_poll_meta
+
+                pm = load_latest_poll_meta(fid)
+                jc = pm.get("jingcai") if pm else None
+            except Exception:
+                jc = None
+        ctx["jingcai"] = jc or {}
+
+    # 2) divergence
+    if not ctx.get("divergence"):
+        div = pred.get("divergence") or (pred.get("result_prediction") or {}).get("divergence")
+        if not div and fid:
+            try:
+                from analysis.result_forecast.divergence import build_eu_ah_divergence
+                from match_timeline import load_match_index
+
+                idx = load_match_index(output_root, fid) if output_root else None
+                div = build_eu_ah_divergence(fid, index=idx)
+            except Exception:
+                div = None
+        ctx["divergence"] = div or {}
+
+    # 3) market_attitude
+    if not ctx.get("market_attitude"):
+        ma = pred.get("market_attitude") or (pred.get("result_prediction") or {}).get("market_attitude")
+        if not ma and fid:
+            try:
+                from analysis.market.market_attitude import (
+                    build_move_features,
+                    classify_market_attitude,
+                )
+                from match_timeline import load_match_index
+
+                idx = load_match_index(output_root, fid) if output_root else None
+                move = build_move_features(fid, index=idx)
+                ma = classify_market_attitude(move) if move else None
+            except Exception:
+                ma = None
+        ctx["market_attitude"] = ma or {}
+
+    # 4) result_forecast
+    if not ctx.get("result_forecast"):
+        rf = pred.get("result_prediction") or pred.get("forecast") or pred.get("result_forecast")
+        if not rf and fid:
+            try:
+                from analysis.result_forecast.engine import forecast_for_match
+                from match_timeline import load_match_index
+
+                idx = load_match_index(output_root, fid) if output_root else None
+                rf = forecast_for_match(fid, index=idx, prediction=pred)
+            except Exception:
+                rf = None
+        ctx["result_forecast"] = rf or {}
+
+    # 5) club_form / recent_form
+    if not (ctx.get("club_form") or ctx.get("recent_form")):
+        form_ctx = None
+        if fid:
+            try:
+                from analysis.result_forecast.context import build_result_forecast_context
+                from match_timeline import load_match_index
+
+                idx = load_match_index(output_root, fid) if output_root else None
+                form_ctx = build_result_forecast_context(
+                    fid, index=idx, prediction=pred, include_club_form=True
+                )
+            except Exception:
+                form_ctx = None
+        if form_ctx:
+            if form_ctx.get("club_form"):
+                ctx["club_form"] = form_ctx["club_form"]
+            if form_ctx.get("recent_form"):
+                ctx["recent_form"] = form_ctx["recent_form"]
+            if not ctx.get("history_similar") and form_ctx.get("history_similar"):
+                ctx["history_similar"] = form_ctx["history_similar"]
+
+    # 6) auxiliary fields from prediction if still missing
+    if not ctx.get("current_odds"):
+        ctx["current_odds"] = {
+            "european_open": (factors.get("european") or {}).get("open") or {},
+            "european_live": (factors.get("european") or {}).get("live") or {},
+            "asian_handicap_open": (factors.get("asian") or {}).get("open") or {},
+            "asian_handicap_live": (factors.get("asian") or {}).get("live") or {},
+        }
+    if not ctx.get("odds_movement"):
+        ctx["odds_movement"] = pred.get("odds_movement") or {}
+    existing_ev = ctx.get("precomputed_ev") or {}
+    has_edge = bool(
+        existing_ev.get("edge_side")
+        or existing_ev.get("edge_pp") is not None
+        or existing_ev.get("value_bet") is not None
+    )
+    if not has_edge:
+        pred_ev = (
+            pred.get("precomputed_ev")
+            or (pred.get("result_prediction") or {}).get("ev")
+            or (pred.get("result_forecast") or {}).get("ev")
+            or factors.get("ev")
+        )
+        if pred_ev:
+            ctx["precomputed_ev"] = {**existing_ev, **pred_ev}
+    existing_hist = ctx.get("history_similar") or {}
+    has_hist = bool(
+        existing_hist.get("sample_count")
+        or existing_hist.get("n")
+        or existing_hist.get("home_win_rate")
+    )
+    if not has_hist:
+        pred_hist = pred.get("history_similar") or factors.get("history_similar")
+        if pred_hist:
+            ctx["history_similar"] = pred_hist
+    if not ctx.get("control_analysis"):
+        ctx["control_analysis"] = (
+            pred.get("control_analysis") or factors.get("control_analysis") or {}
+        )
+    if not ctx.get("market_patterns"):
+        ctx["market_patterns"] = (
+            pred.get("market_patterns") or factors.get("market_patterns") or {}
+        )
+    if not ctx.get("trap_analysis"):
+        ctx["trap_analysis"] = (
+            pred.get("trap_analysis") or factors.get("trap_analysis") or {}
+        )
+    if not ctx.get("external_factors"):
+        ctx["external_factors"] = (
+            pred.get("external_factors") or factors.get("external_factors") or {}
+        )
+    if not ctx.get("betfair"):
+        ctx["betfair"] = (
+            pred.get("betfair")
+            or (pred.get("poll_meta") or {}).get("betfair")
+            or factors.get("betfair")
+            or {}
+        )
+
+    return ctx
+
+
 def enrich_analysis_context(
     payload: dict,
     *,
     baseline: dict | None = None,
     mode: str = "expert",
+    fixture_id: str | None = None,
     output_root: str | Path = "output/service",
 ) -> dict:
     bl = baseline
@@ -930,25 +1401,39 @@ def enrich_analysis_context(
         ctx["poll_captured_at"] = poll["captured_at"]
     ctx["mode"] = mode
     ctx["reference_baseline"] = bl
+    attach_expert_desk_sources(ctx, fixture_id=fixture_id, prediction=payload, output_root=output_root)
     ctx["writing_templates"] = build_writing_templates(ctx)
     ctx["required_historical_cases"] = build_required_historical_cases(ctx, limit=3)
     ctx["suggested_risks"] = pick_suggested_risks(ctx, count=2)
     ctx["evidence_brief"] = build_evidence_brief(ctx, bl, expert=expert)
-    ctx["actuary_input"] = build_actuary_input_brief(ctx)
+    ctx["actuary_input"] = build_ai_expert_desk_payload(ctx)
     ctx["writing_templates"]["analysis_basis"] = ctx["evidence_brief"]["lines"]
     ctx["allowed_json_keys"] = list(EXPERT_OUTPUT_KEYS if expert else ANALYSIS_JSON_KEYS)
     return ctx
 
 
-def build_expert_user_prompt(payload: dict, baseline: dict) -> str:
-    ctx = enrich_analysis_context(payload, baseline=baseline, mode="expert")
+def build_expert_user_prompt(
+    payload: dict,
+    baseline: dict,
+    *,
+    fixture_id: str | None = None,
+    output_root: str | Path = "output/service",
+) -> str:
+    fid = fixture_id or payload.get("fixture_id") or payload.get("external_id")
+    ctx = enrich_analysis_context(
+        payload,
+        baseline=baseline,
+        mode="expert",
+        fixture_id=fid,
+        output_root=output_root,
+    )
     actuary = ctx.get("actuary_input") or {}
     return (
         "请严格按 SYSTEM 要求，以精算师身份输出纯 JSON（精算师报告 + 投注明细 + 论证分析）。\n"
         "══════════════════════════════════════\n"
         "【精算师输入 — actuary_input】\n"
         "以下标签由本地数据库/规则引擎预计算，禁止编造替代数字：\n\n"
-        f"{json.dumps(actuary, ensure_ascii=False, indent=2)}\n\n"
+        f"{_json_dumps_safe(actuary)}\n\n"
         "══════════════════════════════════════\n"
         "【推理要求】\n"
         "1. 按 Step1→Step5 完成 EV 评估，写入 actuary_reasoning 与 analysis_basis。\n"
@@ -961,12 +1446,25 @@ def build_expert_user_prompt(payload: dict, baseline: dict) -> str:
         "8. final_verdict 写成概率性决策：倾向、参与价值、风险条件；不得写稳赢/必出。\n\n"
         "══════════════════════════════════════\n"
         "【完整结构化数据 — structured_data】\n"
-        f"{json.dumps(ctx, ensure_ascii=False, indent=2)}"
+        f"{_json_dumps_safe(ctx)}"
     )
 
 
-def build_locked_user_prompt(payload: dict, baseline: dict) -> str:
-    ctx = enrich_analysis_context(payload, baseline=baseline, mode="locked")
+def build_locked_user_prompt(
+    payload: dict,
+    baseline: dict,
+    *,
+    fixture_id: str | None = None,
+    output_root: str | Path = "output/service",
+) -> str:
+    fid = fixture_id or payload.get("fixture_id") or payload.get("external_id")
+    ctx = enrich_analysis_context(
+        payload,
+        baseline=baseline,
+        mode="locked",
+        fixture_id=fid,
+        output_root=output_root,
+    )
     ctx["baseline_recommendation"] = baseline
     return (
         "请严格按 SYSTEM 要求输出纯 JSON（9 个 key，无多余字段）。\n"
@@ -975,14 +1473,25 @@ def build_locked_user_prompt(payload: dict, baseline: dict) -> str:
         "选 2 条客观改写；analysis_basis 必须覆盖 evidence_brief.required_layers 每一层，"
         "数字引用 evidence_brief.layers 或 baseline_recommendation，可微调措辞不可改数字。\n"
         "baseline_recommendation 是既定推荐，你只论证，不得修改或提出相反结论。\n\n"
-        f"{json.dumps(ctx, ensure_ascii=False, indent=2)}"
+        f"{_json_dumps_safe(ctx)}"
     )
 
 
-def build_user_prompt(payload: dict, baseline: dict, *, mode: str = "expert") -> str:
+def build_user_prompt(
+    payload: dict,
+    baseline: dict,
+    *,
+    mode: str = "expert",
+    fixture_id: str | None = None,
+    output_root: str | Path = "output/service",
+) -> str:
     if mode == "locked":
-        return build_locked_user_prompt(payload, baseline)
-    return build_expert_user_prompt(payload, baseline)
+        return build_locked_user_prompt(
+            payload, baseline, fixture_id=fixture_id, output_root=output_root
+        )
+    return build_expert_user_prompt(
+        payload, baseline, fixture_id=fixture_id, output_root=output_root
+    )
 
 
 def _extract_json_text(content: str) -> str:
@@ -1230,13 +1739,13 @@ def build_deep_analysis_user_prompt(bundle: dict[str, Any]) -> str:
         "请严格按 SYSTEM 要求输出纯 JSON（深度分析二次研判）。\n"
         "══════════════════════════════════════\n"
         "【首轮 AI 精算结论 — prior_analyses】\n"
-        f"{json.dumps(bundle.get('prior_analyses') or [], ensure_ascii=False, indent=2)}\n\n"
+        f"{_json_dumps_safe(bundle.get('prior_analyses') or [])}\n\n"
         "══════════════════════════════════════\n"
         "【比赛上下文 — match_context】\n"
-        f"{json.dumps(bundle.get('match_context') or {}, ensure_ascii=False, indent=2)}\n\n"
+        f"{_json_dumps_safe(bundle.get('match_context') or {})}\n\n"
         "══════════════════════════════════════\n"
         "【规则引擎参考 — rule_baseline】\n"
-        f"{json.dumps(bundle.get('rule_baseline') or {}, ensure_ascii=False, indent=2)}\n\n"
+        f"{_json_dumps_safe(bundle.get('rule_baseline') or {})}\n\n"
         "请完成深度综合：挑刺首轮结论、细化比分分布、给出可执行的竞彩方案与仓位建议。"
     )
 

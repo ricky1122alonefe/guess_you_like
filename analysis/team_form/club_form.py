@@ -74,7 +74,7 @@ def _summary_row(team: str, matches: list[dict], perspective: str) -> dict:
 
 
 def _sample_rows(team: str, matches: list[dict], perspective: str, max_n: int = 10) -> list[dict]:
-    """取该队近 N 场带 closing 赔率的样本摘要（用于 UI 列表）。"""
+    """取该队近 N 场带 closing/opening 赔率的样本摘要（用于 UI 列表）。"""
     samples: list[dict] = []
     for m in matches[:max_n]:
         is_home = m["home_team"] == team
@@ -86,9 +86,14 @@ def _sample_rows(team: str, matches: list[dict], perspective: str, max_n: int = 
             "match": f"{m['home_team']} {my_score}-{opp_score} {m['away_team']}",
             "is_home": is_home,
             "result": result,
+            "home_score": my_score if is_home else opp_score,
+            "away_score": opp_score if is_home else my_score,
             "closing_eu_home": _safe_float(m.get("closing_eu_home")),
             "closing_eu_draw": _safe_float(m.get("closing_eu_draw")),
             "closing_eu_away": _safe_float(m.get("closing_eu_away")),
+            "opening_eu_home": _safe_float(m.get("closing_eu_open_home")),
+            "opening_eu_draw": _safe_float(m.get("closing_eu_open_draw")),
+            "opening_eu_away": _safe_float(m.get("closing_eu_open_away")),
             "closing_ah_line": m.get("closing_ah_line"),
             "closing_ah_home_water": _safe_float(m.get("closing_ah_home_water")),
             "closing_ah_away_water": _safe_float(m.get("closing_ah_away_water")),
@@ -168,6 +173,7 @@ def _query_team_matches(team: str, perspective: str, limit: int) -> list[dict]:
                 f"""SELECT f.home_team, f.away_team, f.kickoff_at,
                            mr.home_score, mr.away_score, mr.result_1x2,
                            mr.closing_eu_home, mr.closing_eu_draw, mr.closing_eu_away,
+                           mr.closing_eu_open_home, mr.closing_eu_open_draw, mr.closing_eu_open_away,
                            mr.closing_ah_line, mr.closing_ah_home_water, mr.closing_ah_away_water
                     FROM match_results mr
                     JOIN fixtures f ON f.id = mr.fixture_id
@@ -210,16 +216,20 @@ def build_club_form(
     home_resolved = _resolve_team_name(home_team, league_name)
     away_resolved = _resolve_team_name(away_team, league_name)
 
-    # Overall
+    home_name_mapped = home_resolved != home_team
+    away_name_mapped = away_resolved != away_team
+    # 如果原样返回且查不到结果，需要区分「未映射」还是「库无赛果」
     home_all = _query_team_matches(home_resolved, "all", window)
     away_all = _query_team_matches(away_resolved, "all", window)
     home_overall = _summary_row(home_team, home_all, "all")
     away_overall = _summary_row(away_team, away_all, "all")
 
     if not home_overall or home_overall.get("played", 0) == 0:
-        missing.append(f"home_overall({home_team})")
+        reason = "队名未映射" if not home_name_mapped else "库无赛果"
+        missing.append(f"home_overall({home_team}): {reason}")
     if not away_overall or away_overall.get("played", 0) == 0:
-        missing.append(f"away_overall({away_team})")
+        reason = "队名未映射" if not away_name_mapped else "库无赛果"
+        missing.append(f"away_overall({away_team}): {reason}")
 
     # Split: 主队主场 / 客队客场
     home_home = _query_team_matches(home_resolved, "home", split_n)
@@ -228,9 +238,11 @@ def build_club_form(
     away_at_away = _summary_row(away_team, away_away, "away")
 
     if not home_at_home or home_at_home.get("played", 0) == 0:
-        missing.append(f"home_at_home({home_team})")
+        reason = "队名未映射" if not home_name_mapped else "库无赛果/样本不足"
+        missing.append(f"home_at_home({home_team}): {reason}")
     if not away_at_away or away_at_away.get("played", 0) == 0:
-        missing.append(f"away_at_away({away_team})")
+        reason = "队名未映射" if not away_name_mapped else "库无赛果/样本不足"
+        missing.append(f"away_at_away({away_team}): {reason}")
 
     # 样本带赔率比例
     def _eu_ratio(matches: list[dict]) -> float:

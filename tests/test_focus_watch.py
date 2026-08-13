@@ -101,6 +101,23 @@ class TestDashboardPredictionEnrichment:
         assert rp.get("missing") is True
         assert rp["pick"] == "skip"
 
+    def test_non_focus_uses_cheap_without_forecast(self):
+        from daily_picks import _enrich_result_predictions, _result_pred_cache
+
+        _result_pred_cache.clear()
+        matches = [
+            {
+                "fixture_id": "1",
+                "odds_snapshot": {"eu_home": 1.5, "eu_draw": 4.0, "eu_away": 6.0},
+            }
+        ]
+        with patch("analysis.result_forecast.engine.forecast_for_match") as mocked:
+            _enrich_result_predictions(matches, focus_fids=set(), force_refresh=False)
+        mocked.assert_not_called()
+        rp = matches[0]["result_prediction"]
+        assert rp.get("_approx") is True
+        assert rp["pick_cn"] == "主胜"
+
 
 class TestTeamNameSuspicious:
     def test_same_team_suspicious(self):

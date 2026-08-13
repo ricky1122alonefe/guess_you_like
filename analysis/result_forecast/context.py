@@ -570,6 +570,18 @@ def build_result_forecast_context(
     if not recent:
         missing.append("recent_form")
 
+    # 同时保留 club_form 原结构供 viz summary 使用
+    club_form = None
+    try:
+        from analysis.team_form.club_form import build_club_form
+
+        parts = match_name.replace(" VS ", " vs ").replace(" Vs ", " vs ").split(" vs ")
+        if len(parts) == 2:
+            h, a = parts[0].strip(), parts[1].strip()
+            club_form = build_club_form(h, a)
+    except Exception:
+        pass
+
     # 盘口 lifecycle（开盘 vs 临盘）
     market_open_close = None
     try:
@@ -608,6 +620,7 @@ def build_result_forecast_context(
         "history_similar": history,
         "recent_form": recent,
         "recent_missing_reason": recent_missing_reason,
+        "club_form": club_form,
         "missing": missing,
     }
 

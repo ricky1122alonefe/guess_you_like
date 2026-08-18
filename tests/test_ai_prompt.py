@@ -22,9 +22,18 @@ def test_expert_system_prompt_has_actuary_desk_order():
 def test_expert_system_prompt_has_oral_reasoning_steps():
     assert "专家口头推理顺序" in EXPERT_SYSTEM_PROMPT
     assert "看可购价" in EXPERT_SYSTEM_PROMPT
-    assert "看分歧是否打架" in EXPERT_SYSTEM_PROMPT
+    assert "变数会不会把边吃掉" in EXPERT_SYSTEM_PROMPT
     assert "给「倾向/小注/放弃」" in EXPERT_SYSTEM_PROMPT
     assert "竞彩可购方向" in EXPERT_SYSTEM_PROMPT
+
+
+def test_expert_system_prompt_has_judgment_layers():
+    assert "数学 / 研判 / 判断" in EXPERT_SYSTEM_PROMPT
+    assert "泊松热力是比分概率分布" in EXPERT_SYSTEM_PROMPT
+    assert "match_variables" in EXPERT_SYSTEM_PROMPT
+    assert "judgment_condition" in EXPERT_SYSTEM_PROMPT
+    assert "【变数研判】" in EXPERT_SYSTEM_PROMPT
+    assert "数字覆盖不了这些变数" in EXPERT_SYSTEM_PROMPT
 
 
 def _base_ctx() -> dict:
@@ -88,7 +97,12 @@ def _base_ctx() -> dict:
     }
 
 
-def test_expert_desk_payload_has_required_keys():
+def test_expert_desk_payload_has_judgment_frame():
+    payload = build_ai_expert_desk_payload(_base_ctx())
+    frame = payload["judgment_frame"]
+    assert frame["math_is_baseline"] is True
+    assert "数学基准" in frame["note"]
+    assert frame["required_layers"] == ["数学基准", "变数研判", "判断"]
     payload = build_ai_expert_desk_payload(_base_ctx())
     assert set(payload.keys()) == {
         "jingcai",
@@ -97,6 +111,7 @@ def test_expert_desk_payload_has_required_keys():
         "result_forecast",
         "similar_ev_trap",
         "missing",
+        "judgment_frame",
     }
 
 

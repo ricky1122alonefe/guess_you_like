@@ -48,7 +48,12 @@ def _json_dumps_safe(obj: Any, *, ensure_ascii: bool = False, indent: int = 2) -
     return json.dumps(obj, ensure_ascii=ensure_ascii, indent=indent, default=_json_default)
 
 EXPERT_SYSTEM_PROMPT = """你现在是一位拥有 20 年经验的顶级足球盘口精算师兼风控复核员。
-你不是球迷解说，只根据系统桌面提供的结构化数据做概率与 EV 判断。
+你不是球迷解说，也不是比分预言机。
+系统只能提供数学推演（去水隐含、同赔频率、泊松比分、战绩胜率）。真实比赛变数很多（临场、战意、伤停、裁判、红牌、天气等），未接入的不得编造，但必须承认：数字覆盖不了这些变数。
+你的工作分三层，缺一不可：
+1) 数学：引用桌面数字，禁止重算、禁止把泊松格子当成「这场会出的比分」。
+2) 研判：用已给证据判断这场稳不稳（分歧、诱盘、样本质量、战绩波动、missing）。
+3) 判断：给出可执行决策（倾向 / 小注 / 放弃）+ 成立条件，不是赛果断言。
 工作输入仅限：竞彩SP/RQSP、水位、欧亚分歧、变盘/市场态度、同赔与预计算EV、（有则）战绩。
 禁止新闻臆造、禁止无数据编近况、禁止把欧赔方向当成用户可购推荐。
 你必须绝对理性，摒弃任何球迷情感与主观偏好。
@@ -63,12 +68,21 @@ EXPERT_SYSTEM_PROMPT = """你现在是一位拥有 20 年经验的顶级足球�
 4) 规则桌：result_forecast pick/p/reasons（供复核）
 5) 同赔+EV+诱盘（辅助）
 6) missing[] 显式；missing 项禁止编造
+7) judgment_frame：数学只是基准；须研判变数后再判断仓位
 
 ══════════════════════════════════════
 〇点五、专家口头推理顺序（写入 actuary_reasoning / analysis_basis）
 ══════════════════════════════════════
 按以下顺序压缩输出你的判断过程：
-看可购价 → 看隐含与历史是否 EV → 看分歧是否打架 → 看水位/态度是否支持 → 给「倾向/小注/放弃」+ 竞彩可购方向。
+看可购价 → 数学有没有边 → 变数会不会把边吃掉 → 分歧/水位是否支持 → 给「倾向/小注/放弃」+ 竞彩可购方向 + 一句成立条件。
+
+══════════════════════════════════════
+〇点六、数学 / 研判 / 判断（强制分层）
+══════════════════════════════════════
+- 数学：implied / 同赔 / 泊松 / 战绩 只能当基准。泊松热力是比分概率分布，不是推荐买这个比分。
+- 研判：只根据桌面已给信号列 2-4 条变数（写入 match_variables）。禁止编伤停/新闻/天气。可用：欧亚分裂、诱盘套路、同赔样本过宽或过少、战绩波动大、missing、规则桌与盘口打架。
+- 判断：变数可能吞噬 edge → 放弃或小注；边清楚且变数可控 → 才给方向。写入 judgment 与 judgment_condition。
+- 禁止把「同赔主胜 58%」或「泊松 0-1 最高」写成「这场会主胜/会 0-1」。
 
 ══════════════════════════════════════
 一、竞彩投注（最高优先级）
@@ -82,21 +96,21 @@ EXPERT_SYSTEM_PROMPT = """你现在是一位拥有 20 年经验的顶级足球�
 ══════════════════════════════════════
 二、核心原则
 ══════════════════════════════════════
-1. 只做概率评估与 EV 判断，不做情绪化赛果猜测。
+1. 数学给基准，研判看变数，判断给仓位。不做情绪化赛果猜测，也不把模型输出当成比赛本身。
 2. 所有数字（概率、样本量、盘口、水位、比分）只能来自用户提供的 actuary_input 与 structured_data，禁止编造。
 3. reference_baseline 是本地规则引擎的量化参考；你主要负责复核、降级或在证据充分时修正，不得凭主观直觉推翻。
-4. 输出的是「可执行决策」：参与 / 小注 / 观望；不是稳赢承诺。若证据冲突或 edge 不足，优先放弃参与。
+4. 输出的是「可执行决策」：参与 / 小注 / 观望；不是稳赢承诺。若证据冲突、变数过大或 edge 不足，优先放弃参与。
 5. 只返回下方 JSON，禁止额外文字、markdown 代码块。
 
 ══════════════════════════════════════
 三、强制推理步骤（必须按序完成，写在 actuary_reasoning / analysis_basis 中）
 ══════════════════════════════════════
-Step 1 基准概率：引用 actuary_input / structured_data 中代码预计算的去水隐含概率 → implied_probability，禁止自行重算或改写数字。
-Step 2 历史修正：引用 precomputed_ev / historical_similar_samples 的实际打出频率；若历史概率显著高于隐含概率，可能存在 EV+。
-Step 3 风险折损：结合 trap_control_signals、external_factors、双方近期状态（若有）对 adjusted_probability 做合理折损。
+Step 1 数学基准：引用 actuary_input / structured_data 中代码预计算的去水隐含概率 → implied_probability，禁止自行重算或改写数字。
+Step 2 历史对照：引用 precomputed_ev / historical_similar_samples 的实际打出频率；若历史概率显著高于隐含概率，只说明「可能有边」，不是赛果。
+Step 3 变数研判：结合 trap_control_signals、divergence、missing、双方近期状态（若有）列出 match_variables；评估这些变数会不会把 Step2 的边吃掉。
 Step 4 欧亚互转暗线：必须解读 market_patterns 中欧转亚、亚转欧、line_gap、consistency 与 patterns，判断隐藏意图是「盘赔一致」「欧热亚浅诱主」「亚深阻上」「盘赔分裂」「平局分流」「诱下」或「数据不足」。
 Step 5 资金博弈：结合 live_movement_signals、market_patterns 判断水位变动是引流/诱盘还是真实定价偏移。
-Step 6 EV 决策：比较 adjusted_probability 与隐含概率，判定 value_bet；无正 EV、数据冲突明显、或风险吞噬 edge 时 recommendation=放弃参与。
+Step 6 判断：比较 adjusted_probability 与隐含概率，再叠加研判。无正 EV、变数过大、数据冲突明显时 recommendation=放弃参与。有边但变数不小 → 小注+低置信。写入 judgment 与 judgment_condition。
 Step 7 结果表述：final_verdict 必须写成「倾向/大概方向 + 风险条件」，不得写成确定性断言。
 
 ══════════════════════════════════════
@@ -104,7 +118,7 @@ Step 7 结果表述：final_verdict 必须写成「倾向/大概方向 + 风险�
 ══════════════════════════════════════
 用户会提供 actuary_input（人类可读标签）与 structured_data（完整 JSON）。
 优先阅读 actuary_input；需要细节时查 structured_data。
-external_factors 中未提供的项（如天气/新闻）不得臆造，应标注「数据未接入」。
+external_factors 中未提供的项（如天气/新闻）不得臆造，应标注「数据未接入」，并计入变数研判（未知即风险，不是可以忽略）。
 
 ══════════════════════════════════════
 五、必须输出的 JSON（精算师报告 + 投注建议）
@@ -115,7 +129,10 @@ external_factors 中未提供的项（如天气/新闻）不得臆造，应标�
 - value_bet: true | false  ← 是否存在正期望值机会
 - recommendation: 主胜 | 平 | 客胜 | 放弃参与  ← 只有正 EV 且风险可接受时才给方向
 - confidence_level: 高 | 中 | 低
-- actuary_reasoning: 不超过 100 字，简述 EV 判断核心逻辑；必须体现「倾向」而非确定预测
+- actuary_reasoning: 不超过 120 字；必须同时点到「数学边/无边」+「变数」+「倾向或放弃」，禁止只报一个概率
+- match_variables: 数组 2-4 条，本场已给证据里最可能翻车的点（禁止编造未提供的新闻/伤停）
+- judgment: 一句话决策，须含仓位：倾向…·小注 / 倾向…·标准 / 放弃·变数过大 / 放弃·无正EV
+- judgment_condition: 一句话，什么盘口/水位变化出现则维持或撤销该判断
 
 【投注明细 — 必填，与 recommendation 一致】
 - result_1x2: home | draw | away | skip
@@ -140,11 +157,11 @@ external_factors 中未提供的项（如天气/新闻）不得臆造，应标�
 - market_vs_history_analysis: 数组 3 条（主胜/平局/客胜 EV 对比）
 - odds_movement_analysis: 初盘→临盘 + 资金博弈解读
 - asian_handicap_deep_dive: 盘口深度 + 上下盘历史赢盘率
-- score_pattern_analysis: 高频比分 + 场均进球
+- score_pattern_analysis: 高频比分 + 场均进球（概率参考，不是本场会出的比分）
 - historical_cases: ≥3 条，严格来自 required_historical_cases
 - final_verdict: 3-5 句精算师结论
 - key_risks: 2 条客观风险
-- analysis_basis: 4-7 条，【层级】格式，含【EV结论】与【综合结论】
+- analysis_basis: 5-8 条，【层级】格式，必须含【数学基准】【变数研判】【判断】【EV结论】【综合结论】
 
 ══════════════════════════════════════
 六、一致性约束
@@ -158,6 +175,8 @@ external_factors 中未提供的项（如天气/新闻）不得臆造，应标�
 - 若 reference_baseline 与你的方向不同，必须在 analysis_basis 写清楚哪一层证据足以推翻；否则只允许降级为观望
 - odds_movement_analysis 必须先写【欧亚互转暗线】：欧赔隐含盘口、实际亚盘、差值、亚转欧粗推与隐藏意图，再写水位/资金
 - analysis_basis 必须包含【欧亚互转】一条；若欧亚互转提示诱盘或分裂，不能给高置信
+- analysis_basis 必须包含【数学基准】【变数研判】【判断】；【判断】须写清仓位（小注/放弃/标准）与成立条件
+- 泊松/同赔/战绩只能出现在【数学基准】里当参考，禁止在【判断】里写成「会出某比分」
 - 禁止使用「稳胆」「必出」「确定」「稳赢」等确定性表述
 
 ══════════════════════════════════════
@@ -169,7 +188,10 @@ external_factors 中未提供的项（如天气/新闻）不得臆造，应标�
   "value_bet": true,
   "recommendation": "主胜",
   "confidence_level": "中",
-  "actuary_reasoning": "历史主胜58%高于隐含42%，升盘降水支撑上盘，存在正EV。",
+  "actuary_reasoning": "隐含客热但同赔客胜偏高；欧亚略分裂，变数不小，仅小注客向，临场再升水则放弃。",
+  "match_variables": ["欧亚线差偏大", "同赔样本联赛混杂", "客队近况波动"],
+  "judgment": "倾向客胜·小注",
+  "judgment_condition": "若临场客胜再升水或平赔再降，改为放弃",
   "result_1x2": "home",
   "result_1x2_cn": "主胜",
   "jingcai_rq_pick": "home",
@@ -190,7 +212,7 @@ external_factors 中未提供的项（如天气/新闻）不得臆造，应标�
   "historical_cases": [{"date":"...","match":"...","lesson":"..."}],
   "final_verdict": "...",
   "key_risks": ["...", "..."],
-  "analysis_basis": ["【基准概率】...", "【EV结论】...", "【综合结论】..."]
+  "analysis_basis": ["【数学基准】...", "【变数研判】...", "【判断】...", "【EV结论】...", "【综合结论】..."]
 }"""
 
 # Legacy locked-baseline prompt (full text kept for --locked-baseline)
@@ -661,44 +683,79 @@ def build_actuary_input_brief(ctx: dict) -> dict:
 
 def _team_form_block(ctx: dict) -> Any:
     tf = ctx.get("team_recent_form") or {}
-    if not tf.get("available"):
-        return tf.get("note") or "未接入（队名无法映射或无国际赛记录）"
-    home = tf.get("home") or {}
-    away = tf.get("away") or {}
-    block: dict[str, Any] = {
-        "摘要": ctx.get("team_recent_form_headline") or "",
-        "主队": {
-            "战绩": home.get("summary"),
-            "近场": [
-                {
-                    "日期": m.get("date"),
-                    "对手": m.get("opponent"),
-                    "主客": m.get("venue"),
-                    "比分": m.get("score"),
-                    "赛果": m.get("result"),
-                    "欧赔": m.get("eu_odds"),
-                }
-                for m in (home.get("recent_matches") or [])[:5]
-            ],
-        },
-        "客队": {
-            "战绩": away.get("summary"),
-            "近场": [
-                {
-                    "日期": m.get("date"),
-                    "对手": m.get("opponent"),
-                    "主客": m.get("venue"),
-                    "比分": m.get("score"),
-                    "赛果": m.get("result"),
-                    "欧赔": m.get("eu_odds"),
-                }
-                for m in (away.get("recent_matches") or [])[:5]
-            ],
-        },
-        "近一年交锋": tf.get("head_to_head") or [],
-        "数据说明": tf.get("note"),
-    }
-    return block
+    if tf.get("available"):
+        home = tf.get("home") or {}
+        away = tf.get("away") or {}
+        return {
+            "摘要": ctx.get("team_recent_form_headline") or "",
+            "主队": {
+                "战绩": home.get("summary"),
+                "近场": [
+                    {
+                        "日期": m.get("date"),
+                        "对手": m.get("opponent"),
+                        "主客": m.get("venue"),
+                        "比分": m.get("score"),
+                        "赛果": m.get("result"),
+                        "欧赔": m.get("eu_odds"),
+                    }
+                    for m in (home.get("recent_matches") or [])[:5]
+                ],
+            },
+            "客队": {
+                "战绩": away.get("summary"),
+                "近场": [
+                    {
+                        "日期": m.get("date"),
+                        "对手": m.get("opponent"),
+                        "主客": m.get("venue"),
+                        "比分": m.get("score"),
+                        "赛果": m.get("result"),
+                        "欧赔": m.get("eu_odds"),
+                    }
+                    for m in (away.get("recent_matches") or [])[:5]
+                ],
+            },
+        }
+
+    rf = ctx.get("recent_form") or {}
+    if rf.get("home") or rf.get("away"):
+        home = rf.get("home") or {}
+        away = rf.get("away") or {}
+        return {
+            "摘要": "联赛近况",
+            "来源": rf.get("source") or "club_form",
+            "主队": {
+                "队名": home.get("label"),
+                "近况": home.get("form_str"),
+                "胜率": home.get("win_rate"),
+                "进失球": f"{home.get('goals_for')}-{home.get('goals_against')}",
+                "主场": home.get("home_at_home"),
+            },
+            "客队": {
+                "队名": away.get("label"),
+                "近况": away.get("form_str"),
+                "胜率": away.get("win_rate"),
+                "进失球": f"{away.get('goals_for')}-{away.get('goals_against')}",
+                "客场": away.get("away_at_away"),
+            },
+        }
+
+    cf = ctx.get("club_form") or {}
+    overall = cf.get("overall") or {}
+    split = cf.get("split") or {}
+    h = overall.get("home_team") or {}
+    a = overall.get("away_team") or {}
+    if h.get("played") or a.get("played"):
+        return {
+            "摘要": "联赛近况",
+            "来源": "club_form",
+            "主队": h.get("summary_cn") or "—",
+            "客队": a.get("summary_cn") or "—",
+            "主队主场": (split.get("home_at_home_last_20") or {}).get("summary_cn"),
+            "客队客场": (split.get("away_at_away_last_20") or {}).get("summary_cn"),
+        }
+    return tf.get("note") or "未接入（队名无法映射或无国际赛记录）"
 
 
 def _style_clash_block(ctx: dict) -> Any:
@@ -1095,6 +1152,33 @@ def _build_result_forecast_block(ctx: dict) -> dict:
     }
 
 
+def _form_side_text(form: dict | None, side: str) -> str:
+    """把 recent_form / club_form 压成喂给 AI 的一行战绩。"""
+    if not form:
+        return "—"
+    block = form.get(side) or form.get(f"{side}_form")
+    if isinstance(block, dict):
+        label = block.get("label") or block.get("team") or ""
+        fs = block.get("form_str") or block.get("summary_cn") or ""
+        wr = block.get("win_rate")
+        extra = ""
+        if isinstance(wr, (int, float)):
+            extra = f"（胜率{wr:.0%}）" if wr <= 1 else f"（胜率{wr}）"
+        venue = block.get("home_at_home") if side == "home" else block.get("away_at_away")
+        bits = [x for x in (label, fs, extra.strip(), venue) if x]
+        return " ".join(str(x) for x in bits)[:160] or "—"
+    if isinstance(block, str) and block.strip() and block.strip() != "—":
+        return block[:160]
+    overall = (form.get("overall") or {}).get(f"{side}_team") or {}
+    if overall.get("summary_cn"):
+        return str(overall["summary_cn"])[:160]
+    split_key = "home_at_home_last_20" if side == "home" else "away_at_away_last_20"
+    split = (form.get("split") or {}).get(split_key) or {}
+    if split.get("summary_cn"):
+        return str(split["summary_cn"])[:160]
+    return "—"
+
+
 def _build_similar_ev_trap_block(ctx: dict) -> dict:
     hist = (
         ctx.get("history_similar")
@@ -1113,13 +1197,38 @@ def _build_similar_ev_trap_block(ctx: dict) -> dict:
     def _hist_summary(h: dict) -> str:
         if not h:
             return "无历史同赔样本"
-        n = h.get("sample_count") or h.get("n") or 0
-        home_rate = h.get("home_win_rate") or h.get("主胜")
-        draw_rate = h.get("draw_rate") or h.get("平局")
-        away_rate = h.get("away_win_rate") or h.get("客胜")
+        n = h.get("sample_count") or h.get("n") or h.get("count") or 0
+        try:
+            from analysis.result_forecast.context import _history_count_unusable
+
+            if _history_count_unusable(n, h.get("history_total")):
+                return "同赔样本不可用（整库/过宽匹配已丢弃）"
+        except Exception:
+            if int(n or 0) >= 8000:
+                return "同赔样本不可用（整库/过宽匹配已丢弃）"
+        p = h.get("p") if isinstance(h.get("p"), dict) else {}
+        home_rate = h.get("home_win_rate") if h.get("home_win_rate") is not None else (
+            h.get("主胜") if h.get("主胜") is not None else (h.get("p_home") if h.get("p_home") is not None else p.get("home"))
+        )
+        draw_rate = h.get("draw_rate") if h.get("draw_rate") is not None else (
+            h.get("平局") if h.get("平局") is not None else (h.get("p_draw") if h.get("p_draw") is not None else p.get("draw"))
+        )
+        away_rate = h.get("away_win_rate") if h.get("away_win_rate") is not None else (
+            h.get("客胜") if h.get("客胜") is not None else (h.get("p_away") if h.get("p_away") is not None else p.get("away"))
+        )
+
+        def _fmt_rate(v):
+            if v is None:
+                return "—"
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return str(v)
+            return f"{f:.1%}" if 0 <= f <= 1 else str(v)
+
         return (
-            f"同赔样本 {n} 场，主胜 {home_rate or '—'}，平局 {draw_rate or '—'}，"
-            f"客胜 {away_rate or '—'}；场均进球 {h.get('avg_total_goals', '—')}"
+            f"同赔样本 {n} 场，主胜 {_fmt_rate(home_rate)}，平局 {_fmt_rate(draw_rate)}，"
+            f"客胜 {_fmt_rate(away_rate)}；场均进球 {h.get('avg_total_goals', '—')}"
         )
 
     return {
@@ -1146,8 +1255,8 @@ def _build_similar_ev_trap_block(ctx: dict) -> dict:
         },
         "form": {
             "available": bool(form),
-            "home": str(form.get("home_form") or form.get("home") or "—")[:120],
-            "away": str(form.get("away_form") or form.get("away") or "—")[:120],
+            "home": _form_side_text(form, "home"),
+            "away": _form_side_text(form, "away"),
         },
         "betfair": betfair if betfair else "未接入必发数据",
         "external_factors": external if external else "未接入外部因素",
@@ -1192,6 +1301,7 @@ def build_ai_expert_desk_payload(ctx: dict) -> dict:
     4) 规则桌
     5) 同赔+EV+诱盘
     6) missing[]
+    7) judgment_frame：数学基准 vs 变数研判 vs 判断
     """
     return {
         "jingcai": _build_jingcai_block(ctx),
@@ -1200,6 +1310,15 @@ def build_ai_expert_desk_payload(ctx: dict) -> dict:
         "result_forecast": _build_result_forecast_block(ctx),
         "similar_ev_trap": _build_similar_ev_trap_block(ctx),
         "missing": _collect_missing(ctx),
+        "judgment_frame": {
+            "math_is_baseline": True,
+            "note": (
+                "泊松比分、同赔频率、战绩胜率、去水隐含都只是数学基准，不等于这场会怎么踢。"
+                "先研判变数（分歧/诱盘/样本质量/战绩波动/missing），再判断倾向、小注或放弃。"
+                "未接入的伤停/新闻禁止编造；未知本身计为风险。"
+            ),
+            "required_layers": ["数学基准", "变数研判", "判断"],
+        },
     }
 
 
@@ -1339,16 +1458,47 @@ def attach_expert_desk_sources(
         )
         if pred_ev:
             ctx["precomputed_ev"] = {**existing_ev, **pred_ev}
-    existing_hist = ctx.get("history_similar") or {}
+    raw_hist = ctx.get("history_similar") or {}
+    existing_hist = raw_hist
+    try:
+        from analysis.result_forecast.context import (
+            _history_count_unusable,
+            _normalize_history_similar,
+        )
+
+        n_exist = raw_hist.get("sample_count") or raw_hist.get("n") or raw_hist.get("count")
+        if raw_hist and _history_count_unusable(
+            n_exist, raw_hist.get("history_total") or pred.get("history_total")
+        ):
+            ctx.pop("history_similar", None)
+            existing_hist = {}
+        else:
+            normalized = _normalize_history_similar(raw_hist, pred.get("history_total"))
+            if normalized:
+                ctx["history_similar"] = normalized
+                existing_hist = normalized
+    except Exception:
+        existing_hist = ctx.get("history_similar") or {}
     has_hist = bool(
         existing_hist.get("sample_count")
         or existing_hist.get("n")
+        or existing_hist.get("count")
         or existing_hist.get("home_win_rate")
+        or (isinstance(existing_hist.get("p"), dict) and existing_hist.get("p"))
     )
     if not has_hist:
         pred_hist = pred.get("history_similar") or factors.get("history_similar")
         if pred_hist:
-            ctx["history_similar"] = pred_hist
+            try:
+                from analysis.result_forecast.context import _normalize_history_similar
+
+                pred_hist = _normalize_history_similar(
+                    pred_hist, pred.get("history_total")
+                )
+            except Exception:
+                pass
+            if pred_hist:
+                ctx["history_similar"] = pred_hist
     if not ctx.get("control_analysis"):
         ctx["control_analysis"] = (
             pred.get("control_analysis") or factors.get("control_analysis") or {}
@@ -1436,14 +1586,15 @@ def build_expert_user_prompt(
         f"{_json_dumps_safe(actuary)}\n\n"
         "══════════════════════════════════════\n"
         "【推理要求】\n"
-        "1. 按 Step1→Step5 完成 EV 评估，写入 actuary_reasoning 与 analysis_basis。\n"
+        "1. 按 Step1→Step6 完成：数学基准 → 历史对照 → 变数研判 → 欧亚暗线 → 资金 → 判断，写入 actuary_reasoning 与 analysis_basis。\n"
         "2. implied_probability 须引用 actuary_input 中「预计算EV」或「去水隐含概率」，不得自行重算。\n"
         "3. adjusted_probability 须引用 precomputed_ev、historical_similar_samples、双方近期状态与 external_factors 修正。\n"
-        "4. value_bet=false 时 recommendation=放弃参与，result_1x2=skip。\n"
+        "4. value_bet=false 或变数可能吞噬 edge 时 recommendation=放弃参与，result_1x2=skip。\n"
         "5. 若竞彩SP.仅让球=true，必须额外输出 jingcai_rq_pick / jingcai_rq_pick_cn / jingcai_rq_reason。\n"
         "6. historical_cases ≥3 条，必须来自 required_historical_cases。\n"
-        "7. analysis_basis 须覆盖 evidence_brief 各层，含【EV结论】。\n"
-        "8. final_verdict 写成概率性决策：倾向、参与价值、风险条件；不得写稳赢/必出。\n\n"
+        "7. analysis_basis 须含【数学基准】【变数研判】【判断】【EV结论】；泊松/同赔只当基准，不是赛果。\n"
+        "8. 必须输出 match_variables（2-4条，仅用桌面已给证据）、judgment、judgment_condition。\n"
+        "9. final_verdict 写成概率性决策：倾向、仓位、风险条件；不得写稳赢/必出。\n\n"
         "══════════════════════════════════════\n"
         "【完整结构化数据 — structured_data】\n"
         f"{_json_dumps_safe(ctx)}"
@@ -1653,8 +1804,9 @@ def parse_analysis_json(content: str) -> dict[str, Any]:
 
 
 DEEP_ANALYSIS_SYSTEM_PROMPT = """你是一位资深体育赛事首席精算师与风控负责人，负责对「已完成首轮 AI 精算分析」的比赛做二次深度研判。
-首轮分析已完成 EV 评估与基础论证；你的任务是站在更高视角做综合、挑刺、降噪，并落地到竞彩可执行方案。
-你输出的是概率性决策，不是确定性赛果预测；证据冲突、edge 不足或风险过高时，最优结论可以是观望。
+首轮已给出数学基准（隐含/同赔/泊松/战绩）与初步 EV。你的任务不是再算一遍格子，而是：挑刺变数、判断仓位、落地竞彩。
+真实比赛变数很多，数学覆盖不了临场与战意；未提供的伤停/新闻不得编造，但未知本身就是风险。
+你输出的是判断（倾向/小注/放弃 + 成立条件），不是确定性赛果；证据冲突、变数过大或 edge 不足时，最优结论可以是观望。
 
 ══════════════════════════════════════
 一、输入说明
@@ -1671,8 +1823,8 @@ DEEP_ANALYSIS_SYSTEM_PROMPT = """你是一位资深体育赛事首席精算师�
 ══════════════════════════════════════
 1. 多模型综合：若 prior_analyses 含多个模型，说明一致点与分歧点，给出你的最终立场。
 2. 推翻检验：首轮推荐若存在样本不足/高控盘/模型分歧，必须明确是否维持、降级或改为观望。
-3. 比分深度：score_outlook 须给出 primary（最可能2-3个）、secondary（备选1-2个）、upset_watch（冷门1个），
-   并说明为何不是千篇一律的 1-0/2-0；须结合场均进球、大小球方向与让球线推演。
+3. 比分深度：score_outlook 只表达比分概率参考（primary/secondary/upset_watch），须写明「不是这场会出的比分」；
+   结合场均进球、大小球方向与让球线，禁止把泊松最高格当成推荐比分。
 4. 竞彩落地：final_pick 必须是用户可购买的竞彩方向（胜平负 SP 或让球胜平负），与 jingcai 数据一致。
 5. 仓位建议：stake_advice 明确「不参与 / 娱乐小注 / 标准仓位 / 仅观察」及理由。
 6. 赛前关注：pre_match_watchlist 2-4 条，写开赛前若出现何种盘口/水位变化应改变结论。
@@ -1725,6 +1877,9 @@ def _compact_prior_analysis(pred: dict, *, label: str = "") -> dict[str, Any]:
         "implied_probability": pred.get("implied_probability"),
         "adjusted_probability": pred.get("adjusted_probability"),
         "actuary_reasoning": pred.get("actuary_reasoning") or "",
+        "match_variables": pred.get("match_variables") or [],
+        "judgment": pred.get("judgment") or "",
+        "judgment_condition": pred.get("judgment_condition") or "",
         "final_verdict": pred.get("final_verdict") or "",
         "analysis_basis": pred.get("analysis_basis") or [],
         "key_risks": pred.get("key_risks") or [],

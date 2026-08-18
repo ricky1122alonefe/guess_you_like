@@ -282,6 +282,26 @@ def _parse_probability_summary(text: str) -> dict | None:
     }
 
 
+def _history_count_unusable(count: int | None, history_total: int | None = None) -> bool:
+    """整库当「同赔」不可用：例如 55487/55487。"""
+    try:
+        n = int(count or 0)
+    except (TypeError, ValueError):
+        return True
+    if n <= 0:
+        return True
+    if n >= 8000:
+        return True
+    if history_total:
+        try:
+            total = int(history_total)
+        except (TypeError, ValueError):
+            total = 0
+        if total and n >= max(2000, int(total * 0.4)):
+            return True
+    return False
+
+
 def _extract_history(prediction: dict | None) -> dict | None:
     """从 prediction 提取历史相似 1X2 分布（多源回落）。"""
     if not prediction:
@@ -304,11 +324,16 @@ def _extract_history(prediction: dict | None) -> dict | None:
             hr, dr, ar = float(hr or 0), float(dr or 0), float(ar or 0)
             total = hr + dr + ar
             if total > 0:
-                return {
-                    "count": best_stats.get("count", 0),
-                    "p": {"home": hr / total, "draw": dr / total, "away": ar / total},
-                    "source": "open" if best_stats is open_stats else ("eu" if best_stats is eu_stats else "close"),
-                }
+                count = best_stats.get("count", 0)
+                hist_total = payload.get("history_total") or prediction.get("history_total")
+                if _history_count_unusable(count, hist_total):
+                    pass
+                else:
+                    return {
+                        "count": count,
+                        "p": {"home": hr / total, "draw": dr / total, "away": ar / total},
+                        "source": "open" if best_stats is open_stats else ("eu" if best_stats is eu_stats else "close"),
+                    }
 
     # 2. similarity_analysis.open/live（文件 prediction 结构）
     sim = prediction.get("similarity_analysis") or {}
@@ -317,7 +342,7 @@ def _extract_history(prediction: dict | None) -> dict | None:
             sub = sim.get(sub_key)
             if isinstance(sub, list) and sub:
                 result = _stats_from_sim_list(sub)
-                if result:
+                if result and not _history_count_unusable(result.get("count")):
                     return result
             elif isinstance(sub, dict):
                 # 单 dict 形式
@@ -327,7 +352,7 @@ def _extract_history(prediction: dict | None) -> dict | None:
                 if hr is not None or ar is not None:
                     hr, dr, ar = float(hr or 0), float(dr or 0), float(ar or 0)
                     total = hr + dr + ar
-                    if total > 0:
+                    if total > 0 and not _history_count_unusable(sub.get("count")):
                         return {
                             "count": sub.get("count", 0),
                             "p": {"home": hr / total, "draw": dr / total, "away": ar / total},
@@ -338,7 +363,7 @@ def _extract_history(prediction: dict | None) -> dict | None:
     summary = prediction.get("open_probability_summary") or ""
     if summary:
         result = _parse_probability_summary(summary)
-        if result:
+        if result and not _history_count_unusable(result.get("count"), prediction.get("history_total")):
             return result
 
     # 4. predict_row 兼容字段
@@ -352,7 +377,7 @@ def _extract_history(prediction: dict | None) -> dict | None:
 
     # 5. sample_count + result_1x2_cn 兜底（只有倾向无分布）
     sc = prediction.get("sample_count") or prediction.get("open_sample_count") or 0
-    if sc and sc > 0:
+    if sc and sc > 0 and not _history_count_unusable(sc, prediction.get("history_total")):
         r1x2 = prediction.get("result_1x2_cn") or prediction.get("open_result_1x2_cn") or ""
         if r1x2:
             p = {"home": 0.33, "draw": 0.34, "away": 0.33}
@@ -369,89 +394,185 @@ def _extract_history(prediction: dict | None) -> dict | None:
     return None
 
 
-def _extract_recent_form(match_name: str, home_team: str | None = None, away_team: str | None = None) -> dict | None:
-    """尝试获取近期战绩：优先 team_recent_form（国际队），回落 club_form（联赛队）。"""
-    # 1. team_recent_form（世界杯/国际队）
-    try:
-        from team_recent_form import build_team_form_context
-        ctx = build_team_form_context(match_name)
-        if ctx:
-            home = ctx.get("home") or {}
-            away = ctx.get("away") or {}
-            if home or away:
-                return {
-                    "home": {
-                        "label": home.get("label", ""),
-                        "form_str": home.get("form_str", ""),
-                        "win_rate": home.get("win_rate"),
-                        "goals_for": home.get("goals_for"),
-                        "goals_against": home.get("goals_against"),
-                    },
-                    "away": {
-                        "label": away.get("label", ""),
-                        "form_str": away.get("form_str", ""),
-                        "win_rate": away.get("win_rate"),
-                        "goals_for": away.get("goals_for"),
-                        "goals_against": away.get("goals_against"),
-                    },
-                    "source": "team_recent_form",
-                }
-    except Exception as exc:
-        log.debug("team_recent_form failed: %s", exc)
+def _split_match_name(name: str) -> tuple[str, str] | None:
+    text = (name or "").strip()
+    if not text:
+        return None
+    for sep in (" VS ", " Vs ", " vs ", "VS", "Vs", "vs", "对"):
+        if sep in text:
+            parts = text.replace(sep, "\x00", 1).split("\x00")
+            if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+                return parts[0].strip(), parts[1].strip()
+    return None
 
-    # 2. club_form（联赛队，从 PG match_results）
+
+def _names_unusable(home: str | None, away: str | None) -> bool:
+    h, a = (home or "").strip(), (away or "").strip()
+    if not h or not a:
+        return True
+    if h == a:
+        return True
+    try:
+        from daily_picks import _team_names_suspicious
+
+        return _team_names_suspicious(h, a)
+    except Exception:
+        return False
+
+
+def _recover_team_names(
+    home_team: str,
+    away_team: str,
+    match_name: str,
+    prediction: dict | None,
+) -> tuple[str, str, str]:
+    """DB 主客同名/近同名时，用 prediction / 比赛名找回真实对阵。"""
+    if not _names_unusable(home_team, away_team):
+        return home_team, away_team, f"{home_team}VS{away_team}"
+    candidates = []
+    pred = prediction or {}
+    candidates.append(pred.get("match"))
+    candidates.append(pred.get("match_name"))
+    candidates.append((pred.get("predict_row") or {}).get("比赛"))
+    candidates.append(match_name)
+    for raw in candidates:
+        parts = _split_match_name(str(raw or ""))
+        if parts and not _names_unusable(parts[0], parts[1]):
+            return parts[0], parts[1], f"{parts[0]}VS{parts[1]}"
+    return home_team, away_team, match_name
+
+
+def _normalize_history_similar(hist: dict | None, history_total: int | None = None) -> dict | None:
+    """统一 n/count/p/p_home，并丢掉整库当同赔的脏样本。"""
+    if not isinstance(hist, dict):
+        return None
+    p = hist.get("p") if isinstance(hist.get("p"), dict) else {}
+    ph = hist.get("p_home")
+    pd = hist.get("p_draw")
+    pa = hist.get("p_away")
+    if ph is None:
+        ph = p.get("home")
+    if pd is None:
+        pd = p.get("draw")
+    if pa is None:
+        pa = p.get("away")
+    try:
+        ph, pd, pa = float(ph or 0), float(pd or 0), float(pa or 0)
+    except (TypeError, ValueError):
+        return None
+    total = ph + pd + pa
+    if total <= 0:
+        return None
+    n = hist.get("n") or hist.get("count") or hist.get("sample_count") or 0
+    hist_total = history_total if history_total is not None else hist.get("history_total")
+    if _history_count_unusable(n, hist_total):
+        return None
+    n_int = int(n or 0)
+    p_norm = {"home": ph / total, "draw": pd / total, "away": pa / total}
+    out = dict(hist)
+    out["n"] = n_int
+    out["count"] = n_int
+    out["p"] = p_norm
+    out["p_home"] = p_norm["home"]
+    out["p_draw"] = p_norm["draw"]
+    out["p_away"] = p_norm["away"]
+    return out
+
+
+def _try_load_prediction(fixture_id: str) -> dict | None:
+    try:
+        from pathlib import Path
+        from apps.api.services import load_prediction
+
+        pred = load_prediction(Path("output/service"), str(fixture_id))
+        if pred:
+            return pred
+    except Exception:
+        return None
+    return None
+
+
+def _extract_recent_form(
+    match_name: str,
+    home_team: str | None = None,
+    away_team: str | None = None,
+    club_form: dict | None = None,
+) -> dict | None:
+    """近期战绩：联赛队走 club_form；国际队才走 team_recent_form。主客同名直接放弃。"""
+    if home_team and away_team:
+        home_team = home_team.strip()
+        away_team = away_team.strip()
+    else:
+        parts = _split_match_name(match_name or "")
+        if not parts:
+            return None
+        home_team, away_team = parts
+    if _names_unusable(home_team, away_team):
+        return None
+
+    # 1. club_form（联赛队，从 PG match_results）
     try:
         from analysis.team_form.club_form import build_club_form
-        # 优先使用外部传入的队名
-        if home_team and away_team:
-            home_team = home_team.strip()
-            away_team = away_team.strip()
-        else:
-            # 兼容 "A vs B" / "AVS B" / "A VS B" / "A对B"
-            normalized = match_name
-            for sep in (" VS ", " Vs ", " vs ", "VS", "Vs", "vs", "对"):
-                if sep in normalized:
-                    normalized = normalized.replace(sep, "\x00")
-                    break
-            parts = normalized.split("\x00")
-            if len(parts) != 2:
-                return None
-            home_team, away_team = parts[0].strip(), parts[1].strip()
-        cf = build_club_form(home_team, away_team)
-        if not isinstance(cf, dict):
-            return None
-        overall = cf.get("overall") or {}
-        split = cf.get("split") or {}
-        h = overall.get("home_team")
-        a = overall.get("away_team")
-        # 有任一侧 played>0 才算有数据
-        if (h and h.get("played")) or (a and a.get("played")):
-            h_home = split.get("home_at_home_last_20") or {}
-            a_away = split.get("away_at_away_last_20") or {}
-            return {
-                "home": {
-                    "label": h.get("team", home_team) if h else home_team,
-                    "form_str": h.get("form_str", "") if h else "",
-                    "win_rate": h.get("win_rate") if h else None,
-                    "goals_for": h.get("goals_for") if h else None,
-                    "goals_against": h.get("goals_against") if h else None,
-                    "home_at_home": h_home.get("summary_cn", "") if h_home else "",
-                } if h else {"label": home_team},
-                "away": {
-                    "label": a.get("team", away_team) if a else away_team,
-                    "form_str": a.get("form_str", "") if a else "",
-                    "win_rate": a.get("win_rate") if a else None,
-                    "goals_for": a.get("goals_for") if a else None,
-                    "goals_against": a.get("goals_against") if a else None,
-                    "away_at_away": a_away.get("summary_cn", "") if a_away else "",
-                } if a else {"label": away_team},
-                "source": "club_form",
-            }
-        elif cf and cf.get("missing"):
-            log.debug("club_form missing: %s", cf.get("missing"))
+
+        cf = club_form if isinstance(club_form, dict) else build_club_form(home_team, away_team)
+        if isinstance(cf, dict):
+            overall = cf.get("overall") or {}
+            split = cf.get("split") or {}
+            h = overall.get("home_team")
+            a = overall.get("away_team")
+            if (h and h.get("played")) or (a and a.get("played")):
+                h_home = split.get("home_at_home_last_20") or {}
+                a_away = split.get("away_at_away_last_20") or {}
+                return {
+                    "home": {
+                        "label": h.get("team", home_team) if h else home_team,
+                        "form_str": h.get("form_str", "") if h else "",
+                        "win_rate": h.get("win_rate") if h else None,
+                        "goals_for": h.get("goals_for") if h else None,
+                        "goals_against": h.get("goals_against") if h else None,
+                        "home_at_home": h_home.get("summary_cn", "") if h_home else "",
+                    } if h else {"label": home_team},
+                    "away": {
+                        "label": a.get("team", away_team) if a else away_team,
+                        "form_str": a.get("form_str", "") if a else "",
+                        "win_rate": a.get("win_rate") if a else None,
+                        "goals_for": a.get("goals_for") if a else None,
+                        "goals_against": a.get("goals_against") if a else None,
+                        "away_at_away": a_away.get("summary_cn", "") if a_away else "",
+                    } if a else {"label": away_team},
+                    "source": "club_form",
+                }
     except Exception as exc:
         import traceback
         log.debug("club_form failed: %s\n%s", exc, traceback.format_exc())
+
+    # 2. 国际队近期（世界杯/预选赛）；联赛队通常 available=False
+    try:
+        from team_recent_form import build_team_recent_form_from_match
+
+        ctx = build_team_recent_form_from_match(f"{home_team}VS{away_team}")
+        if ctx and ctx.get("available"):
+            home = ctx.get("home") or {}
+            away = ctx.get("away") or {}
+            return {
+                "home": {
+                    "label": home.get("team") or home.get("label") or home_team,
+                    "form_str": home.get("form_str", ""),
+                    "win_rate": home.get("win_rate") or home.get("wins"),
+                    "goals_for": home.get("goals_for"),
+                    "goals_against": home.get("goals_against"),
+                },
+                "away": {
+                    "label": away.get("team") or away.get("label") or away_team,
+                    "form_str": away.get("form_str", ""),
+                    "win_rate": away.get("win_rate") or away.get("wins"),
+                    "goals_for": away.get("goals_for"),
+                    "goals_against": away.get("goals_against"),
+                },
+                "source": "team_recent_form",
+            }
+    except Exception as exc:
+        log.debug("team_recent_form failed: %s", exc)
 
     return None
 
@@ -463,6 +584,7 @@ def build_result_forecast_context(
     *,
     index: dict | None = None,
     prediction: dict | None = None,
+    include_club_form: bool = True,
 ) -> dict[str, Any]:
     """组装单场五源预测上下文。
 
@@ -539,6 +661,11 @@ def build_result_forecast_context(
         match_name = f"{home_team}VS{away_team}"
     else:
         match_name = index.get("match_name") or (prediction.get("match_name", "") if prediction else "") or fixture_id
+    if prediction is None and _names_unusable(home_team, away_team):
+        prediction = _try_load_prediction(fixture_id)
+    home_team, away_team, match_name = _recover_team_names(
+        home_team, away_team, match_name, prediction,
+    )
 
     # 合并 odds：timeline tick + prediction.odds_snapshot/cur/quant
     tick_odds = _from_tick(timeline)
@@ -555,32 +682,37 @@ def build_result_forecast_context(
     if not betfair:
         missing.append("betfair")
 
-    history = _extract_history(prediction)
+    hist_total = (prediction or {}).get("history_total") if prediction else None
+    history = _normalize_history_similar(_extract_history(prediction), hist_total)
     if not history:
         try:
             from analysis.result_forecast.history_similar import build_history_similar
-            history = build_history_similar(fixture_id, phase="open", use_ah=False)
+            history = _normalize_history_similar(
+                build_history_similar(fixture_id, phase="open", use_ah=False)
+            )
         except Exception as exc:
-            logger.warning("build_history_similar 失败 %s: %s", fixture_id, exc)
+            log.warning("build_history_similar 失败 %s: %s", fixture_id, exc)
             history = None
     if not history:
         missing.append("history_similar")
 
-    recent = _extract_recent_form(match_name, home_team=home_team, away_team=away_team)
+    club_form = None
+    if include_club_form and not _names_unusable(home_team, away_team):
+        try:
+            from analysis.team_form.club_form import build_club_form
+
+            club_form = build_club_form(home_team, away_team)
+        except Exception:
+            club_form = None
+
+    recent = _extract_recent_form(
+        match_name,
+        home_team=home_team,
+        away_team=away_team,
+        club_form=club_form if include_club_form else (club_form or {}),
+    )
     if not recent:
         missing.append("recent_form")
-
-    # 同时保留 club_form 原结构供 viz summary 使用
-    club_form = None
-    try:
-        from analysis.team_form.club_form import build_club_form
-
-        parts = match_name.replace(" VS ", " vs ").replace(" Vs ", " vs ").split(" vs ")
-        if len(parts) == 2:
-            h, a = parts[0].strip(), parts[1].strip()
-            club_form = build_club_form(h, a)
-    except Exception:
-        pass
 
     # 盘口 lifecycle（开盘 vs 临盘）
     market_open_close = None
@@ -597,16 +729,12 @@ def build_result_forecast_context(
     # 尝试获取 missing_reason 供 UI 展示
     recent_missing_reason = ""
     if not recent:
-        try:
-            from analysis.team_form.club_form import build_club_form
-            parts = match_name.replace(" VS ", " vs ").replace(" Vs ", " vs ").split(" vs ")
-            if len(parts) == 2:
-                home_team, away_team = parts[0].strip(), parts[1].strip()
-                cf = build_club_form(home_team, away_team)
-                if cf and cf.get("missing"):
-                    recent_missing_reason = f"库无历史：{home_team}/{away_team} 未映射或无赛果"
-        except Exception:
-            pass
+        if _names_unusable(home_team, away_team):
+            recent_missing_reason = f"队名异常：{home_team or '?'} / {away_team or '?'}"
+        elif club_form and club_form.get("missing"):
+            recent_missing_reason = f"库无历史：{home_team}/{away_team} 未映射或无赛果"
+        else:
+            recent_missing_reason = f"库无历史：{home_team}/{away_team} 未映射或无赛果"
 
     ctx = {
         "fixture_id": fixture_id,

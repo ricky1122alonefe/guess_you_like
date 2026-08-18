@@ -493,6 +493,7 @@ def test_ai_expert_desk_card_renders_all_sections():
     assert "4) 规则桌" in html
     assert "5) 同赔+EV+诱盘" in html
     assert "6) 缺失项" in html
+    assert "7) 研判框架" in html
     assert "预览入参" in html
     assert "周日001" in html
     assert "亚盘升盘降水支持主队" in html
@@ -511,3 +512,96 @@ def test_ai_expert_desk_card_missing_shows_red():
 def test_ai_expert_desk_card_empty_payload():
     html = _ai_expert_desk_card("测试主VS测试客", None)
     assert "暂无精算师输入数据" in html
+
+
+def test_collect_verdict_view_prefers_ai_basis():
+    from web_ui import _collect_verdict_view
+
+    pred = {
+        "recommendation_source": "ai_expert_deepseek",
+        "ai_analyses": {
+            "deepseek": {
+                "ai_provider_label": "DeepSeek 精算师",
+                "result_1x2_cn": "主胜",
+                "confidence_cn": "低",
+                "actuary_reasoning": "竞彩主胜SP仍有正EV，欧赔客热但亚盘未跟。",
+                "analysis_basis": [
+                    "【基准概率】竞彩去水主胜 48%",
+                    "【EV结论】历史同赔主胜 58% 高于隐含",
+                    "【综合结论】倾向主胜，小注",
+                ],
+                "implied_probability": {"主胜": "42%", "平": "28%", "客胜": "30%"},
+                "adjusted_probability": {"主胜": "48%", "平": "26%", "客胜": "26%"},
+                "value_bet": True,
+                "predict_row": {"竞彩推荐": "主胜", "竞彩SP": 1.81, "胜平负": "主胜"},
+            }
+        },
+        "predict_row": {"竞彩推荐": "主胜", "竞彩SP": 1.81, "胜平负": "主胜"},
+    }
+    view = _collect_verdict_view(pred)
+    assert view["pick"] == "主胜"
+    assert view["source"] == "DeepSeek 精算师"
+    assert view["confidence"] == "低"
+    assert any("EV结论" in x for x in view["basis"])
+    assert view["value_bet"] is True
+
+
+def test_verdict_basis_card_shows_who_and_why():
+    from web_ui import _verdict_basis_card
+
+    html = _verdict_basis_card({
+        "ai_analyses": {
+            "deepseek": {
+                "ai_provider_label": "DeepSeek 精算师",
+                "result_1x2_cn": "主胜",
+                "confidence_cn": "低",
+                "actuary_reasoning": "历史主胜高于隐含，升盘降水支撑上盘。",
+                "analysis_basis": ["【基准概率】去水主胜 48%", "【综合结论】倾向主胜"],
+                "predict_row": {"竞彩推荐": "主胜", "胜平负": "主胜"},
+            }
+        },
+        "predict_row": {"竞彩推荐": "主胜", "胜平负": "主胜"},
+    })
+    assert "谁赢 · 依据" in html
+    assert "主胜" in html
+    assert "【基准概率】去水主胜 48%" in html
+    assert "历史主胜高于隐含" in html
+    assert "DeepSeek 精算师" in html
+
+
+def test_recommendation_text_latest_row_includes_reason():
+    p = {
+        "pick": {
+            "ai_analyses": {
+                "ds": {
+                    "label": "DeepSeek 精算师",
+                    "result_1x2_cn": "主胜",
+                    "actuary_reasoning": "竞彩SP主胜仍便宜",
+                }
+            }
+        }
+    }
+    html = _recommendation_text(p, with_reason=True)
+    assert "DeepSeek 精算师" in html
+    assert "主胜" in html
+    assert "竞彩SP主胜仍便宜" in html
+    assert "rec-reason" in html
+    # unchanged-check still compares without reason
+    assert "竞彩SP主胜仍便宜" not in _recommendation_text(p)
+
+
+def test_compact_ai_keeps_analysis_basis():
+    from match_timeline import compact_ai_analyses
+
+    pred = {
+        "recommendation_source": "ai_expert_deepseek",
+        "ai_provider": "deepseek",
+        "ai_provider_label": "DeepSeek 精算师",
+        "result_1x2_cn": "主胜",
+        "actuary_reasoning": "核心逻辑一句",
+        "analysis_basis": ["【基准概率】48%", "【综合结论】主胜"],
+        "predict_row": {"胜平负": "主胜"},
+    }
+    compact = compact_ai_analyses(pred)
+    assert compact["deepseek"]["analysis_basis"][0].startswith("【基准概率】")
+    assert compact["deepseek"]["actuary_reasoning"] == "核心逻辑一句"

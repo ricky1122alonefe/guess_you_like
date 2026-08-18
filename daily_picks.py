@@ -282,6 +282,39 @@ def _load_db_fixture_names(external_ids: list[str], *, source: str = "500") -> d
     return out
 
 
+_NAME_FIX_CACHE: dict[str, tuple[str, str] | None] = {}
+_NAME_FIX_MAX_PER_LOAD = 12
+
+
+def _split_match_pair(text: str) -> tuple[str, str] | None:
+    val = (text or "").strip()
+    if not val or val.startswith("队名待核"):
+        return None
+    for sep in (" VS ", " Vs ", " vs ", "VS", "Vs", "vs", "对"):
+        if sep in val:
+            parts = val.replace(sep, "\x00", 1).split("\x00")
+            if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+                return parts[0].strip(), parts[1].strip()
+    return None
+
+
+def _pair_usable(home: str | None, away: str | None) -> bool:
+    h, a = (home or "").strip(), (away or "").strip()
+    if not h or not a:
+        return False
+    if h.startswith("队名待核") or a.startswith("队名待核"):
+        return False
+    if _team_names_suspicious(h, a):
+        return False
+    if is_dirty_team_label(h) or is_dirty_team_label(a):
+        return False
+    return True
+
+
+def _fmt_pair(home: str, away: str) -> str:
+    return f"{home} VS {away}"
+
+
 def _extract_existing_match_name(m: dict) -> tuple[str, str] | None:
     """从 match / 比赛 / predict_row.比赛 字段解析主客队名。"""
     candidates = [m.get("match"), m.get("比赛")]
@@ -289,32 +322,69 @@ def _extract_existing_match_name(m: dict) -> tuple[str, str] | None:
     if isinstance(pr, dict):
         candidates.append(pr.get("比赛"))
     for val in candidates:
-        val = (val or "").strip()
-        if not val:
-            continue
-        parts = [p.strip() for p in re.split(r"\s+[Vv][Ss]\s+", val)]
-        if len(parts) == 2 and parts[0] and parts[1]:
-            return parts[0], parts[1]
+        parts = _split_match_pair(str(val or ""))
+        if parts:
+            return parts
+    return None
+
+
+def _try_local_stored_name(fid: str) -> tuple[str, str] | None:
+    """不打外网：从 prediction / index 里找回干净对阵。"""
+    try:
+        from apps.api.services import load_prediction
+
+        pred = load_prediction(Path("output/service"), str(fid))
+    except Exception:
+        pred = None
+    if isinstance(pred, dict):
+        for raw in (
+            pred.get("match"),
+            pred.get("match_name"),
+            (pred.get("predict_row") or {}).get("比赛") if isinstance(pred.get("predict_row"), dict) else None,
+        ):
+            parts = _split_match_pair(str(raw or ""))
+            if parts and _pair_usable(*parts):
+                return parts
+    try:
+        idx_path = Path("output/service/matches") / str(fid) / "index.json"
+        if idx_path.is_file():
+            idx = json.loads(idx_path.read_text(encoding="utf-8"))
+            parts = _split_match_pair(str(idx.get("match_name") or idx.get("match") or ""))
+            if parts and _pair_usable(*parts):
+                return parts
+            home, away = str(idx.get("home_team") or "").strip(), str(idx.get("away_team") or "").strip()
+            if _pair_usable(home, away):
+                return home, away
+    except Exception:
+        return None
     return None
 
 
 def _try_fix_name_from_500(fid: str) -> tuple[str, str] | None:
     """从 500 亚盘分析页抓取真实队名；失败或仍脏返回 None。
 
-    注意：会打外网，首页默认路径不要调用（见 allow_network）。
+    注意：会打外网。首页只对脏名/同名场调用，并有次数上限。
     """
+    fid = str(fid)
+    if fid in _NAME_FIX_CACHE:
+        return _NAME_FIX_CACHE[fid]
     try:
         from download_500 import _session, fetch_match_info
 
         info = fetch_match_info(_session(), fid)
     except Exception as exc:
         log.debug("fetch_match_info fallback failed fid=%s: %s", fid, exc)
+        _NAME_FIX_CACHE[fid] = None
         return None
     if not info.home or not info.away:
+        _NAME_FIX_CACHE[fid] = None
         return None
-    if is_dirty_team_label(info.home) or is_dirty_team_label(info.away):
+    if not _pair_usable(info.home, info.away):
+        _NAME_FIX_CACHE[fid] = None
         return None
-    return info.home, info.away
+    pair = (info.home.strip(), info.away.strip())
+    _NAME_FIX_CACHE[fid] = pair
+    return pair
 
 
 def _write_back_clean_name(fid: str, home: str, away: str, source: str) -> None:
@@ -340,37 +410,50 @@ def _resolve_dashboard_name(
     db: dict | None,
     *,
     allow_network: bool = False,
+    network_budget: list[int] | None = None,
 ) -> str:
-    """首页队名解析优先级：DB 干净名 > 现有干净名 >（可选）实时修正 > 占位符。"""
-    # 1) DB 干净名优先（挡住 live 脏名覆盖）
-    if db and not is_dirty_team_label(db["home"]) and not is_dirty_team_label(db["away"]):
-        return f"{db['home']} VS {db['away']}"
-
-    # 2) 现有名若干净则直接用（首页默认不打外网）
+    """首页队名：DB/本地干净对阵优先；脏名或主客同名才回源，避免整页 45 场都打网。"""
+    candidates: list[tuple[str, str]] = []
+    if db:
+        candidates.append((db.get("home") or "", db.get("away") or ""))
+        parts = _split_match_pair(str(db.get("match_name") or ""))
+        if parts:
+            candidates.append(parts)
     existing = _extract_existing_match_name(m)
-    if existing and not is_dirty_team_label(existing[0]) and not is_dirty_team_label(existing[1]):
-        return f"{existing[0]} VS {existing[1]}"
+    if existing:
+        candidates.append(existing)
+    for home, away in candidates:
+        if _pair_usable(home, away):
+            return _fmt_pair(home, away)
 
-    # 3) 可选：脏名实时回填（仅允许网络时）
-    if allow_network:
-        if db and (is_dirty_team_label(db["home"]) or is_dirty_team_label(db["away"])):
+    local = _try_local_stored_name(fid)
+    if local:
+        return _fmt_pair(*local)
+
+    needs_fix = True
+    if allow_network and needs_fix:
+        budget_ok = network_budget is None or network_budget[0] > 0
+        if budget_ok:
+            if network_budget is not None:
+                network_budget[0] -= 1
             fixed = _try_fix_name_from_500(fid)
             if fixed:
                 home, away = fixed
-                _write_back_clean_name(fid, home, away, db.get("source", "500"))
-                return f"{home} VS {away}"
-        fixed = _try_fix_name_from_500(fid)
-        if fixed:
-            home, away = fixed
-            _write_back_clean_name(fid, home, away, db.get("source", "500") if db else "500")
-            return f"{home} VS {away}"
+                src = (db or {}).get("source", "500")
+                _write_back_clean_name(fid, home, away, src)
+                return _fmt_pair(home, away)
 
-    # 4) 仍脏 → 占位符（不阻塞首页）
     m["_team_name_suspicious"] = True
-    if existing:
-        return f"{existing[0]} VS {existing[1]}"
-    if db:
-        return f"{db['home']} VS {db['away']}"
+    # 有一侧真队名时不要整场改成「队名待核」
+    for home, away in candidates:
+        h, a = (home or "").strip(), (away or "").strip()
+        if h and a and not h.startswith("队名待核") and not a.startswith("队名待核"):
+            if is_dirty_team_label(h) and not is_dirty_team_label(a) and not _team_names_suspicious(h, a):
+                continue
+            if is_dirty_team_label(a) and not is_dirty_team_label(h) and not _team_names_suspicious(h, a):
+                continue
+            if not is_dirty_team_label(h) and not is_dirty_team_label(a) and not _team_names_suspicious(h, a):
+                return _fmt_pair(h, a)
     return f"队名待核 ({fid})"
 
 
@@ -380,23 +463,26 @@ def _resolve_dashboard_names(matches: list[dict], *, allow_network: bool = False
         return
     fids = [str(m.get("fixture_id") or m.get("fid") or "") for m in matches]
     db_map = _load_db_fixture_names(fids)
+    budget = [_NAME_FIX_MAX_PER_LOAD]
     for m in matches:
         fid = str(m.get("fixture_id") or m.get("fid") or "")
         if not fid:
             continue
         resolved = _resolve_dashboard_name(
-            fid, m, db_map.get(fid), allow_network=allow_network,
+            fid, m, db_map.get(fid),
+            allow_network=allow_network,
+            network_budget=budget,
         )
         m["match"] = resolved
         pr = dict(m.get("predict_row") or {})
         pr["比赛"] = resolved
         m["predict_row"] = pr
-        # 标记主客同名/近同名/脏占位
         parts = _extract_existing_match_name(m) or ("", "")
         m["_team_name_suspicious"] = (
             is_dirty_team_label(parts[0])
             or is_dirty_team_label(parts[1])
             or _team_names_suspicious(parts[0], parts[1])
+            or str(resolved).startswith("队名待核")
         )
 
 
@@ -702,7 +788,7 @@ def load_dashboard_matches(
             m["kickoff_label"] = _fmt_kickoff(m["kickoff_at"])
 
     matches = list(by_id.values())
-    _resolve_dashboard_names(matches)
+    _resolve_dashboard_names(matches, allow_network=True)
     _enrich_result_predictions(
         matches,
         focus_fids=focus_fids,

@@ -76,6 +76,9 @@ def compact_ai_analyses(pred: dict) -> dict[str, dict]:
                 "asian_handicap_cn": row.get("亚盘") or p.get("asian_handicap_cn"),
                 "confidence_cn": row.get("置信度") or p.get("confidence_cn"),
                 "actuary_reasoning": (p.get("actuary_reasoning") or "")[:500],
+                "analysis_basis": [
+                    str(x) for x in (p.get("analysis_basis") or [])[:6] if str(x).strip()
+                ],
             }
         return out
     src = pred.get("recommendation_source") or ""
@@ -95,6 +98,9 @@ def compact_ai_analyses(pred: dict) -> dict[str, dict]:
         "asian_handicap_cn": row.get("亚盘") or pred.get("asian_handicap_cn"),
         "confidence_cn": row.get("置信度") or pred.get("confidence_cn"),
         "actuary_reasoning": (pred.get("actuary_reasoning") or "")[:500],
+        "analysis_basis": [
+            str(x) for x in (pred.get("analysis_basis") or [])[:6] if str(x).strip()
+        ],
     }
     return out
 

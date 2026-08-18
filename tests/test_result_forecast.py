@@ -7,7 +7,9 @@ from analysis.result_forecast.context import (
     _extract_betfair,
     _extract_european,
     _extract_history,
+    _history_count_unusable,
     _implied_probs,
+    _recover_team_names,
     build_result_forecast_context,
 )
 from analysis.result_forecast.engine import forecast, forecast_for_match
@@ -324,7 +326,7 @@ def test_g5_history_only_can_pick():
             "match_name": "A vs B",
             "similarity_analysis": {
                 "open": [{
-                    "source": "open_ah", "count": 55487,
+                    "source": "open_ah", "count": 1200,
                     "home_win_rate": 0.439, "draw_rate": 0.264, "away_win_rate": 0.297,
                 }],
             },
@@ -336,7 +338,7 @@ def test_g5_history_only_can_pick():
     assert "asian" in ctx["missing"]
     # 历史应可用
     assert ctx["history_similar"] is not None
-    assert ctx["history_similar"]["count"] == 55487
+    assert ctx["history_similar"]["count"] == 1200
     # 仍可出预测
     result = forecast(ctx)
     assert result["pick"] != "skip"
@@ -381,6 +383,70 @@ def test_forecast_reasons_cover_opening_form_similar():
     assert any(kw in reasons for kw in ("开盘", "初盘", "降水", "水位", "让球"))
     assert any(kw in reasons for kw in ("近况", "战绩", "状态"))
     assert any(kw in reasons for kw in ("历史", "同赔", "相似"))
+
+
+def test_history_whole_dump_rejected():
+    """整库 55487/55487 不能当同赔喂给 AI。"""
+    assert _history_count_unusable(55487, 55487) is True
+    hist = _extract_history({
+        "similarity_analysis": {
+            "open": [{
+                "source": "open_ah",
+                "count": 55487,
+                "home_win_rate": 0.439,
+                "draw_rate": 0.264,
+                "away_win_rate": 0.297,
+            }],
+        },
+        "history_total": 55487,
+    })
+    assert hist is None
+
+
+def test_recover_team_names_from_prediction_when_db_same():
+    """fixtures 主客同名时，用 prediction.match 找回真实对阵。"""
+    home, away, name = _recover_team_names(
+        "东京绿茵", "东京绿茵", "东京绿茵VS东京绿茵",
+        {"match": "东京绿茵VS柏太阳神"},
+    )
+    assert home == "东京绿茵"
+    assert away == "柏太阳神"
+    assert "柏太阳神" in name
+
+
+def test_include_club_form_kwarg_accepted():
+    """AI attach 传入 include_club_form=True 不得 TypeError。"""
+    ctx = build_result_forecast_context(
+        "test-fid",
+        index={"fixture_id": "test-fid", "home_team": "A", "away_team": "B", "timeline": []},
+        prediction=None,
+        include_club_form=True,
+    )
+    assert "missing" in ctx
+    ctx2 = build_result_forecast_context(
+        "test-fid",
+        index={"fixture_id": "test-fid", "home_team": "A", "away_team": "B", "timeline": []},
+        prediction=None,
+        include_club_form=False,
+    )
+    assert ctx2["home_team"] == "A"
+    assert ctx2["away_team"] == "B"
+
+
+def test_context_recovers_names_and_skips_same_team_form():
+    ctx = build_result_forecast_context(
+        "test-same-name",
+        index={
+            "fixture_id": "test-same-name",
+            "home_team": "东京绿茵",
+            "away_team": "东京绿茵",
+            "timeline": [],
+        },
+        prediction={"match": "东京绿茵VS柏太阳神"},
+        include_club_form=False,
+    )
+    assert ctx["home_team"] == "东京绿茵"
+    assert ctx["away_team"] == "柏太阳神"
 
 
 def test_context_returns_market_open_close_for_known_fixture():

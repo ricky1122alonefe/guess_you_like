@@ -159,14 +159,19 @@ def _parse_row_status(tr) -> dict[str, str]:
     return {}
 
 
-def _parse_teams_from_row(text: str) -> tuple[str, str]:
+def _parse_teams_from_row(text: str, *, skip_tokens: set[str] | None = None) -> tuple[str, str]:
     """Best-effort parse home/away from live.500 tr text."""
     parts = [p.strip() for p in text.split("|") if p.strip()]
     # Skip metadata cells until we hit team-like tokens (non-numeric, not handicap)
     teams: list[str] = []
     skip = {
         "世界杯", "未", "析", "亚", "欧", "推荐", "置顶", "-",
+        "日职", "日职联", "韩K", "英超", "西甲", "意甲", "德甲", "法甲",
+        "英冠", "英甲", "英乙", "西乙", "德乙", "德丙", "意乙", "法乙", "荷乙", "日乙",
+        "荷甲", "葡超", "苏超", "美职", "澳超", "巴甲", "阿甲",
     }
+    if skip_tokens:
+        skip |= {str(x).strip() for x in skip_tokens if str(x).strip()}
     for p in parts:
         if re.match(r"^周[一二三四五六日天]", p):
             continue
@@ -178,12 +183,21 @@ def _parse_teams_from_row(text: str) -> tuple[str, str]:
             continue
         if p in skip:
             continue
+        if p.upper() in {"VS", "V", "X"}:
+            continue
+        if len(p) <= 4 and p.endswith(("杯", "联", "超", "冠", "甲", "乙", "丙")):
+            continue
         if re.match(r"^\([+\-]\d+\)$", p):
             continue
         if re.search(r"球|/|平手|受让", p) and len(p) < 12:
             continue
         if len(p) >= 2 and not p.isdigit():
-            teams.append(re.sub(r"\[\d+\]", "", p).strip())
+            name = re.sub(r"\[\d+\]", "", p).strip()
+            if not name:
+                continue
+            if teams and name == teams[-1]:
+                continue
+            teams.append(name)
         if len(teams) >= 2:
             break
     if len(teams) >= 2:
@@ -388,7 +402,11 @@ def fetch_live_fixtures(
         if league_filter is not None and league not in league_filter:
             continue
         kickoff = _parse_kickoff(row_text, ref=now)
-        home, away = _parse_teams_from_row(row_text)
+        home, away = _parse_teams_from_row(row_text, skip_tokens={league} if league else None)
+        if (not home or not away or home == away) and a.get_text(strip=True):
+            h2, a2 = _parse_teams_from_title(a.get_text(strip=True) + "(x)")
+            if h2 and a2 and h2 != a2:
+                home, away = h2, a2
         order_id = ""
         match_num = ""
         if tr is not None:

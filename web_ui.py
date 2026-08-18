@@ -1621,15 +1621,48 @@ def _eu_odds_details_cell(o: dict) -> str:
     return f'<details class="eu-fold"><summary>欧赔对照</summary>{eu}</details>'
 
 
-def _recommendation_text(p: dict) -> str:
+def _recommendation_reason_text(p: dict, fallback_pred: dict | None = None) -> str:
+    """Latest-row one-liner: why this pick, not just who."""
+    pk = p.get("pick") or {}
+    for a in (pk.get("ai_analyses") or {}).values():
+        reason = str(a.get("actuary_reasoning") or "").strip()
+        if reason:
+            return reason
+        basis = a.get("analysis_basis") or []
+        if basis:
+            return str(basis[0]).strip()
+    reason = str(pk.get("actuary_reasoning") or pk.get("confidence_reason") or "").strip()
+    if reason:
+        return reason
+    if fallback_pred:
+        reason = str(fallback_pred.get("actuary_reasoning") or "").strip()
+        if reason:
+            return reason
+        basis = fallback_pred.get("analysis_basis") or []
+        if basis:
+            return str(basis[0]).strip()
+        rp = fallback_pred.get("result_prediction") or {}
+        reasons = rp.get("reasons") or []
+        if reasons:
+            return str(reasons[0]).strip()
+    return ""
+
+
+def _recommendation_text(p: dict, *, with_reason: bool = False, fallback_pred: dict | None = None) -> str:
     pk = p.get("pick") or {}
     ai_pk = pk.get("ai_analyses")
     if ai_pk:
-        return "<br>".join(
+        head = "<br>".join(
             f"<strong>{_e(a.get('label', k))}</strong>: {_e(a.get('result_1x2_cn'))}"
             for k, a in ai_pk.items()
         )
-    return f"<strong>{_e(pk.get('result_1x2_cn'))}</strong>"
+    else:
+        head = f"<strong>{_e(pk.get('result_1x2_cn'))}</strong>"
+    if with_reason:
+        reason = _recommendation_reason_text(p, fallback_pred)
+        if reason:
+            head += f'<br><span class="meta rec-reason">{_e(reason[:140])}</span>'
+    return head
 
 
 def _snapshot_rows_all_same(timeline: list, keys: list) -> bool:
@@ -2701,6 +2734,197 @@ def _betfair_chart_data(timeline: list, bf: dict) -> dict:
     }
 
 
+def _fmt_prob_map(probs) -> str:
+    if not isinstance(probs, dict) or not probs:
+        return ""
+    parts = []
+    for label in ("主胜", "平", "平局", "客胜"):
+        if label in probs:
+            parts.append(f"{label} {_e(probs.get(label))}")
+    return " / ".join(parts)
+
+
+def _collect_verdict_view(prediction: dict | None, ai_records: list[dict] | None = None) -> dict:
+    """Flatten 'who wins' + evidence for the first-screen verdict card."""
+    pred = prediction or {}
+    analyses = pred.get("ai_analyses") or {}
+    if not analyses and ai_records:
+        analyses = (ai_records[0] or {}).get("analyses") or {}
+
+    models: list[dict] = []
+    if analyses:
+        for pid, a in analyses.items():
+            row = a.get("predict_row") or {}
+            models.append({
+                "id": str(pid),
+                "label": a.get("ai_provider_label") or a.get("label") or pid,
+                "pick": _display_pick(a, row=row),
+                "confidence": a.get("confidence_cn") or row.get("置信度") or "—",
+                "reasoning": (a.get("actuary_reasoning") or a.get("final_verdict") or "").strip(),
+                "basis": [str(x) for x in (a.get("analysis_basis") or []) if str(x).strip()][:7],
+                "implied": a.get("implied_probability") or {},
+                "adjusted": a.get("adjusted_probability") or {},
+                "value_bet": a.get("value_bet"),
+                "risks": a.get("key_risks") or [],
+                "variables": a.get("match_variables") or [],
+                "judgment": a.get("judgment") or "",
+                "judgment_condition": a.get("judgment_condition") or "",
+                "jingcai": row.get("竞彩推荐") or "",
+                "jingcai_sp": row.get("竞彩SP"),
+            })
+
+    primary = models[0] if models else None
+    if primary and primary.get("pick"):
+        pick = primary["pick"]
+    elif pred:
+        pick = final_recommendation_cn(pred)
+    else:
+        pick = "—"
+    if not pick or pick in ("—", "待分析"):
+        rp = pred.get("result_prediction") or {}
+        pick = rp.get("pick_cn") or pick or "—"
+
+    basis = list((primary or {}).get("basis") or [])
+    if not basis:
+        basis = [str(x) for x in (pred.get("analysis_basis") or []) if str(x).strip()][:7]
+    rp = pred.get("result_prediction") or {}
+    if not basis:
+        basis = [str(x) for x in (rp.get("reasons") or []) if str(x).strip()][:7]
+    jc_info = pred.get("jingcai_pick_info") or {}
+    if jc_info.get("jingcai_reason") and not any(jc_info["jingcai_reason"] in x for x in basis):
+        basis.append(str(jc_info["jingcai_reason"]))
+
+    reasoning = (primary or {}).get("reasoning") or (pred.get("actuary_reasoning") or pred.get("final_verdict") or "").strip()
+    source = (primary or {}).get("label") or pred.get("ai_provider_label")
+    if not source:
+        src = pred.get("recommendation_source") or ""
+        source = "精算师" if ("ai" in src or pred.get("manual_ai")) else ("规则融合" if rp else "—")
+
+    return {
+        "pick": pick or "—",
+        "confidence": (primary or {}).get("confidence") or pred.get("confidence_cn") or rp.get("confidence_cn") or "—",
+        "source": source,
+        "reasoning": reasoning,
+        "basis": basis[:7],
+        "implied": (primary or {}).get("implied") or pred.get("implied_probability") or {},
+        "adjusted": (primary or {}).get("adjusted") or pred.get("adjusted_probability") or {},
+        "value_bet": (primary or {}).get("value_bet") if primary else pred.get("value_bet"),
+        "risks": (primary or {}).get("risks") or pred.get("key_risks") or [],
+        "variables": (primary or {}).get("variables") or pred.get("match_variables") or [],
+        "judgment": (primary or {}).get("judgment") or pred.get("judgment") or "",
+        "judgment_condition": (primary or {}).get("judgment_condition") or pred.get("judgment_condition") or "",
+        "jingcai": (primary or {}).get("jingcai") or (pred.get("predict_row") or {}).get("竞彩推荐") or "",
+        "jingcai_sp": (primary or {}).get("jingcai_sp") or (pred.get("predict_row") or {}).get("竞彩SP"),
+        "models": models,
+        "rule_pick": rp.get("pick_cn") or "",
+        "has_ai": bool(models) or "ai" in str(pred.get("recommendation_source") or ""),
+    }
+
+
+def _verdict_basis_card(prediction: dict | None, ai_records: list[dict] | None = None) -> str:
+    """First-screen answer: who is favoured, and on what evidence."""
+    view = _collect_verdict_view(prediction, ai_records)
+    pick = view.get("pick") or "—"
+    empty_pick = pick in ("—", "", "待分析", "暂无竞彩")
+    if empty_pick and not view.get("basis") and not view.get("reasoning") and not view.get("has_ai"):
+        return (
+            '<div class="card verdict-card verdict-empty">'
+            "<h3>谁赢 · 依据</h3>"
+            '<p class="meta">还没有研判结论。点上方「AI 推荐本场」后，这里会写出倾向方向和逐条依据。</p>'
+            "</div>"
+        )
+
+    skip = pick in ("观望", "放弃参与", "skip")
+    pick_cls = "verdict-skip" if skip else "verdict-pick"
+    vb = view.get("value_bet")
+    vb_txt = ""
+    if vb is True:
+        vb_txt = '<span class="tag tag-ok">正 EV</span>'
+    elif vb is False:
+        vb_txt = '<span class="tag tag-miss">无正 EV</span>'
+
+    model_line = ""
+    models = view.get("models") or []
+    if len(models) > 1:
+        bits = " · ".join(f"{m.get('label')}:{m.get('pick')}" for m in models)
+        model_line = f'<p class="meta">各模型：{_e(bits)}</p>'
+
+    reason_html = ""
+    if view.get("reasoning"):
+        reason_html = f'<p class="verdict-lead">{_e(view["reasoning"])}</p>'
+
+    judgment_html = ""
+    if view.get("judgment") or view.get("judgment_condition"):
+        j = view.get("judgment") or ""
+        cond = view.get("judgment_condition") or ""
+        cond_p = f'<p class="meta">成立条件：{_e(cond)}</p>' if cond else ""
+        judgment_html = (
+            f'<div class="verdict-judgment"><h4>判断</h4>'
+            f'<p>{_e(j)}</p>{cond_p}</div>'
+        )
+
+    vars_html = ""
+    variables = view.get("variables") or []
+    if variables:
+        items = "".join(f"<li>{_e(x)}</li>" for x in variables[:4])
+        vars_html = f"<div class='verdict-vars'><h4>变数研判</h4><ul>{items}</ul></div>"
+
+    basis = view.get("basis") or []
+    if basis:
+        items = "".join(f"<li>{_e(x)}</li>" for x in basis)
+        basis_html = f"<ol class='verdict-basis-list'>{items}</ol>"
+    else:
+        basis_html = '<p class="meta">模型未写出逐条依据，仅有结论。建议再跑一次 AI 推荐。</p>'
+
+    implied = _fmt_prob_map(view.get("implied"))
+    adjusted = _fmt_prob_map(view.get("adjusted"))
+    prob_html = ""
+    if implied or adjusted:
+        rows = ""
+        if implied:
+            rows += f"<p class='meta'><strong>市场隐含</strong> {_e(implied)}</p>"
+        if adjusted:
+            rows += f"<p class='meta'><strong>修正后</strong> {_e(adjusted)}</p>"
+        prob_html = rows
+
+    jc = view.get("jingcai") or ""
+    jc_sp = view.get("jingcai_sp")
+    jc_html = ""
+    if jc and jc not in ("—", ""):
+        sp_txt = f" · SP {_e(jc_sp)}" if jc_sp else ""
+        jc_html = f'<p class="meta"><strong>竞彩可购</strong> {_e(jc)}{sp_txt}</p>'
+
+    rule_pick = view.get("rule_pick") or ""
+    rule_html = ""
+    if rule_pick and rule_pick not in (pick, "—", ""):
+        rule_html = f'<p class="meta">规则桌对照：{_e(rule_pick)}（供复核，不替代上方结论）</p>'
+
+    risks = view.get("risks") or []
+    risk_html = ""
+    if risks:
+        items = "".join(f"<li>{_e(x)}</li>" for x in risks[:3])
+        risk_html = f"<div class='verdict-risks'><h4>风险</h4><ul>{items}</ul></div>"
+
+    src = view.get("source") or "—"
+    conf = view.get("confidence") or "—"
+    return f"""
+<div class="card verdict-card">
+  <h3>谁赢 · 依据</h3>
+  <p class="{pick_cls}">{_e(pick)} {vb_txt}</p>
+  <p class="meta">{_e(src)} · 置信 {_e(conf)} · 倾向而非确定结果</p>
+  {model_line}
+  {jc_html}
+  {reason_html}
+  {judgment_html}
+  {vars_html}
+  <h4>依据</h4>
+  {basis_html}
+  {prob_html}
+  {rule_html}
+  {risk_html}
+</div>"""
+
+
 def _pred_card(pred: dict, *, title: str = "最新推荐") -> str:
     if not pred:
         return ""
@@ -2738,7 +2962,14 @@ def _pred_card(pred: dict, *, title: str = "最新推荐") -> str:
     buy_line += "</p>"
     div = pred.get("jingcai_divergence") or {}
     div_line = f"<p class='meta warn'>{_e(div.get('note') or '')}</p>" if div.get("divergence") else ""
-    meta_block = _fold("分析逻辑", f"<p class='meta'>{_e(meta)}</p>", muted=True) if meta else ""
+    basis = [str(x) for x in (pred.get("analysis_basis") or []) if str(x).strip()]
+    if basis:
+        items = "".join(f"<li>{_e(x)}</li>" for x in basis[:7])
+        meta_block = f"<div class='verdict-basis'><h4>依据</h4><ol class='verdict-basis-list'>{items}</ol></div>"
+    elif meta:
+        meta_block = f"<div class='verdict-basis'><h4>依据</h4><p class='meta'>{_e(meta)}</p></div>"
+    else:
+        meta_block = ""
     market_summary = pred.get("market_pattern_summary") or ""
     market_names = pred.get("market_pattern_names") or []
     market_lines = ""
@@ -8252,6 +8483,15 @@ def _ai_expert_desk_card(match_name: str, payload: dict | None) -> str:
             '</div>'
         )
 
+    frame = payload.get("judgment_frame") or {}
+    frame_rows = _row("原则", "数学只给基准 · 研判变数 · 再判断仓位")
+    if frame.get("note"):
+        frame_rows += _row("要求", str(frame.get("note")))
+    layers = frame.get("required_layers") or []
+    if layers:
+        frame_rows += _row("必写层级", " / ".join(str(x) for x in layers))
+    frame_section = _section("7) 研判框架", frame_rows, True)
+
     # 预览入参
     preview_json = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
     preview_html = (
@@ -8264,8 +8504,8 @@ def _ai_expert_desk_card(match_name: str, payload: dict | None) -> str:
     return (
         '<div class="card" style="border:1px solid #ddd;border-radius:8px;padding:12px;margin:8px 0">'
         '<h3 style="margin:0 0 6px">🎲 精算师桌（赔率/水位/分歧驱动）</h3>'
-        '<p class="meta" style="font-size:12px;margin:0 0 8px">只根据可购竞彩、欧亚分歧、水位/变盘与预计算 EV 做推断；missing 项禁止编造。</p>'
-        f'{jc_section}{div_section}{mkt_section}{rf_section}{sim_section}{missing_html}{preview_html}'
+        '<p class="meta" style="font-size:12px;margin:0 0 8px">数学（赔率/同赔/泊松/战绩）只给基准；须研判变数后再判断倾向、小注或放弃。missing 项禁止编造。</p>'
+        f'{jc_section}{div_section}{mkt_section}{rf_section}{sim_section}{missing_html}{frame_section}{preview_html}'
         '</div>'
     )
 
@@ -8553,6 +8793,7 @@ def html_match_detail(
     changes = index.get("changes") or []
 
     pred_card = _wrap_export_module("recommend", _build_pred_cards(prediction))
+    verdict_card = _wrap_export_module("verdict", _verdict_basis_card(prediction, ai_records))
     result_forecast_card = _wrap_export_module("result-forecast", _result_forecast_card(prediction))
     settled_card = _wrap_export_module("settled", _settled_card(settled))
 
@@ -8560,7 +8801,7 @@ def html_match_detail(
     forecast_ctx: dict = {}
     try:
         from analysis.result_forecast.context import build_result_forecast_context
-        forecast_ctx = build_result_forecast_context(str(fid)) or {}
+        forecast_ctx = build_result_forecast_context(str(fid), prediction=prediction) or {}
     except Exception:
         forecast_ctx = {}
     market_open_close = forecast_ctx.get("market_open_close") or {}
@@ -8699,7 +8940,11 @@ def html_match_detail(
         if bf_row.get("has_data"):
             bf_txt = f"{pct.get('home', '—')}/{pct.get('draw', '—')}/{pct.get('away', '—')}%"
         jc = _extract_jingcai_from_tick(p)
-        rec_txt = _recommendation_text(p) if (not rec_same or idx == latest_idx) else "—"
+        rec_txt = (
+            _recommendation_text(p, with_reason=True, fallback_pred=prediction)
+            if (not rec_same or idx == latest_idx)
+            else "—"
+        )
         score_txt = _score_cell(pk, idx, latest_idx)
         conf_txt = _confidence_cell(pk, idx, latest_idx)
         tbl_rows += (
@@ -8802,6 +9047,15 @@ def html_match_detail(
 .card.inner { box-shadow: none; border: 1px solid rgba(255,255,255,0.08); padding: 12px; margin: 0; background: rgba(255,255,255,0.04); }
 .pick { font-size: clamp(1rem, 3.5vw, 1.15rem); }
 .pred-card { border-left: 4px solid #7c3aed; }
+.verdict-card { border-left: 5px solid #ef4444; background: linear-gradient(180deg, rgba(127,29,29,.18), rgba(15,23,42,.35)); }
+.verdict-card h3 { margin: 0 0 8px; }
+.verdict-pick { font-size: clamp(1.6rem, 5vw, 2.1rem); font-weight: 800; color: #fecaca; margin: 4px 0 8px; }
+.verdict-skip { font-size: clamp(1.4rem, 4vw, 1.8rem); font-weight: 800; color: #fdba74; margin: 4px 0 8px; }
+.verdict-lead { font-size: 15px; line-height: 1.7; color: #e2e8f0; margin: 8px 0; }
+.verdict-basis h4, .verdict-card h4 { margin: 12px 0 6px; color: #fca5a5; font-size: 13px; }
+.verdict-basis-list { margin: 0; padding-left: 22px; color: #e2e8f0; font-size: 14px; line-height: 1.7; }
+.verdict-risks ul { margin: 0; padding-left: 18px; color: #fdba74; font-size: 13px; line-height: 1.55; }
+.rec-reason { display: inline-block; max-width: 28em; }
 .deep-card { border-left: 4px solid #0d9488; }
 .agent-board-card { border-left: 4px solid #8b5cf6; }
 .chief-agent-card { border-left: 4px solid #a855f7; }
@@ -8958,7 +9212,7 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
         if _knockout_phase()
         else f'<a class="btn" style="background:#2563eb" href="/kelly?fixture_id={_e(fid)}">🧮 Kelly</a>'
     )
-    meta_hint = "优先看 盘口 → 战绩 → 规则预测 → AI 素材；需要再展开下方折叠。"
+    meta_hint = "先看「谁赢 · 依据」，再看盘口/战绩；需要细节再展开下方折叠。"
 
     # 折叠非首屏内容
     extra_buttons_fold = _fold(
@@ -9026,6 +9280,7 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
 <div id="match-export-root" data-export-base="{_e(export_fname)}">
 {export_hero}
 {settled_card}
+{verdict_card}
 {market_card}
 {form_card}
 {history_similar_card}

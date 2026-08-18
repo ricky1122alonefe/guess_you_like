@@ -201,3 +201,19 @@ def test_ensure_fixture_identity_keeps_clean_names(monkeypatch):
     assert fixed.home == "广州恒大"
     assert fixed.away == "上海上港"
     assert not call_log
+
+
+def test_ensure_fixture_identity_fixes_same_team_names(monkeypatch):
+    """主客同名视为脏名，应回源抓取真实对阵。"""
+    from download_500 import MatchFixture
+
+    fx = MatchFixture(fixture_id="1419227", home="东京绿茵", away="东京绿茵")
+
+    def fake_fetch(_session, fid):
+        assert fid == "1419227"
+        return MatchFixture(fixture_id=fid, home="东京绿茵", away="柏太阳神")
+
+    monkeypatch.setattr("download_500.fetch_match_info", fake_fetch)
+    fixed = ensure_fixture_real_teams(MagicMock(), fx)
+    assert fixed.home == "东京绿茵"
+    assert fixed.away == "柏太阳神"

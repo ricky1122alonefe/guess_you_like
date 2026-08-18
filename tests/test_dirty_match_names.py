@@ -47,7 +47,9 @@ class TestIsDirtyTeamLabel:
             ("资格赛3", True),
             ("第4轮", True),
             ("第十轮", True),
-            ("广州恒大", False),
+            ("德乙", True),
+            ("英甲", True),
+            ("基尔", False),
             ("切尔西", False),
             ("第戎", False),
             ("", True),
@@ -59,7 +61,9 @@ class TestIsDirtyTeamLabel:
 
 
 class TestExtractExistingMatchName:
-    def test_extracts_vs_name(self):
+    def test_extracts_vs_without_spaces(self):
+        m = {"match": "东京绿茵VS柏太阳神"}
+        assert _extract_existing_match_name(m) == ("东京绿茵", "柏太阳神")
         m = {"match": "帕佛斯FC VS 佐加顿斯"}
         assert _extract_existing_match_name(m) == ("帕佛斯FC", "佐加顿斯")
 
@@ -71,7 +75,30 @@ class TestExtractExistingMatchName:
         assert _extract_existing_match_name({}) is None
 
 
+def test_parse_live_row_skips_league_token():
+    from download_500 import _parse_teams_from_row
+    home, away = _parse_teams_from_row(
+        "周五001|德乙|08-14 18:00|马格德堡|VS|基尔",
+        skip_tokens={"德乙"},
+    )
+    assert home == "马格德堡"
+    assert away == "基尔"
+
+
+def test_parse_live_row_skips_duplicate_home_cell():
+    from download_500 import _parse_teams_from_row
+    home, away = _parse_teams_from_row("周五001|日职|08-14 18:00|东京绿茵|东京绿茵|柏太阳神")
+    assert home == "东京绿茵"
+    assert away == "柏太阳神"
+
+
 class TestResolveDashboardName:
+    def test_db_same_team_falls_back_to_existing_pair(self):
+        m = {"match": "东京绿茵 VS 柏太阳神"}
+        db = {"home": "东京绿茵", "away": "东京绿茵", "source": "500"}
+        name = _resolve_dashboard_name("1419227", m, db)
+        assert name == "东京绿茵 VS 柏太阳神"
+
     def test_db_clean_names_take_priority(self):
         m = {"match": "欧罗巴 VS 资格赛3"}
         db = {"home": "帕佛斯FC", "away": "佐加顿斯", "source": "500"}
@@ -81,9 +108,10 @@ class TestResolveDashboardName:
     def test_db_dirty_and_fetch_success(self):
         m = {"match": "欧罗巴 VS 资格赛3"}
         db = {"home": "欧罗巴", "away": "资格赛3", "source": "500"}
-        with patch("daily_picks._try_fix_name_from_500", return_value=("帕佛斯FC", "佐加顿斯")):
-            with patch("daily_picks._write_back_clean_name") as wb:
-                name = _resolve_dashboard_name("1420010", m, db)
+        with patch("daily_picks._try_local_stored_name", return_value=None):
+            with patch("daily_picks._try_fix_name_from_500", return_value=("帕佛斯FC", "佐加顿斯")):
+                with patch("daily_picks._write_back_clean_name") as wb:
+                    name = _resolve_dashboard_name("1420010", m, db, allow_network=True)
         assert name == "帕佛斯FC VS 佐加顿斯"
         wb.assert_called_once_with("1420010", "帕佛斯FC", "佐加顿斯", "500")
 
@@ -97,22 +125,25 @@ class TestResolveDashboardName:
     def test_all_dirty_and_fetch_fails_shows_placeholder(self):
         m = {"match": "欧罗巴 VS 资格赛3"}
         db = {"home": "欧罗巴", "away": "资格赛3", "source": "500"}
-        with patch("daily_picks._try_fix_name_from_500", return_value=None):
-            name = _resolve_dashboard_name("1420010", m, db)
+        with patch("daily_picks._try_local_stored_name", return_value=None):
+            with patch("daily_picks._try_fix_name_from_500", return_value=None):
+                name = _resolve_dashboard_name("1420010", m, db)
         assert name == "队名待核 (1420010)"
 
     def test_no_db_fetch_success_writes_back(self):
         m = {"match": "欧罗巴 VS 资格赛3"}
-        with patch("daily_picks._try_fix_name_from_500", return_value=("帕佛斯FC", "佐加顿斯")):
-            with patch("daily_picks._write_back_clean_name") as wb:
-                name = _resolve_dashboard_name("1420010", m, None)
+        with patch("daily_picks._try_local_stored_name", return_value=None):
+            with patch("daily_picks._try_fix_name_from_500", return_value=("帕佛斯FC", "佐加顿斯")):
+                with patch("daily_picks._write_back_clean_name") as wb:
+                    name = _resolve_dashboard_name("1420010", m, None, allow_network=True)
         assert name == "帕佛斯FC VS 佐加顿斯"
         wb.assert_called_once_with("1420010", "帕佛斯FC", "佐加顿斯", "500")
 
     def test_no_db_fetch_fails_shows_placeholder(self):
         m = {"match": "欧罗巴 VS 资格赛3"}
-        with patch("daily_picks._try_fix_name_from_500", return_value=None):
-            name = _resolve_dashboard_name("1420010", m, None)
+        with patch("daily_picks._try_local_stored_name", return_value=None):
+            with patch("daily_picks._try_fix_name_from_500", return_value=None):
+                name = _resolve_dashboard_name("1420010", m, None)
         assert name == "队名待核 (1420010)"
 
 

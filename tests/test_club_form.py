@@ -85,6 +85,8 @@ def test_resolve_team_name_j_league():
     assert _resolve_team_name("大阪钢巴", "日职") == "Gamba Osaka"
     assert _resolve_team_name("大阪樱花", "日职") == "Cerezo Osaka"
     assert _resolve_team_name("川崎前锋", "日职") == "Kawasaki Frontale"
+    assert _resolve_team_name("东京绿茵", "日职") == "Tokyo Verdy 1969"
+    assert _resolve_team_name("柏太阳神", "日职") == "Kashiwa Reysol"
 
 
 def test_resolve_team_name_k_league():
@@ -102,3 +104,34 @@ def test_build_club_form_samples_shape():
     assert "away_all" in cf["samples"]
     assert isinstance(cf["samples"]["home_all"], list)
     assert len(cf["missing"]) > 0
+
+
+def test_aliases_include_espn_verdy():
+    """东京绿茵必须能命中 ESPN 历史库名。"""
+    from analysis.team_form.club_form import _aliases_for
+    aliases = set(_aliases_for("东京绿茵"))
+    assert "东京绿茵" in aliases
+    assert "Tokyo Verdy 1969" in aliases
+
+
+def test_summary_row_counts_english_home_win_for_chinese_team():
+    """中文展示名 + 英文库名时，主场赢球计为胜而不是负。"""
+    from analysis.team_form.club_form import _summary_row
+    matches = [
+        {"home_team": "Kashiwa Reysol", "away_team": "Gamba Osaka", "home_score": 2, "away_score": 1},
+        {"home_team": "FC Tokyo", "away_team": "Kashiwa Reysol", "home_score": 0, "away_score": 1},
+    ]
+    aliases = {"柏太阳神", "Kashiwa Reysol"}
+    s = _summary_row("柏太阳神", matches, "all", aliases)
+    assert s["played"] == 2
+    assert s["w"] == 2
+    assert s["l"] == 0
+
+
+def test_summary_row_without_alias_does_not_invert():
+    """对不上英文名时宁可不计，也不要把主场赢算成客场负。"""
+    matches = [
+        {"home_team": "Kashiwa Reysol", "away_team": "Gamba Osaka", "home_score": 2, "away_score": 1},
+    ]
+    s = _summary_row("柏太阳神", matches, "all")
+    assert s["played"] == 0

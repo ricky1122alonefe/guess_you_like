@@ -20,6 +20,9 @@ ACTUARY_JSON_KEYS = (
     "recommendation",
     "confidence_level",
     "actuary_reasoning",
+    "match_variables",
+    "judgment",
+    "judgment_condition",
 )
 
 RECOMMENDATION_KEYS = (

@@ -27,7 +27,8 @@ def upsert_fixture(
         "欧罗巴","欧联杯","欧会杯","欧冠","欧冠杯","亚冠","亚冠杯","欧超杯",
         "解放者杯","南美杯","世界杯","世俱杯",
         "日职","日职联","韩K","英超","西甲","意甲","德甲","法甲",
-        "英冠","西乙","荷甲","葡超","苏超","美职","澳超","巴甲","阿甲",
+        "英冠","英甲","英乙","西乙","德乙","德丙","意乙","法乙","荷乙","日乙",
+        "荷甲","葡超","苏超","美职","澳超","巴甲","阿甲",
         "附加赛","决赛","半决赛","四分之一决赛","八强","四强",
         "资格赛","预选赛",
     )
@@ -58,8 +59,8 @@ def upsert_fixture(
     INSERT INTO fixtures (source, external_id, home_team, away_team, match_name, kickoff_at, updated_at)
     VALUES (%s, %s, %s, %s, %s, %s, NOW())
     ON CONFLICT (source, external_id) DO UPDATE SET
-        home_team = CASE WHEN {home_guard} THEN fixtures.home_team ELSE EXCLUDED.home_team END,
-        away_team = CASE WHEN {away_guard} THEN fixtures.away_team ELSE EXCLUDED.away_team END,
+        home_team = CASE WHEN {home_guard} OR (EXCLUDED.home_team <> '' AND EXCLUDED.home_team = EXCLUDED.away_team) THEN fixtures.home_team ELSE EXCLUDED.home_team END,
+        away_team = CASE WHEN {away_guard} OR (EXCLUDED.away_team <> '' AND EXCLUDED.home_team = EXCLUDED.away_team) THEN fixtures.away_team ELSE EXCLUDED.away_team END,
         match_name = CASE WHEN {name_guard} THEN fixtures.match_name ELSE EXCLUDED.match_name END,
         kickoff_at = COALESCE(EXCLUDED.kickoff_at, fixtures.kickoff_at),
         updated_at = NOW()

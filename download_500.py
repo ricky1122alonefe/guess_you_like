@@ -444,6 +444,7 @@ class DownloadResult:
     match_name: str
     asian: Path | None = None
     european: Path | None = None
+    league: str = ""
 
 
 def download_match_pair(
@@ -453,12 +454,15 @@ def download_match_pair(
     ah_only: bool = False,
     eu_only: bool = False,
     delay_sec: float = 0.5,
+    league: str = "",
 ) -> DownloadResult:
     """Download AH + EU xls for one fixture into output_dir."""
     out = Path(output_dir)
     sess = _session()
     info = fetch_match_info(sess, fixture_id)
-    result = DownloadResult(fixture_id=info.fixture_id, match_name=info.base_name)
+    result = DownloadResult(
+        fixture_id=info.fixture_id, match_name=info.base_name, league=league
+    )
 
     if not eu_only:
         result.asian = download_asian_handicap_xls(sess, info.fixture_id, out / info.ah_filename)
@@ -502,6 +506,7 @@ def download_upcoming(
                 fx.fixture_id, output_dir,
                 ah_only=ah_only, eu_only=eu_only,
                 delay_sec=delay_sec,
+                league=fx.league,
             ))
         except (Download500Error, requests.RequestException) as exc:
             print(f"跳过 {fx.base_name} ({fx.fixture_id}): {exc}", file=sys.stderr)

@@ -65,6 +65,7 @@ SERVICE_WITHIN_DAYS = 7.0            # 服务赛程窗口（poll / 整点分析 
 
 # ── Q1-D0: 产品转向竞彩开售联赛 ──────────────────────────
 FOCUS_JINGCAI_ONLY = True            # 首页默认只显示竞彩在售（有编号/SP）；False=全部 500
+JINGCAI_RELEASE_HOUR = 11            # 竞彩官方开售列表大致释放时间（北京时间），此前首页显示全部已保存场次
 TOURNAMENT_PHASE = "league"          # 默认联赛模式（非 group/knockout）
 AI_PROFILE_DEFAULT = "league"        # AI 默认联赛 profile（非 worldcup）
 

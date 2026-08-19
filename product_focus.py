@@ -5,7 +5,10 @@ Q1-D0: 产品转向竞彩开售联赛。默认联赛模式（非世界杯）。
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import config as cfg
+from time_utils import now_beijing
 
 
 def score_prediction_enabled() -> bool:
@@ -18,8 +21,20 @@ def knockout_phase() -> bool:
 
 
 def focus_jingcai_only() -> bool:
-    """首页是否默认只显示竞彩在售场。"""
-    return bool(getattr(cfg, "FOCUS_JINGCAI_ONLY", True))
+    """首页是否默认只显示竞彩在售场。
+
+    竞彩官方开售列表通常在北京时间 11:00 前后才放出，此前若只按竞彩信号过滤
+    会导致已保存的场次全部空白。因此 configured True 时，仍只在开售时间之后
+    才生效；开售之前自动回退为显示全部已保存场次。
+    """
+    base = bool(getattr(cfg, "FOCUS_JINGCAI_ONLY", True))
+    if not base:
+        return False
+    release_hour = getattr(cfg, "JINGCAI_RELEASE_HOUR", 11)
+    try:
+        return now_beijing().hour >= release_hour
+    except Exception:
+        return base
 
 
 def ai_profile() -> str:

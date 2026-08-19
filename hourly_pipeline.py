@@ -42,6 +42,7 @@ from daily_picks import (
 )
 from daily_picks_ai import build_daily_picks_auto
 from match_settlement import run_settlement
+from prematch_desk import attach_prematch_and_summary
 from timeline_merge import load_latest_poll_meta
 from match_timeline import append_ai_record, append_hourly_snapshot
 
@@ -198,6 +199,7 @@ def _predict_one(
     ai_profile: AiProfile | None = None,
     fixture_id: str | None = None,
     output_root: str | Path | None = None,
+    league_name: str = "",
 ):
     cur = parse_match_pair(str(ah_path), str(eu_path))
     predict_date = now_beijing_str("%Y-%m-%d")
@@ -240,6 +242,7 @@ def _predict_one(
             poll_meta=poll_meta,
             cur=cur,
         )
+        attach_prematch_and_summary(result, league_name=league_name)
         return result
 
     payload = build_payload(str(ah_path), str(eu_path), history=history, sample_limit=10)
@@ -272,6 +275,7 @@ def _predict_one(
         poll_meta=poll_meta,
         cur=cur,
     )
+    attach_prematch_and_summary(base, league_name=league_name)
     return base
 
 
@@ -284,6 +288,7 @@ def _predict_multi_ai(
     profiles: list[AiProfile],
     fixture_id: str | None = None,
     output_root: str | Path | None = None,
+    league_name: str = "",
 ) -> dict:
     analyses: dict[str, dict] = {}
     errors: list[str] = []
@@ -299,6 +304,7 @@ def _predict_multi_ai(
                 ai_profile=prof,
                 fixture_id=fixture_id,
                 output_root=output_root,
+                league_name=league_name,
             )
             analyses[prof.provider_id] = pred
             log.info("AI %s → %s", prof.label, final_recommendation_cn(pred))
@@ -311,6 +317,7 @@ def _predict_multi_ai(
     merged = merge_multi_ai_predictions(analyses)
     if errors:
         merged["ai_errors"] = errors
+    attach_prematch_and_summary(merged, league_name=league_name)
     return merged
 
 
@@ -367,6 +374,7 @@ def run_single_match_ai(
                 ai_profile=profiles[0],
                 fixture_id=fid,
                 output_root=root,
+                league_name=dl.league,
             )
         else:
             pred = _predict_multi_ai(
@@ -376,6 +384,7 @@ def run_single_match_ai(
                 profiles=profiles,
                 fixture_id=fid,
                 output_root=root,
+                league_name=dl.league,
             )
         pred["fixture_id"] = fid
         pred["run_id"] = run_id
@@ -545,6 +554,7 @@ def run_hourly_job(
                         steps=enrichment_steps("reuse", root),
                         output_root=root,
                     )
+                    attach_prematch_and_summary(pred, league_name=dl.league)
                     results.append(pred)
                     summary.predict_ok += 1
                     summary.predict_skipped += 1
@@ -576,6 +586,7 @@ def run_hourly_job(
                             profiles=profiles,
                             fixture_id=fid,
                             output_root=output_root,
+                            league_name=dl.league,
                         )
                         summary.ai_called += len(profiles)
                     else:
@@ -589,6 +600,7 @@ def run_hourly_job(
                             ai_profile=profiles[0] if profiles else None,
                             fixture_id=fid,
                             output_root=output_root,
+                            league_name=dl.league,
                         )
                         if ai_for_match:
                             summary.ai_called += 1

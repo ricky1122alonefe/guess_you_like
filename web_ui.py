@@ -2925,6 +2925,42 @@ def _verdict_basis_card(prediction: dict | None, ai_records: list[dict] | None =
 </div>"""
 
 
+def _comparison_summary_card(prediction: dict | None) -> str:
+    """Cross-desk summary: odds desk pick + pre-match desk impact + final action."""
+    pred = prediction or {}
+    summary = pred.get("comparison_summary")
+    if not summary:
+        return ""
+    desk = pred.get("prematch_desk") or {}
+    action = summary.get("action") or "hold"
+    action_label = {
+        "hold": "维持",
+        "size_down": "降成小注",
+        "skip": "放弃",
+    }.get(action, action)
+    prematch_line = "赛前桌："
+    if not desk.get("available"):
+        reason = desk.get("reason") or "未启用"
+        if reason == "league_not_supported":
+            prematch_line += "暂不支持该联赛"
+        else:
+            prematch_line += "不可用"
+    elif desk.get("high_impact_facts"):
+        prematch_line += "有已确认高影响变数"
+    else:
+        prematch_line += "无已确认高影响变数"
+
+    return f"""
+<div class="card comparison-card">
+  <h3>对照摘要</h3>
+  <p class="meta"><strong>盘口桌结论：</strong>{_e(summary.get('odds_desk_pick') or '—')}</p>
+  <p class="meta"><strong>{_e(prematch_line)}</strong></p>
+  <p class="comparison-action"><strong>最终动作：</strong>{_e(action_label)}</p>
+  <p class="meta comparison-note">赛前桌不改方向，只可能降仓或放弃</p>
+  <p class="meta">{_e(summary.get('summary') or '')}</p>
+</div>"""
+
+
 def _pred_card(pred: dict, *, title: str = "最新推荐") -> str:
     if not pred:
         return ""
@@ -8794,6 +8830,7 @@ def html_match_detail(
 
     pred_card = _wrap_export_module("recommend", _build_pred_cards(prediction))
     verdict_card = _wrap_export_module("verdict", _verdict_basis_card(prediction, ai_records))
+    comparison_card = _wrap_export_module("comparison", _comparison_summary_card(prediction))
     result_forecast_card = _wrap_export_module("result-forecast", _result_forecast_card(prediction))
     settled_card = _wrap_export_module("settled", _settled_card(settled))
 
@@ -9281,6 +9318,7 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
 {export_hero}
 {settled_card}
 {verdict_card}
+{comparison_card}
 {market_card}
 {form_card}
 {history_similar_card}

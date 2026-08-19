@@ -1,12 +1,28 @@
 """Q1-D0 测试：竞彩转向 — 列表过滤 + 联赛映射 + 导航去世界杯主轴。"""
+from datetime import datetime
+
 import yaml
 from pathlib import Path
 from product_focus import focus_jingcai_only, knockout_phase, ai_profile
+from time_utils import BEIJING
 
 
-def test_focus_jingcai_only_default_true():
-    """FOCUS_JINGCAI_ONLY 默认 True。"""
+def test_focus_jingcai_only_true_after_release(monkeypatch):
+    """开售时间之后，FOCUS_JINGCAI_ONLY 生效为 True。"""
+    monkeypatch.setattr(
+        "product_focus.now_beijing",
+        lambda: datetime(2026, 8, 19, 14, 0, tzinfo=BEIJING),
+    )
     assert focus_jingcai_only() is True
+
+
+def test_focus_jingcai_only_false_before_release(monkeypatch):
+    """开售时间之前，即使配置 True 也回退显示全部。"""
+    monkeypatch.setattr(
+        "product_focus.now_beijing",
+        lambda: datetime(2026, 8, 19, 9, 0, tzinfo=BEIJING),
+    )
+    assert focus_jingcai_only() is False
 
 
 def test_knockout_phase_default_false():
@@ -69,8 +85,12 @@ def test_dashboard_title_no_worldcup():
     assert "世界杯" not in h1_text
 
 
-def test_filter_jingcai_priority():
+def test_filter_jingcai_priority(monkeypatch):
     """_filter_jingcai_priority 默认只保留有竞彩编号/SP 的场（删除无编号的）。"""
+    monkeypatch.setattr(
+        "product_focus.now_beijing",
+        lambda: datetime(2026, 8, 19, 14, 0, tzinfo=BEIJING),
+    )
     from web_ui import _filter_jingcai_priority
     matches = [
         {"fixture_id": "1", "predict_row": {}},  # 无编号 → 删除
@@ -106,8 +126,12 @@ def test_filter_jingcai_show_all():
     assert fids[0] == "2"
 
 
-def test_dashboard_all_param():
+def test_dashboard_all_param(monkeypatch):
     """?all=1 时首页状态行有「显示全部」链接。"""
+    monkeypatch.setattr(
+        "product_focus.now_beijing",
+        lambda: datetime(2026, 8, 19, 14, 0, tzinfo=BEIJING),
+    )
     from pathlib import Path
     from web_ui import html_dashboard
     html = html_dashboard({}, None, output_root=Path("/tmp"), show_all=False)

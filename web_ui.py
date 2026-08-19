@@ -2925,6 +2925,60 @@ def _verdict_basis_card(prediction: dict | None, ai_records: list[dict] | None =
 </div>"""
 
 
+def _prematch_detail_html(desk: dict) -> str:
+    """Foldable pre-match desk detail: dimensions + high-impact facts + triggers."""
+    if not desk or not desk.get("available"):
+        reason = (desk or {}).get("reason") or "未启用"
+        note = "暂不支持该联赛" if reason == "league_not_supported" else "赛前桌不可用"
+        return f"<p class='meta'>{_e(note)}</p>"
+
+    dims = desk.get("dimensions") or []
+    rows = ""
+    for d in dims:
+        label = d.get("label") or d.get("id", "—")
+        missing = d.get("missing", True)
+        status = "数据不足" if missing else "有数据"
+        evidence = d.get("evidence") or []
+        ev_html = ""
+        if evidence:
+            ev_html = "<ul>" + "".join(f"<li>{_e(x)}</li>" for x in evidence) + "</ul>"
+        note = d.get("note") or ""
+        rows += (
+            f"<tr><td>{_e(label)}</td><td>{_e(status)}</td>"
+            f"<td>{ev_html or _e(note)}</td></tr>"
+        )
+
+    high = desk.get("high_impact_facts") or []
+    high_html = ""
+    if high:
+        high_html = (
+            "<h4>高影响事实</h4><ul>"
+            + "".join(f"<li>{_e(x)}</li>" for x in high)
+            + "</ul>"
+        )
+    else:
+        high_html = "<p class='meta'>无已核验高影响事实</p>"
+
+    triggers = desk.get("rerun_triggers") or []
+    trigger_html = ""
+    if triggers:
+        trigger_html = (
+            "<h4>重跑触发</h4><ul>"
+            + "".join(f"<li>{_e(x)}</li>" for x in triggers)
+            + "</ul>"
+        )
+
+    return f"""
+<div class="prematch-detail">
+  <table class="prematch-dim-table">
+    <tr><th>维度</th><th>状态</th><th>证据/说明</th></tr>
+    {rows}
+  </table>
+  {high_html}
+  {trigger_html}
+</div>"""
+
+
 def _comparison_summary_card(prediction: dict | None) -> str:
     """Cross-desk summary: odds desk pick + pre-match desk impact + final action."""
     pred = prediction or {}
@@ -2950,6 +3004,8 @@ def _comparison_summary_card(prediction: dict | None) -> str:
     else:
         prematch_line += "无已确认高影响变数"
 
+    detail = _fold("赛前桌明细", _prematch_detail_html(desk), muted=True, export_slug="prematch")
+
     return f"""
 <div class="card comparison-card">
   <h3>对照摘要</h3>
@@ -2958,6 +3014,7 @@ def _comparison_summary_card(prediction: dict | None) -> str:
   <p class="comparison-action"><strong>最终动作：</strong>{_e(action_label)}</p>
   <p class="meta comparison-note">赛前桌不改方向，只可能降仓或放弃</p>
   <p class="meta">{_e(summary.get('summary') or '')}</p>
+  {detail}
 </div>"""
 
 

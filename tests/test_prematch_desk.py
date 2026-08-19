@@ -11,7 +11,17 @@ from prematch_desk import (
 
 
 def test_supported_leagues_are_top_five():
-    assert SUPPORTED_LEAGUES == {"英超", "西甲", "德甲", "意甲", "法甲"}
+    short = {"英超", "西甲", "德甲", "意甲", "法甲"}
+    long = {
+        "英格兰超级联赛",
+        "西班牙甲级联赛",
+        "德国甲级联赛",
+        "意大利甲级联赛",
+        "法国甲级联赛",
+    }
+    assert short.issubset(SUPPORTED_LEAGUES)
+    assert long.issubset(SUPPORTED_LEAGUES)
+    assert not SUPPORTED_LEAGUES - short - long
 
 
 def test_unsupported_league_returns_unavailable():

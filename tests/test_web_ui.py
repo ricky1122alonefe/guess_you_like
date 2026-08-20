@@ -4,6 +4,7 @@ from web_ui import (
     _ah_cell,
     _ai_expert_desk_card,
     _betfair_cell,
+    _comparison_summary_card,
     _confidence_cell,
     _dashboard_active_row,
     _devig_cell,
@@ -18,6 +19,8 @@ from web_ui import (
     _jingcai_sp_cell,
     _jingcai_sp_line,
     _latest_jingcai,
+    _market_lanes_card,
+    _market_lanes_one_liner,
     _market_signal_card,
     _poll_status_line,
     _recommendation_text,
@@ -605,3 +608,109 @@ def test_compact_ai_keeps_analysis_basis():
     compact = compact_ai_analyses(pred)
     assert compact["deepseek"]["analysis_basis"][0].startswith("【基准概率】")
     assert compact["deepseek"]["actuary_reasoning"] == "核心逻辑一句"
+
+
+def test_comparison_summary_card_renders_when_present():
+    pred = {
+        "judgment": "倾向主胜·标准",
+        "result_1x2_cn": "主胜",
+        "prematch_desk": {
+            "available": True,
+            "high_impact_facts": [],
+            "dimensions": [],
+        },
+        "comparison_summary": {
+            "action": "hold",
+            "odds_desk_pick": "倾向主胜·标准",
+            "summary": "维持",
+        },
+    }
+    html = _comparison_summary_card(pred)
+    assert "对照摘要" in html
+    assert "维持" in html
+    assert "赛前桌明细" in html
+
+
+def test_comparison_summary_card_empty_when_missing():
+    assert _comparison_summary_card({}) == ""
+
+
+def test_market_lanes_card_renders_three_lanes():
+    pred = {
+        "market_lanes": {
+            "eu": {
+                "label": "欧赔轨",
+                "tag": "参考·不可购",
+                "missing": False,
+                "pick_cn": "主胜",
+                "reasons": ["去水隐含概率：主 45%", "来源：平博"],
+            },
+            "ah": {
+                "label": "亚盘轨",
+                "tag": "参考·非竞彩让球",
+                "missing": False,
+                "line": -0.25,
+                "home_water": 0.95,
+                "away_water": 0.97,
+                "reasons": ["亚盘 -0.25 主水 0.95"],
+            },
+            "jingcai": {
+                "label": "竞彩轨",
+                "tag": "可购",
+                "missing": False,
+                "play": "胜平负",
+                "pick_cn": "主胜",
+                "sp": "2.05",
+                "buyable": True,
+                "reasons": ["胜平负 SP 2.05 → 主胜"],
+            },
+            "comparison": {
+                "agreement": "align",
+                "action": "hold",
+                "summary": "三轨方向一致，竞彩轨维持原仓位建议。",
+                "buyable": {
+                    "market": "胜平负",
+                    "pick_cn": "主胜",
+                    "sp": "2.05",
+                    "reason": "胜平负 2.05 → 主胜",
+                },
+            },
+        }
+    }
+    html = _market_lanes_card(pred)
+    assert "三轨盘口" in html
+    assert "欧赔轨" in html
+    assert "亚盘轨" in html
+    assert "竞彩轨" in html
+    assert "可购" in html
+    assert "非竞彩让球" in html
+    assert "维持" in html
+    assert "欧亚轨仅作参考" in html
+
+
+def test_market_lanes_card_empty_when_missing():
+    assert _market_lanes_card({}) == ""
+
+
+def test_market_lanes_one_liner():
+    lanes = {
+        "eu": {"missing": False, "pick_cn": "主胜"},
+        "ah": {"missing": False, "lean_cn": "主胜"},
+        "jingcai": {"missing": False, "buyable": True, "play": "胜平负"},
+        "comparison": {"agreement": "align"},
+    }
+    txt = _market_lanes_one_liner(lanes)
+    assert "欧↔亚↔彩 一致" in txt
+    assert "可购 胜平负" in txt
+
+
+def test_market_lanes_one_liner_divergent():
+    lanes = {
+        "eu": {"missing": False, "pick_cn": "客胜"},
+        "ah": {"missing": True},
+        "jingcai": {"missing": False, "buyable": True, "play": "胜平负"},
+        "comparison": {"agreement": "partial"},
+    }
+    txt = _market_lanes_one_liner(lanes)
+    assert "欧↔亚↔彩 分裂" in txt
+    assert "欧客胜" in txt

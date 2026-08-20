@@ -21,6 +21,7 @@ from download_500 import DEFAULT_LEAGUES, WORLD_CUP_LEAGUES, fetch_live_fixtures
 from focus_watch import focus_fids
 from http_client import ScraperGuard, make_session
 from poll_500 import fetch_jingcai_context, poll_fixture
+from poll_interval import poll_interval_seconds
 
 log = logging.getLogger("poll_service")
 SOURCE = "500"
@@ -121,7 +122,8 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description="每 N 秒轻量抓取 500.com 赔率写入 Postgres")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    parser.add_argument("--interval", type=int, default=300, help="轮询间隔秒，默认 300=5分钟")
+    parser.add_argument("--interval", type=int, default=300, help="轮询间隔秒，默认 300=5分钟（北京时间 11 点后）")
+    parser.add_argument("--interval-pre-jingcai", type=int, default=120, help="竞彩开售前台轮询间隔秒，默认 120")
     parser.add_argument("--days", type=float, default=7, help="只抓 N 天内比赛")
     parser.add_argument(
         "--all-leagues",
@@ -164,8 +166,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     log.info(
-        "开始轮询 interval=%ds days=%s leagues=%s focus=%d",
+        "开始轮询 interval=%ds pre-jingcai=%ds days=%s leagues=%s focus=%d",
         args.interval,
+        args.interval_pre_jingcai,
         args.days,
         "全部" if leagues is None else "、".join(leagues),
         len(focus_fids()),
@@ -177,8 +180,17 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             log.exception("轮询异常")
         elapsed = time.time() - started
-        sleep_for = max(5.0, args.interval - elapsed)
-        log.info("下次轮询 %.0f 秒后", sleep_for)
+        interval = poll_interval_seconds(
+            default=args.interval,
+            pre_jingcai=args.interval_pre_jingcai,
+        )
+        sleep_for = max(5.0, interval - elapsed)
+        log.info(
+            "下次轮询 %.0f 秒后（%s, interval=%ds）",
+            sleep_for,
+            "pre-jingcai" if interval == args.interval_pre_jingcai else "jingcai-hours",
+            interval,
+        )
         time.sleep(sleep_for)
 
 

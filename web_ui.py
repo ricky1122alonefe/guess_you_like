@@ -1865,6 +1865,9 @@ def _dashboard_active_row(
     if viz_summary and viz_summary != "—":
         viz_summary_html = f"<br><span class='meta viz-summary-line'>{_e(viz_summary)}</span>"
 
+    lanes = m.get("market_lanes") or {}
+    lane_one = _market_lanes_one_liner(lanes)
+
     row_cls = "dash-row focused" if focused else "dash-row"
     return (
         f"<tr class='{row_cls}' data-sweet='{sweet_flag}' "
@@ -1880,7 +1883,7 @@ def _dashboard_active_row(
         f"<td>{_e(devig_str)}</td>"
         f"<td>{_e(ah_str)}</td>"
         f"<td>{_e(bf_str)}</td>"
-        f"<td><strong>{_e(rule_pick)}</strong> <span class='meta'>{_e(rule_conf)}</span>{divergence_note}{missing_note}</td>"
+        f"<td><strong>{_e(rule_pick)}</strong> <span class='meta'>{_e(rule_conf)}</span>{divergence_note}{missing_note}<br><span class='meta lane-one'>{_e(lane_one)}</span></td>"
         f"<td>{detail}</td></tr>\n"
     )
 
@@ -3015,6 +3018,106 @@ def _comparison_summary_card(prediction: dict | None) -> str:
   <p class="meta comparison-note">赛前桌不改方向，只可能降仓或放弃</p>
   <p class="meta">{_e(summary.get('summary') or '')}</p>
   {detail}
+</div>"""
+
+
+def _market_lanes_one_liner(lanes: dict | None) -> str:
+    """Dashboard one-liner from market_lanes comparison."""
+    if not lanes:
+        return ""
+    comp = (lanes or {}).get("comparison") or {}
+    agreement = comp.get("agreement") or "partial"
+    label = {"align": "一致", "soft": "一致", "partial": "分裂"}.get(agreement, "—")
+    jc = (lanes or {}).get("jingcai") or {}
+    eu = (lanes or {}).get("eu") or {}
+    ah = (lanes or {}).get("ah") or {}
+    parts: list[str] = [f"欧↔亚↔彩 {label}"]
+    if not jc.get("missing") and jc.get("buyable"):
+        parts.append(f"可购 {jc.get('play')}")
+    elif jc.get("missing"):
+        parts.append("竞彩未开售")
+    if not eu.get("missing") and eu.get("pick_cn"):
+        parts.append(f"欧{eu['pick_cn']}")
+    if not ah.get("missing") and ah.get("lean_cn"):
+        parts.append(f"亚{ah['lean_cn']}")
+    return " · ".join(parts)
+
+
+def _market_lanes_card(prediction: dict | None) -> str:
+    """Three-lane card: EU / AH / Jingcai + code-generated comparison."""
+    pred = prediction or {}
+    lanes = pred.get("market_lanes")
+    if not lanes:
+        return ""
+    eu = lanes.get("eu") or {}
+    ah = lanes.get("ah") or {}
+    jc = lanes.get("jingcai") or {}
+    comp = lanes.get("comparison") or {}
+
+    def _lane_html(title: str, tag: str, items: list[str]) -> str:
+        body = "</li><li>".join(_e(x) for x in items) if items else _e("暂无")
+        return f"""
+<div class="lane-block">
+  <p class="lane-title"><strong>{_e(title)}</strong> <span class="lane-tag">{_e(tag)}</span></p>
+  <ul class="lane-list"><li>{body}</li></ul>
+</div>"""
+
+    eu_items = [f"倾向：{eu.get('pick_cn') or '—'}"] + (eu.get("reasons") or [])
+    ah_items = [f"线 {ah.get('line') or '—'} 主水 {ah.get('home_water') or '—'} 客水 {ah.get('away_water') or '—'}"] + (ah.get("reasons") or [])
+    jc_items = [f"玩法：{jc.get('play') or '—'}"] + (jc.get("reasons") or [])
+
+    agreement = comp.get("agreement") or "partial"
+    action = comp.get("action") or "hold"
+    action_label = {"hold": "维持", "size_down": "降成小注", "skip": "放弃"}.get(action, action)
+    agreement_label = {
+        "align": "三轨一致",
+        "soft": "大致一致",
+        "partial": "分歧",
+    }.get(agreement, agreement)
+
+    buyable = comp.get("buyable")
+    buy_line = ""
+    if buyable:
+        buy_line = f"<p class='meta buyable-line'><strong>最终可购：</strong>{_e(buyable.get('market') or '')} {_e(buyable.get('pick_cn') or '')} SP {_e(buyable.get('sp') or '—')} — {_e(buyable.get('reason') or '')}</p>"
+    elif jc.get("buyable"):
+        buy_line = "<p class='meta warn'>欧亚与竞彩冲突，可购结论被压制</p>"
+    else:
+        buy_line = "<p class='meta'>竞彩未开售，无当前可购结论</p>"
+
+    # 11 点前竞彩 SP 未动：直接展示主要欧洲公司赔率
+    pre_jingcai_line = ""
+    if jc.get("missing"):
+        major = eu.get("source_books") or []
+        odds = eu.get("odds") or {}
+        if major and odds:
+            parts = []
+            for label in major[:4]:
+                # find book dict by label in eu_books_major if available
+                book = None
+                for b in (pred.get("odds_snapshot") or {}).get("eu_books_major") or []:
+                    if b.get("label") == label:
+                        book = b
+                        break
+                if book and all(book.get(k) is not None for k in ("home", "draw", "away")):
+                    parts.append(f"{label} {_e(book['home'])}/{_e(book['draw'])}/{_e(book['away'])}")
+            if parts:
+                pre_jingcai_line = (
+                    "<p class='meta pre-jingcai'><strong>欧：</strong>"
+                    + " · ".join(parts)
+                    + "</p><p class='meta'>竞彩 SP 约 11 点后才有；欧洲公司盘已在轮询</p>"
+                )
+
+    return f"""
+<div class="card market-lanes-card">
+  <h3>三轨盘口</h3>
+  <p class="meta"><strong>对照：</strong>{_e(agreement_label)} · { _e(action_label)}</p>
+  <p class="meta">{_e(comp.get('summary') or '')}</p>
+  {_lane_html(eu.get('label') or '欧赔轨', eu.get('tag') or '参考', eu_items)}
+  {_lane_html(ah.get('label') or '亚盘轨', ah.get('tag') or '参考', ah_items)}
+  {_lane_html(jc.get('label') or '竞彩轨', jc.get('tag') or '未开售', jc_items)}
+  {pre_jingcai_line}
+  {buy_line}
+  <p class="meta lane-note">欧亚轨仅作参考，不能跨轨直接变成竞彩购买方向</p>
 </div>"""
 
 
@@ -8886,6 +8989,7 @@ def html_match_detail(
     changes = index.get("changes") or []
 
     pred_card = _wrap_export_module("recommend", _build_pred_cards(prediction))
+    market_lanes_card = _wrap_export_module("market-lanes", _market_lanes_card(prediction))
     verdict_card = _wrap_export_module("verdict", _verdict_basis_card(prediction, ai_records))
     comparison_card = _wrap_export_module("comparison", _comparison_summary_card(prediction))
     result_forecast_card = _wrap_export_module("result-forecast", _result_forecast_card(prediction))
@@ -9374,6 +9478,7 @@ h4 { margin: 0 0 8px; font-size: 13px; color: #cbd5e1; }
 <div id="match-export-root" data-export-base="{_e(export_fname)}">
 {export_hero}
 {settled_card}
+{market_lanes_card}
 {verdict_card}
 {comparison_card}
 {market_card}

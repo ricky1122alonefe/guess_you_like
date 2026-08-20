@@ -116,11 +116,13 @@ def load_match_index_from_db(external_id: str, *, source: str = "500") -> dict |
 
     home_team = fx.get("home_team") or ""
     away_team = fx.get("away_team") or ""
+    kickoff_at = fx.get("kickoff_at")
     return {
         "fixture_id": str(external_id),
         "match_name": f"{home_team}VS{away_team}" if home_team and away_team else (fx.get("match_name") or str(external_id)),
         "home_team": home_team,
         "away_team": away_team,
+        "kickoff_at": kickoff_at.isoformat() if hasattr(kickoff_at, "isoformat") else str(kickoff_at or ""),
         "updated_at": timeline[-1]["ts"],
         "point_count": len(timeline),
         "timeline": timeline,

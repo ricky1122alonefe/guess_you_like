@@ -1,6 +1,7 @@
 """步骤1单测：欧亚赔率解析（打码庄名 + 结构化回退）。"""
 from unittest.mock import MagicMock
 
+from eu_odds_chart import select_major_eu_books
 from poll_500 import (
     _pick_first_valid_eu_row,
     _pick_first_valid_ah_row,
@@ -10,7 +11,9 @@ from poll_500 import (
     _fetch_ou_html,
     is_dirty_team_label,
     ensure_fixture_real_teams,
+    build_tick,
 )
+from download_500 import MatchFixture
 
 
 # 模拟 500.com 打码后的行数据
@@ -217,3 +220,40 @@ def test_ensure_fixture_identity_fixes_same_team_names(monkeypatch):
     fixed = ensure_fixture_real_teams(MagicMock(), fx)
     assert fixed.home == "东京绿茵"
     assert fixed.away == "柏太阳神"
+
+
+def test_select_major_eu_books_masked_william():
+    """500.com 打码行 威***威***(英国) 应识别为「威廉」并进入 major 列表。"""
+    books = [
+        {"name": "官*官*(中国)", "home": 2.42, "draw": 2.95, "away": 2.65},
+        {"name": "威***威***(英国)", "home": 2.70, "draw": 3.00, "away": 2.50},
+        {"name": "*门*门(中国澳门)", "home": 2.55, "draw": 3.18, "away": 2.40},
+    ]
+    major = select_major_eu_books(books)
+    labels = [b["label"] for b in major]
+    assert "威廉" in labels
+    william = next(b for b in major if b["label"] == "威廉")
+    assert william["home"] == 2.70
+    assert william["draw"] == 3.00
+    assert william["away"] == 2.50
+
+
+def test_tick_raw_meta_has_eu_books_major():
+    """build_tick 应在 raw_meta 中写入 eu_books_major。"""
+    fx = MatchFixture(fixture_id="12345", home="曼城", away="利物浦")
+    eu = {
+        "eu_home": 2.70,
+        "eu_draw": 3.00,
+        "eu_away": 2.50,
+        "eu_books": [
+            {"name": "威***威***(英国)", "home": 2.70, "draw": 3.00, "away": 2.50},
+            {"name": "*门*门(中国澳门)", "home": 2.55, "draw": 3.18, "away": 2.40},
+        ],
+    }
+    ah = {"ah_line": 0.0, "ah_home_water": 0.95, "ah_away_water": 0.97}
+    tick = build_tick(fx, ah, eu)
+    raw = tick.get("raw_meta") or {}
+    assert "eu_books_major" in raw
+    labels = [b["label"] for b in raw["eu_books_major"]]
+    assert "威廉" in labels
+    assert "澳门" in labels

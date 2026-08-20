@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlparse
 
 import config as app_cfg
 from hourly_pipeline import (
+    _merge_prediction_into_latest,
     get_history,
     get_state,
     list_runs,
@@ -49,6 +50,9 @@ from share_card import (
     html_share_parlay,
     html_share_posters_batch,
 )
+from prematch_desk import attach_prematch_and_summary, ensure_prematch_attached
+from analysis.market.three_lane import attach_market_lanes
+from poll_interval import poll_interval_seconds
 from web_ui import html_agent_pipeline_settings, html_agent_workbench, html_ah_analytics, html_ai_settings, html_daily_picks, html_dashboard, html_eu_ah_divergence, html_group_final_copy, html_group_knockout_outlook, html_kelly_calculator, html_match_detail, html_quant_analytics, html_recommendation_review, html_worldcup_ledger
 from apps.api.viz import build_viz_data, get_viz_or_404
 
@@ -686,6 +690,13 @@ class Handler(BaseHTTPRequestHandler):
             _ensure_similarity_analysis(pred, root)
             _ensure_quant_analysis(pred, idx)
             _ensure_post_recommendation(pred)
+            # 赛前桌/对照摘要兜底：失败不得 500，保持页面可用
+            if pred:
+                try:
+                    ensure_prematch_attached(pred, output_root=root, fixture_id=fid)
+                    attach_market_lanes(pred, output_root=root, fixture_id=fid)
+                except Exception:
+                    log.exception("详情页赛前桌/三轨附加失败 fid=%s", fid)
             ai_records = load_ai_records(root, fid)
             deep_records = load_deep_analyses(root, fid)
             from match_agents.chief import load_latest_agent_board, load_latest_chief_report
@@ -1563,15 +1574,37 @@ class Handler(BaseHTTPRequestHandler):
                         "fetch_log": logs,
                     }, 404)
                     return
+                # 抓取成功后立即把对照摘要写回 latest.json，刷新详情页不必再跑一次
+                pred = _load_latest_pred(self.output_root, fid) or {}
+                if pred:
+                    pred["fixture_id"] = fid
+                    pred["match"] = pred.get("match") or match_name
+                    try:
+                        # 强制用最新伤停重算赛前桌/对照摘要，不能仅靠幂等 ensure
+                        attach_prematch_and_summary(
+                            pred,
+                            output_root=self.output_root,
+                            fixture_id=fid,
+                            sporttery_intel=intel,
+                        )
+                        attach_market_lanes(
+                            pred, output_root=self.output_root, fixture_id=fid
+                        )
+                        _merge_prediction_into_latest(self.output_root, pred)
+                    except Exception:
+                        log.exception("抓取后更新对照摘要/三轨失败 fid=%s", fid)
                 inj_h = len((intel.get("injury") or {}).get("home", {}).get("injuriesAndSuspensionsList") or [])
                 inj_a = len((intel.get("injury") or {}).get("away", {}).get("injuriesAndSuspensionsList") or [])
-                self._send_json({
+                response_payload: dict[str, Any] = {
                     "ok": True,
                     "fixture_id": fid,
                     "message": f"已保存体彩情报 · 伤停 {inj_h + inj_a} 人",
                     "intel": intel,
                     "fetch_log": logs,
-                })
+                }
+                if pred.get("comparison_summary"):
+                    response_payload["comparison_summary"] = pred["comparison_summary"]
+                self._send_json(response_payload)
             except Exception as exc:
                 log.exception("体彩情报抓取失败 fid=%s", fid)
                 self._send_json({"ok": False, "error": str(exc)}, 500)
@@ -2122,6 +2155,52 @@ def scheduler_loop(
             log.warning("整点任务跳过（已有任务在运行）")
 
 
+def _poll_loop(
+    *,
+    within_days: float,
+    interval: int,
+    interval_pre_jingcai: int,
+    leagues: list[str] | None = None,
+) -> None:
+    """Lightweight background poll thread for local ``serve`` usage."""
+    from http_client import ScraperGuard
+    from poll_service import run_once
+
+    try:
+        from db.connection import ping
+        if not ping():
+            log.warning("PostgreSQL 未连接，后台 poll 线程不启动")
+            return
+    except Exception:
+        log.warning("DB 检测失败，后台 poll 线程不启动")
+        return
+
+    guard = ScraperGuard(min_delay=1.5, max_delay=3.0)
+    while True:
+        started = time.time()
+        try:
+            run_once(
+                within_days=within_days,
+                guard=guard,
+                leagues=leagues,
+                focus_fids=set(focus_fids()),
+            )
+        except Exception:
+            log.exception("后台 poll 异常")
+        elapsed = time.time() - started
+        sec = poll_interval_seconds(
+            default=interval,
+            pre_jingcai=interval_pre_jingcai,
+        )
+        sleep_for = max(5.0, sec - elapsed)
+        log.info(
+            "后台 poll 下次 %.0f 秒后（%s）",
+            sleep_for,
+            "pre-jingcai" if sec == interval_pre_jingcai else "jingcai-hours",
+        )
+        time.sleep(sleep_for)
+
+
 def main(argv: list[str] | None = None) -> int:
     from __version__ import __version__
 
@@ -2151,6 +2230,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--run-on-start", action="store_true", help="启动后立即跑一轮")
     parser.add_argument("--no-scheduler", action="store_true", help="仅 HTTP，不自动整点")
+    parser.add_argument("--no-poll", action="store_true", help="仅 HTTP，不后台轮询 500 欧亚（Docker web 必须加）")
+    parser.add_argument("--interval", type=int, default=300, help="后台 poll 间隔秒，默认 300（北京时间 11 点后）")
+    parser.add_argument("--interval-pre-jingcai", type=int, default=120, help="后台 poll 竞彩开售前台间隔秒，默认 120")
     parser.add_argument(
         "--ai-interval-minutes", type=int, default=app_cfg.AI_INTERVAL_MINUTES,
         help=f"AI 最短调用间隔（分钟），默认 {app_cfg.AI_INTERVAL_MINUTES}（约 2～3 小时）；0=不限制",
@@ -2222,6 +2304,18 @@ def main(argv: list[str] | None = None) -> int:
             ),
             daemon=True,
         ).start()
+
+    if not args.no_poll:
+        threading.Thread(
+            target=_poll_loop,
+            kwargs={
+                "within_days": args.days,
+                "interval": args.interval,
+                "interval_pre_jingcai": args.interval_pre_jingcai,
+            },
+            daemon=True,
+        ).start()
+        log.info("后台 poll 已启动 interval=%ds pre-jingcai=%ds", args.interval, args.interval_pre_jingcai)
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     log.info("服务已启动 http://%s:%s/", args.host, args.port)

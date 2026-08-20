@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 from download_500 import BASE, MatchFixture, _serialize_xls_table, fetch_live_fixtures
 from http_client import ScraperGuard, get_text, make_session
 from betfair_500 import fetch_betfair_snapshot
-from eu_odds_chart import eu_books_fingerprint, parse_eu_bookmakers
+from eu_odds_chart import eu_books_fingerprint, parse_eu_bookmakers, select_major_eu_books
 from jingcai_500 import build_jingcai_snapshot, fetch_jczq_meta_by_order, fetch_live_odds_list
 from parser import parse_handicap
 
@@ -381,6 +381,7 @@ def build_tick(
             "jingcai": jc,
             "betfair": bf,
             "eu_books": eu.get("eu_books") or [],
+            "eu_books_major": select_major_eu_books(eu.get("eu_books") or []),
             "ou": {
                 "has_data": ou.get("ou_line") is not None,
                 "ou_line": ou.get("ou_line"),

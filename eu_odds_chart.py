@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any
 
 from eu_implied_metrics import detect_implied_sum_anomalies
@@ -10,6 +11,67 @@ from time_utils import chart_time_label, format_ts
 
 OUTCOMES = ("home", "draw", "away")
 OUTCOME_CN = {"home": "主胜", "draw": "平局", "away": "客胜"}
+
+# Masked bookmaker recognition (500.com hides real names with *).
+# Each tuple: (regex pattern, short label for display)
+_MAJOR_BOOKMAKER_RULES: list[tuple[str, str]] = [
+    (r"(?i)平博|Pinnacle|\bPi\b", "平博"),
+    (r"(?i)^威|\b威廉\b|威\*+", "威廉"),
+    (r"(?i)^立|\b立博\b|立\*+", "立博"),
+    (r"(?i)\bBet365\b|\b365\b", "365"),
+    (r"(?i)Interwetten|\b英特\b", "英特"),
+    (r"(?i)澳门|\b门\b|\*门\*门", "澳门"),
+]
+
+
+def _bookmaker_label(name: str) -> str | None:
+    for pat, label in _MAJOR_BOOKMAKER_RULES:
+        if re.search(pat, name):
+            return label
+    return None
+
+
+def is_major_bookmaker(name: str) -> bool:
+    return _bookmaker_label(name) is not None
+
+
+def select_major_eu_books(
+    books: list[dict[str, Any]],
+    *,
+    max_books: int = 6,
+) -> list[dict[str, Any]]:
+    """Return a short list of recognisable major bookmakers from 500.com rows.
+
+    Unknown/masked names are skipped rather than guessed.  Rows with any missing
+    live triple are also skipped because they cannot be displayed reliably.
+    """
+    out: list[dict[str, Any]] = []
+    seen_labels: set[str] = set()
+    for b in books:
+        name = str(b.get("name") or "").strip()
+        if not name:
+            continue
+        label = _bookmaker_label(name)
+        if not label or label in seen_labels:
+            continue
+        vals = {k: _num(b.get(k)) for k in OUTCOMES}
+        if any(v is None for v in vals.values()):
+            continue
+        out.append({
+            "label": label,
+            "name": name,
+            "home": vals["home"],
+            "draw": vals["draw"],
+            "away": vals["away"],
+            "open_home": _num(b.get("open_home")),
+            "open_draw": _num(b.get("open_draw")),
+            "open_away": _num(b.get("open_away")),
+        })
+        seen_labels.add(label)
+        if len(out) >= max_books:
+            break
+    return out
+
 
 # vs peer median at same timestamp
 PEER_DEVIATION_PCT = 8.0

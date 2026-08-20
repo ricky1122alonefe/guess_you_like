@@ -45,6 +45,7 @@ from match_settlement import run_settlement
 from prematch_desk import attach_prematch_and_summary
 from timeline_merge import load_latest_poll_meta
 from match_timeline import append_ai_record, append_hourly_snapshot
+from analysis.market.three_lane import attach_market_lanes
 
 log = logging.getLogger(__name__)
 
@@ -84,6 +85,30 @@ def _merge_prediction_into_latest(output_root: Path, pred: dict) -> None:
     data["matches"] = matches
     data["generated_at"] = now_beijing_str()
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+
+def _attach_desks(
+    pred: dict,
+    *,
+    league_name: str = "",
+    fixture_id: str | None = None,
+    output_root: str | Path | None = None,
+) -> None:
+    """Attach both pre-match desk and three-lane market view (no 500 on failure)."""
+    attach_prematch_and_summary(
+        pred,
+        league_name=league_name,
+        fixture_id=fixture_id,
+        output_root=output_root,
+    )
+    try:
+        attach_market_lanes(
+            pred,
+            output_root=output_root,
+            fixture_id=fixture_id,
+        )
+    except Exception:
+        log.exception("market_lanes attach failed fid=%s", fixture_id)
 
 
 @dataclass
@@ -242,7 +267,12 @@ def _predict_one(
             poll_meta=poll_meta,
             cur=cur,
         )
-        attach_prematch_and_summary(result, league_name=league_name)
+        _attach_desks(
+            result,
+            league_name=league_name,
+            fixture_id=fixture_id,
+            output_root=output_root,
+        )
         return result
 
     payload = build_payload(str(ah_path), str(eu_path), history=history, sample_limit=10)
@@ -275,7 +305,12 @@ def _predict_one(
         poll_meta=poll_meta,
         cur=cur,
     )
-    attach_prematch_and_summary(base, league_name=league_name)
+    _attach_desks(
+        base,
+        league_name=league_name,
+        fixture_id=fixture_id,
+        output_root=output_root,
+    )
     return base
 
 
@@ -317,7 +352,12 @@ def _predict_multi_ai(
     merged = merge_multi_ai_predictions(analyses)
     if errors:
         merged["ai_errors"] = errors
-    attach_prematch_and_summary(merged, league_name=league_name)
+    _attach_desks(
+        merged,
+        league_name=league_name,
+        fixture_id=fixture_id,
+        output_root=output_root,
+    )
     return merged
 
 
@@ -554,7 +594,12 @@ def run_hourly_job(
                         steps=enrichment_steps("reuse", root),
                         output_root=root,
                     )
-                    attach_prematch_and_summary(pred, league_name=dl.league)
+                    _attach_desks(
+                        pred,
+                        league_name=dl.league,
+                        fixture_id=fid,
+                        output_root=root,
+                    )
                     results.append(pred)
                     summary.predict_ok += 1
                     summary.predict_skipped += 1

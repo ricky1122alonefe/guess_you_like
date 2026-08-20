@@ -144,4 +144,6 @@ def load_latest_poll_meta(external_id: str, *, source: str = "500") -> dict[str,
         "captured_at": format_beijing(t["captured_at"]),
         "jingcai": raw.get("jingcai") or {},
         "betfair": raw.get("betfair") or {},
+        "eu_books": raw.get("eu_books") or [],
+        "ah": raw.get("ah") or {},
     }

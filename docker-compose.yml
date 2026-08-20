@@ -21,7 +21,7 @@ services:
   poll:
     build: .
     container_name: wc-odds-poll
-    command: guess-you-like poll --interval 300
+    command: guess-you-like poll --interval 300 --interval-pre-jingcai 120
     environment:
       DATABASE_URL: postgresql://odds:odds@db:5432/odds
       POLL_DAYS: "2"
@@ -34,7 +34,7 @@ services:
   web:
     build: .
     container_name: wc-odds-web
-    command: guess-you-like serve --host 0.0.0.0 --port 8765 --no-scheduler
+    command: guess-you-like serve --host 0.0.0.0 --port 8765 --no-scheduler --no-poll
     environment:
       DATABASE_URL: postgresql://odds:odds@db:5432/odds
     ports:

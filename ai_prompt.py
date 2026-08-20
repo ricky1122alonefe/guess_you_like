@@ -1143,6 +1143,48 @@ def _build_market_block(ctx: dict) -> dict:
     }
 
 
+def _build_market_lanes_block(ctx: dict) -> dict:
+    """Read-only three-lane summary for the actuary desk.
+
+    - EU / AH lanes are reference only.
+    - Only the Jingcai lane is buyable.
+    - If EU/AH conflicts with Jingcai, the actuary can only size_down or skip,
+      never flip the buyable direction to follow EU/AH.
+    """
+    lanes = ctx.get("market_lanes") or {}
+    if not lanes:
+        return {"available": False}
+
+    def _lane_brief(lane: dict) -> dict:
+        return {
+            "label": lane.get("label"),
+            "tag": lane.get("tag"),
+            "pick": lane.get("pick") or lane.get("lean"),
+            "pick_cn": lane.get("pick_cn") or lane.get("lean_cn"),
+            "missing": lane.get("missing"),
+            "buyable": lane.get("buyable"),
+            "reasons": lane.get("reasons") or [],
+        }
+
+    comp = lanes.get("comparison") or {}
+    return {
+        "available": True,
+        "note": (
+            "三轨独立：欧赔/亚盘只是参考，可购结论只能跟随竞彩轨；"
+            "若欧/亚与竞彩方向冲突，只能对竞彩降仓/放弃，禁止翻转到欧/亚方向。"
+        ),
+        "eu": _lane_brief(lanes.get("eu") or {}),
+        "ah": _lane_brief(lanes.get("ah") or {}),
+        "jingcai": _lane_brief(lanes.get("jingcai") or {}),
+        "comparison": {
+            "agreement": comp.get("agreement"),
+            "action": comp.get("action"),
+            "summary": comp.get("summary"),
+            "buyable": comp.get("buyable"),
+        },
+    }
+
+
 def _build_result_forecast_block(ctx: dict) -> dict:
     rf = ctx.get("result_forecast") or {}
     if not rf:
@@ -1314,6 +1356,7 @@ def build_ai_expert_desk_payload(ctx: dict) -> dict:
         "jingcai": _build_jingcai_block(ctx),
         "divergence": _build_divergence_block(ctx),
         "market": _build_market_block(ctx),
+        "market_lanes": _build_market_lanes_block(ctx),
         "result_forecast": _build_result_forecast_block(ctx),
         "similar_ev_trap": _build_similar_ev_trap_block(ctx),
         "missing": _collect_missing(ctx),
@@ -1348,6 +1391,7 @@ def attach_expert_desk_sources(
        control_analysis / market_patterns / trap_analysis / external_factors / betfair
     """
     pred = prediction or {}
+    ctx["market_lanes"] = pred.get("market_lanes") or ctx.get("market_lanes") or {}
     factors = (
         (pred.get("result_prediction") or {}).get("factors")
         or (pred.get("result_forecast") or {}).get("factors")

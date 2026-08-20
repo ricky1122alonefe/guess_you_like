@@ -107,23 +107,31 @@ def _resolve_venue_from_catalog(
     index: dict | None,
     *,
     output_root: str | Path | None = None,
+    allow_competition_fallback: bool = True,
 ) -> tuple[dict[str, Any], list[str]]:
-    """Fixed stadium catalog → city / lat / lon / altitude (no API)."""
+    """Fixed stadium catalog → city / lat / lon / altitude (no API).
+
+    When ``allow_competition_fallback`` is False, only fixture overrides or
+    an explicit team→venue mapping count as a reliable home venue. League-wide
+    default stadiums are ignored so they are not used to fetch weather.
+    """
     catalog = _load_venue_catalog(output_root)
     venues = catalog.get("venues") or {}
     logs: list[str] = []
     fid = str(pred.get("fixture_id") or (index or {}).get("fixture_id") or "")
     overrides = catalog.get("fixture_overrides") or {}
     venue_key = overrides.get(fid) if fid else None
+    source = "fixture_override"
     if venue_key:
         logs.append(f"球场固定映射 fixture={fid} → {venue_key}")
     if not venue_key:
         home, _away = parse_match_teams(pred, index)
         team_map = catalog.get("team_default_venue") or {}
         venue_key = team_map.get(home) if home else None
+        source = "team"
         if venue_key:
             logs.append(f"球场固定映射：主队「{home}」→ catalog:{venue_key}")
-    if not venue_key:
+    if not venue_key and allow_competition_fallback:
         row = pred.get("predict_row") or {}
         comp = str(
             pred.get("competition")
@@ -137,6 +145,7 @@ def _resolve_venue_from_catalog(
         for key, vk in comp_map.items():
             if key and key in comp:
                 venue_key = vk
+                source = "competition"
                 logs.append(f"球场固定映射：赛事「{comp}」→ {venue_key}")
                 break
     if not venue_key:
@@ -149,6 +158,7 @@ def _resolve_venue_from_catalog(
     venue = dict(raw)
     venue["source"] = "catalog"
     venue["catalog_key"] = venue_key
+    venue["catalog_source"] = source
     city = venue.get("city") or ""
     stadium = venue.get("stadium") or ""
     logs.append(f"球场={stadium} · 城市={city}（固定目录，城市随球场确定）")
@@ -271,8 +281,13 @@ def enrich_match_factors(
 
     home, away = parse_match_teams(pred, index)
 
+    # Venue resolution uses only fixture overrides or explicit team mappings.
+    # Competition-wide default stadiums are intentionally excluded so display and
+    # weather share the same "reliable home venue" rule.
     if auto_fetch and not venue:
-        resolved, logs = _resolve_venue_from_catalog(pred, index, output_root=output_root)
+        resolved, logs = _resolve_venue_from_catalog(
+            pred, index, output_root=output_root, allow_competition_fallback=False
+        )
         fetch_log.extend(logs)
         if resolved:
             venue.update(resolved)
@@ -295,7 +310,13 @@ def enrich_match_factors(
         if intel:
             news.update(intel)
 
-    if auto_fetch and not weather and venue:
+    if (
+        auto_fetch
+        and not weather
+        and venue
+        and venue.get("lat") is not None
+        and venue.get("lon") is not None
+    ):
         wx, wx_logs = _fetch_weather_no_key(venue, kickoff)
         fetch_log.extend(wx_logs)
         if wx:

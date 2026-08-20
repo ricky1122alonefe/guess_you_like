@@ -17,12 +17,22 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from time_utils import now_beijing_str
 
 log = logging.getLogger(__name__)
+
+
+def _parse_iso_dt(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
 
 _TOP_FIVE_SHORT = {"英超", "西甲", "德甲", "意甲", "法甲"}
 _TOP_FIVE_LONG = {
@@ -38,6 +48,7 @@ _DIMENSIONS: tuple[tuple[str, str], ...] = (
     ("availability", "伤停/停赛"),
     ("schedule_fatigue", "轮换与赛程密度"),
     ("weather", "天气"),
+    ("recent_status", "近期状态"),
     ("referee", "裁判"),
     ("motivation", "战意"),
 )
@@ -124,6 +135,7 @@ def build_prematch_desk(
     _fill_availability(dims, sporttery_intel, high_impact)
     _fill_weather(dims, factors, high_impact)
     _fill_schedule_fatigue(dims, schedule_ctx)
+    _fill_recent_status(dims, sporttery_intel, high_impact)
     # referee / motivation intentionally kept missing this iteration.
     dims["referee"]["note"] = "裁判数据未接入，本维保持缺失"
     dims["motivation"]["note"] = "战意数据未接入，本维保持缺失"
@@ -175,8 +187,8 @@ def _fill_availability(
         dim["evidence"] = evidence
         dim["note"] = "来自体彩官方伤停/停赛名单"
 
-    _extract_high_impact(home_lines, "主队", high_impact)
-    _extract_high_impact(away_lines, "客队", high_impact)
+    _extract_high_impact(home_lines, "主队", high_impact, home)
+    _extract_high_impact(away_lines, "客队", high_impact, away)
 
 
 def _injury_lines(side: dict[str, Any] | None) -> list[str]:
@@ -202,15 +214,51 @@ def _injury_lines(side: dict[str, Any] | None) -> list[str]:
     return lines
 
 
-def _extract_high_impact(lines: list[str], side_label: str, out: list[str]) -> None:
-    """Only confirmed GK absence or explicit suspension count as high impact."""
-    for line in lines:
-        if "门将" in line and "伤病" in line:
+def _is_key_absence(player: dict[str, Any]) -> bool:
+    """Return True only for GK or confirmed key regulars.
+
+    We treat a player as 'key' if the official payload shows high appearance
+    count (>= 8 in last term) or strong attacking output, since the injury list
+    itself does not always carry a starting flag. Without such evidence we
+    deliberately under-weight bench suspensions.
+    """
+    pos = str(player.get("playerPositionDesc") or "").strip()
+    if "门将" in pos:
+        return True
+    try:
+        apps = int(player.get("appearanceCnt") or 0)
+    except (TypeError, ValueError):
+        apps = 0
+    try:
+        goals = int(player.get("goalCnt") or 0)
+        assists = int(player.get("assistCnt") or 0)
+    except (TypeError, ValueError):
+        goals = assists = 0
+    return apps >= 8 or goals >= 3 or assists >= 3
+
+
+def _extract_high_impact(
+    lines: list[str],
+    side_label: str,
+    out: list[str],
+    side_raw: dict[str, Any] | None = None,
+) -> None:
+    """Only confirmed GK absence or key-player suspension count as high impact."""
+    players = (side_raw or {}).get("injuriesAndSuspensionsList") or []
+    for i, line in enumerate(lines):
+        player = players[i] if i < len(players) and isinstance(players[i], dict) else {}
+        pos = str(player.get("playerPositionDesc") or "").strip()
+        is_gk = "门将" in pos
+        is_suspension = "停赛" in line
+        is_injury = "伤病" in line
+        is_absence = "缺阵" in line and "停赛" not in line
+
+        if is_gk and is_injury:
             out.append(f"{side_label}主力门将确认伤病缺阵：{line}")
-        elif "门将" in line and "缺阵" in line and "停赛" not in line:
+        elif is_gk and is_absence:
             out.append(f"{side_label}主力门将确认缺阵：{line}")
-        elif "停赛" in line:
-            out.append(f"{side_label}确认停赛：{line}")
+        elif is_suspension and _is_key_absence(player):
+            out.append(f"{side_label}确认关键球员停赛：{line}")
 
 
 def _fill_weather(
@@ -305,6 +353,57 @@ def _fill_schedule_fatigue(
         dim["confidence"] = "medium"
         dim["evidence"] = evidence
         dim["note"] = "基于近期正赛日期统计"
+
+
+def _fill_recent_status(
+    dims: dict[str, dict],
+    sporttery_intel: dict[str, Any] | None,
+    high_impact: list[str],
+) -> None:
+    """Fill recent-status dimension from sporttery feature/players.
+
+    Confidence is intentionally low: feature/players are official summaries,
+    not a prediction of this match. Only extreme ratios are flagged as high
+    impact, and they still cannot flip the odds-desk direction.
+    """
+    dim = dims["recent_status"]
+    feature = (sporttery_intel or {}).get("feature") or {}
+    if not feature:
+        return
+
+    try:
+        from sporttery_intel import _style_lines
+    except Exception:
+        _style_lines = None  # type: ignore[assignment]
+        return
+
+    home_lines = _style_lines(feature, side="home") if _style_lines else []
+    away_lines = _style_lines(feature, side="away") if _style_lines else []
+    if not home_lines and not away_lines:
+        return
+
+    evidence: list[str] = []
+    if home_lines:
+        evidence.append("主队：" + "；".join(home_lines))
+    if away_lines:
+        evidence.append("客队：" + "；".join(away_lines))
+
+    dim["missing"] = False
+    dim["confidence"] = "low"
+    dim["evidence"] = evidence
+    dim["note"] = "来自体彩官方 feature 近期数据，仅作参考"
+
+    # Extreme ratios only.
+    last = feature.get("last") or {}
+    for prefix, label in (("home", "主队"), ("away", "客队")):
+        try:
+            ratio = int(float(last.get(f"{prefix}ScoreRatio") or 0))
+        except (TypeError, ValueError):
+            ratio = 0
+        if ratio >= 80:
+            high_impact.append(f"{label}近期取分率极高（{ratio}%）")
+        elif ratio and ratio <= 20:
+            high_impact.append(f"{label}近期取分率极低（{ratio}%）")
 
 
 def _window_counts(dates: list[str]) -> dict[str, int]:
@@ -494,18 +593,50 @@ def attach_prematch_and_summary(
             log.debug("fetch sporttery intel failed fid=%s: %s", fid, exc)
             intel = {}
 
+    # Try to fill kickoff/teams from index or DB fixture row.
+    index: dict[str, Any] = {}
+    if fid:
+        try:
+            from match_timeline import load_match_index
+            from db_timeline import load_match_index_from_db
+
+            index = load_match_index_from_db(str(fid)) or {}
+            if not index:
+                index = load_match_index(root, str(fid)) or {}
+        except Exception:
+            index = {}
+    if index.get("kickoff_at") and not pred.get("kickoff_at"):
+        pred["kickoff_at"] = index["kickoff_at"]
+    if index.get("home_team") and not pred.get("home_team"):
+        pred["home_team"] = index["home_team"]
+    if index.get("away_team") and not pred.get("away_team"):
+        pred["away_team"] = index["away_team"]
+
     # Fetch venue/weather factors for supported leagues if not supplied.
     fac = factors
     if fac is None and _is_supported_league(resolved_league) and fid:
         try:
             from match_agents.factor_fetch import enrich_match_factors
 
-            fac = enrich_match_factors(pred, use_cache=True)
+            fac = enrich_match_factors(pred, index=index or None, output_root=root, use_cache=True)
         except Exception as exc:
             log.debug("enrich_match_factors failed fid=%s: %s", fid, exc)
             fac = {}
     if fac is None:
         fac = {}
+
+    # Light-load club_form for schedule density if absent.
+    if not pred.get("club_form") and _is_supported_league(resolved_league):
+        try:
+            from analysis.team_form.club_form import build_club_form
+
+            home, away = _parse_teams(pred)
+            if home and away:
+                pred["club_form"] = build_club_form(
+                    home, away, league_name=resolved_league
+                )
+        except Exception as exc:
+            log.debug("build_club_form failed fid=%s: %s", fid, exc)
 
     schedule_ctx = _extract_schedule_dates(pred)
 
@@ -550,11 +681,36 @@ def ensure_prematch_attached(
 
     Used by the detail page to avoid requiring a full re-analysis just to show
     the comparison card.
+
+    If the cached sporttery intel is newer than the desk's ``as_of`` timestamp,
+    force a recalculation so injury/停赛 updates are reflected.
     """
     if not pred:
         return pred
-    if pred.get("comparison_summary") and pred.get("prematch_desk"):
+
+    needs_recalc = False
+    desk = pred.get("prematch_desk") or {}
+    desk_as_of = _parse_iso_dt(desk.get("as_of"))
+
+    fid = fixture_id or pred.get("fixture_id")
+    root = output_root
+    if root is None and fid:
+        root = pred.get("output_root") or "output/service"
+
+    if desk_as_of and fid and root:
+        try:
+            from sporttery_intel import load_sporttery_intel
+
+            intel = load_sporttery_intel(root, str(fid)) or {}
+            fetched_at = _parse_iso_dt(intel.get("fetched_at"))
+            if fetched_at and fetched_at > desk_as_of:
+                needs_recalc = True
+        except Exception:
+            pass
+
+    if not needs_recalc and pred.get("comparison_summary") and pred.get("prematch_desk"):
         return pred
+
     return attach_prematch_and_summary(
         pred,
         output_root=output_root,

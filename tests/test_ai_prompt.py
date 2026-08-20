@@ -108,6 +108,7 @@ def test_expert_desk_payload_has_judgment_frame():
         "jingcai",
         "divergence",
         "market",
+        "market_lanes",
         "result_forecast",
         "similar_ev_trap",
         "missing",

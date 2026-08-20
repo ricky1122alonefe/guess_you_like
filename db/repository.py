@@ -20,6 +20,7 @@ def upsert_fixture(
     home_team: str = "",
     away_team: str = "",
     match_name: str = "",
+    competition: str = "",
     kickoff_at: datetime | None = None,
 ) -> int:
     # 脏名不覆盖真名（与 poll_500 的 _DIRTY_TEAM_EXACT / _DIRTY_TEAM_SUBSTR 对齐；修改时请同步 poll_500.py）
@@ -56,18 +57,19 @@ def upsert_fixture(
     name_guard = _guard("match_name")
 
     sql = f"""
-    INSERT INTO fixtures (source, external_id, home_team, away_team, match_name, kickoff_at, updated_at)
-    VALUES (%s, %s, %s, %s, %s, %s, NOW())
+    INSERT INTO fixtures (source, external_id, home_team, away_team, match_name, competition, kickoff_at, updated_at)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
     ON CONFLICT (source, external_id) DO UPDATE SET
         home_team = CASE WHEN {home_guard} OR (EXCLUDED.home_team <> '' AND EXCLUDED.home_team = EXCLUDED.away_team) THEN fixtures.home_team ELSE EXCLUDED.home_team END,
         away_team = CASE WHEN {away_guard} OR (EXCLUDED.away_team <> '' AND EXCLUDED.home_team = EXCLUDED.away_team) THEN fixtures.away_team ELSE EXCLUDED.away_team END,
         match_name = CASE WHEN {name_guard} THEN fixtures.match_name ELSE EXCLUDED.match_name END,
+        competition = COALESCE(NULLIF(EXCLUDED.competition, ''), fixtures.competition),
         kickoff_at = COALESCE(EXCLUDED.kickoff_at, fixtures.kickoff_at),
         updated_at = NOW()
     RETURNING id
     """
     with cursor() as cur:
-        cur.execute(sql, (source, str(external_id), home_team, away_team, match_name, kickoff_at))
+        cur.execute(sql, (source, str(external_id), home_team, away_team, match_name, competition, kickoff_at))
         row = cur.fetchone()
         return int(row["id"])
 

@@ -107,6 +107,10 @@ def merge_match_indexes(
     return {
         "fixture_id": db_idx.get("fixture_id") or file_idx.get("fixture_id"),
         "match_name": match_name,
+        "league_name": file_idx.get("league_name") or db_idx.get("league_name") or "",
+        "home_team": file_idx.get("home_team") or db_idx.get("home_team") or "",
+        "away_team": file_idx.get("away_team") or db_idx.get("away_team") or "",
+        "kickoff_at": file_idx.get("kickoff_at") or db_idx.get("kickoff_at") or "",
         "updated_at": timeline[-1]["ts"] if timeline else "",
         "point_count": len(timeline),
         "timeline": timeline,

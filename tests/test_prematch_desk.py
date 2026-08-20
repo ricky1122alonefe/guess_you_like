@@ -8,6 +8,8 @@ from prematch_desk import (
     build_comparison_summary,
     build_prematch_desk,
     ensure_prematch_attached,
+    _resolve_league_name,
+    _normalize_league_name,
 )
 from match_agents.factor_fetch import (
     _resolve_venue_from_catalog,
@@ -360,7 +362,7 @@ def test_ensure_prematch_recalc_when_intel_newer(monkeypatch, tmp_path):
             },
             "away": {"injuriesAndSuspensionsList": []},
         },
-        "fetched_at": "2026-08-20 14:00:00",
+        "fetched_at": "2099-08-20 14:00:00",
     }
     save_sporttery_intel(root, fid, new_intel)
 
@@ -385,7 +387,7 @@ def _patch_network(monkeypatch, *, weather=None):
 
 def test_unmapped_team_does_not_fetch_weather(monkeypatch):
     _patch_network(monkeypatch)
-    pred = {"fixture_id": "999", "home_team": "伯恩利", "away_team": "谢菲联", "league_name": "英超"}
+    pred = {"fixture_id": "999", "home_team": "某未映射队", "away_team": "另一未映射队", "league_name": "英超"}
     factors = enrich_match_factors(pred)
     assert not factors["venue"]
     assert not factors["weather"]
@@ -414,7 +416,7 @@ def test_team_mapping_fetches_weather(monkeypatch):
 
 
 def test_resolve_venue_without_competition_fallback():
-    pred = {"fixture_id": "997", "home_team": "伯恩利", "league_name": "英超"}
+    pred = {"fixture_id": "997", "home_team": "某未知队", "league_name": "英超"}
     venue, _logs = _resolve_venue_from_catalog(
         pred, None, allow_competition_fallback=False
     )
@@ -428,3 +430,194 @@ def test_team_mapping_resolves_venue():
     )
     assert venue.get("catalog_source") == "team"
     assert venue.get("stadium") == "斯坦福桥球场"
+
+
+def test_vallecano_venue_and_weather(monkeypatch):
+    """巴列卡诺应解析到巴列卡斯球场并可拉天气。"""
+    _patch_network(
+        monkeypatch,
+        weather={
+            "source": "open_meteo",
+            "summary": "多云",
+            "temperature_c": 25,
+            "wind_kph": 8,
+        },
+    )
+    pred = {
+        "fixture_id": "9981",
+        "home_team": "巴列卡诺",
+        "away_team": "阿拉维斯",
+        "league_name": "西甲",
+    }
+    factors = enrich_match_factors(pred)
+    assert factors["venue"].get("stadium") == "巴列卡斯球场"
+    assert factors["weather"]["summary"] == "多云"
+
+
+def test_burnley_venue_and_weather(monkeypatch):
+    """伯恩利应解析到特夫摩尔球场并可拉天气。"""
+    _patch_network(
+        monkeypatch,
+        weather={
+            "source": "open_meteo",
+            "summary": "小雨",
+            "temperature_c": 15,
+            "wind_kph": 18,
+        },
+    )
+    pred = {
+        "fixture_id": "9982",
+        "home_team": "伯恩利",
+        "away_team": "卢顿",
+        "league_name": "英超",
+    }
+    factors = enrich_match_factors(pred)
+    assert factors["venue"].get("stadium") == "特夫摩尔球场"
+    assert factors["weather"]["summary"] == "小雨"
+
+
+def test_normalize_long_league_name():
+    assert _normalize_league_name("西班牙甲级联赛") == "西甲"
+    assert _normalize_league_name("英超") == "英超"
+    assert _normalize_league_name("") == ""
+
+
+def test_resolve_league_name_prefers_index():
+    pred = {"league_name": "英超"}
+    index = {"league_name": "西甲"}
+    # index takes precedence over pred when provided explicitly
+    assert _resolve_league_name(pred, index=index) == "西甲"
+
+
+def test_resolve_league_name_from_predict_row():
+    pred = {"predict_row": {"联赛": "西班牙甲级联赛"}}
+    assert _resolve_league_name(pred) == "西甲"
+
+
+def test_resolve_league_name_from_competition_field():
+    pred = {"competition": "意大利甲级联赛"}
+    assert _resolve_league_name(pred) == "意甲"
+
+
+def test_attach_resolves_league_from_predict_row_and_makes_available():
+    pred = {
+        "fixture_id": "200",
+        "predict_row": {"联赛": "西甲"},
+        "judgment": "倾向主胜·标准",
+        "result_1x2_cn": "主胜",
+    }
+    attach_prematch_and_summary(pred)
+    assert pred["league_name"] == "西甲"
+    assert pred["prematch_desk"]["available"] is True
+    assert pred["comparison_summary"]["action"] == "hold"
+
+
+def test_attach_resolves_unsupported_league_from_predict_row():
+    pred = {
+        "fixture_id": "201",
+        "predict_row": {"联赛": "日职"},
+        "judgment": "倾向主胜·标准",
+        "result_1x2_cn": "主胜",
+    }
+    attach_prematch_and_summary(pred)
+    assert pred["league_name"] == "日职"
+    assert pred["prematch_desk"]["available"] is False
+    assert pred["comparison_summary"]["action"] == "hold"
+    assert "主胜" in pred["comparison_summary"]["summary"]
+
+
+def test_ensure_prematch_uses_passed_league_name(monkeypatch):
+    pred = {
+        "fixture_id": "202",
+        "judgment": "倾向客胜·小注",
+        "result_1x2_cn": "客胜",
+    }
+    monkeypatch.setattr("prematch_desk._is_supported_league", lambda _l: True)
+    ensure_prematch_attached(pred, output_root="output/service", fixture_id="202", league_name="德甲")
+    assert pred["league_name"] == "德甲"
+    assert pred["prematch_desk"]["league_name"] == "德甲"
+    assert pred["comparison_summary"]["action"] == "hold"
+    assert "客胜" in pred["comparison_summary"]["summary"]
+
+
+def _dim(desk: dict, dim_id: str) -> dict:
+    return next(d for d in desk["dimensions"] if d["id"] == dim_id)
+
+
+def _make_table_20(*pairs: tuple[int, str, int, int]) -> list[dict]:
+    """Build a minimal 20-team standings table."""
+    rows: list[dict] = []
+    for pos, name, pts, played in pairs:
+        rows.append({
+            "position": pos,
+            "team": {"name": name},
+            "points": pts,
+            "playedGames": played,
+        })
+    # pad to 20
+    for pos in range(len(pairs) + 1, 21):
+        rows.append({
+            "position": pos,
+            "team": {"name": f"Team{pos}"},
+            "points": 50,
+            "playedGames": 38,
+        })
+    return rows
+
+
+def test_motivation_with_standings(monkeypatch):
+    """积分榜可用时 motivation 维度非 missing；末轮保级对话进 high_impact。"""
+    table = _make_table_20(
+        (17, "Nottingham Forest", 32, 38),
+        (18, "Burnley", 24, 38),
+        (19, "Luton Town", 26, 38),
+        (20, "Sheffield United", 16, 38),
+    )
+    monkeypatch.setattr(
+        "analysis.team_form.standings.load_standings",
+        lambda league, output_root: table,
+    )
+
+    pred = {
+        "fixture_id": "300",
+        "league_name": "英超",
+        "home_team": "伯恩利",
+        "away_team": "卢顿",
+        "judgment": "倾向主胜·标准",
+        "result_1x2_cn": "主胜",
+    }
+    attach_prematch_and_summary(pred, output_root="output/service")
+    motivation = _dim(pred["prematch_desk"], "motivation")
+    assert motivation["missing"] is False
+    assert "来自 football-data.org 积分榜" in motivation["note"]
+    evidence_text = " ".join(motivation["evidence"])
+    assert "主队排名第18" in evidence_text
+    assert "客队排名第19" in evidence_text
+    assert "联赛末轮" in evidence_text
+    assert any("保级直接对话" in f for f in pred["prematch_desk"]["high_impact_facts"])
+    # high impact 只能触发 size_down，不能 flip 方向
+    assert pred["comparison_summary"]["action"] == "size_down"
+    assert "主胜" in pred["comparison_summary"]["summary"]
+
+
+def test_motivation_missing_without_standings(monkeypatch):
+    """无积分榜数据时 motivation 保持 missing，裁判仍 missing。"""
+    monkeypatch.setattr(
+        "analysis.team_form.standings.load_standings",
+        lambda *a, **k: None,
+    )
+
+    pred = {
+        "fixture_id": "301",
+        "league_name": "英超",
+        "home_team": "曼城",
+        "away_team": "利物浦",
+        "judgment": "倾向主胜·标准",
+        "result_1x2_cn": "主胜",
+    }
+    attach_prematch_and_summary(pred, output_root="output/service")
+    motivation = _dim(pred["prematch_desk"], "motivation")
+    referee = _dim(pred["prematch_desk"], "referee")
+    assert motivation["missing"] is True
+    assert referee["missing"] is True
+    assert pred["comparison_summary"]["action"] == "hold"

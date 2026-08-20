@@ -553,6 +553,7 @@ def poll_single_fixture(
         home_team=fx.home or "",
         away_team=fx.away or "",
         match_name=fx.base_name,
+        competition=fx.league or "",
         kickoff_at=fx.kickoff,
     )
     inserted = insert_tick_if_changed(db_id, tick, source="500")

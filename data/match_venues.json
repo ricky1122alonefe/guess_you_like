@@ -324,6 +324,600 @@
       "lon": 7.6413,
       "altitude_m": 250,
       "surface": "天然草"
+    },
+    "vallecas": {
+      "stadium": "巴列卡斯球场",
+      "city": "马德里",
+      "country": "西班牙",
+      "lat": 40.3919,
+      "lon": -3.6599,
+      "altitude_m": 700,
+      "surface": "天然草"
+    },
+    "mendizorroza": {
+      "stadium": "门迪索罗萨球场",
+      "city": "维多利亚",
+      "country": "西班牙",
+      "lat": 42.8372,
+      "lon": -2.6881,
+      "altitude_m": 520,
+      "surface": "天然草"
+    },
+    "benito_villamarin": {
+      "stadium": "贝尼托·比利亚马林球场",
+      "city": "塞维利亚",
+      "country": "西班牙",
+      "lat": 37.3565,
+      "lon": -5.9814,
+      "altitude_m": 20,
+      "surface": "天然草"
+    },
+    "san_mames": {
+      "stadium": "圣马梅斯球场",
+      "city": "毕尔巴鄂",
+      "country": "西班牙",
+      "lat": 43.2642,
+      "lon": -2.9494,
+      "altitude_m": 30,
+      "surface": "天然草"
+    },
+    "mestalla": {
+      "stadium": "梅斯塔利亚球场",
+      "city": "瓦伦西亚",
+      "country": "西班牙",
+      "lat": 39.4746,
+      "lon": -0.3583,
+      "altitude_m": 20,
+      "surface": "天然草"
+    },
+    "ceramica": {
+      "stadium": "陶瓷球场",
+      "city": "比利亚雷亚尔",
+      "country": "西班牙",
+      "lat": 39.9436,
+      "lon": -0.12,
+      "altitude_m": 50,
+      "surface": "天然草"
+    },
+    "balaidos": {
+      "stadium": "巴莱多斯球场",
+      "city": "维戈",
+      "country": "西班牙",
+      "lat": 42.2118,
+      "lon": -8.7397,
+      "altitude_m": 20,
+      "surface": "天然草"
+    },
+    "sadar": {
+      "stadium": "萨达尔球场",
+      "city": "潘普洛纳",
+      "country": "西班牙",
+      "lat": 42.7968,
+      "lon": -1.6373,
+      "altitude_m": 450,
+      "surface": "天然草"
+    },
+    "montilivi": {
+      "stadium": "蒙蒂利维球场",
+      "city": "赫罗纳",
+      "country": "西班牙",
+      "lat": 41.9619,
+      "lon": 2.8284,
+      "altitude_m": 70,
+      "surface": "天然草"
+    },
+    "butarque": {
+      "stadium": "布塔尔克球场",
+      "city": "莱加内斯",
+      "country": "西班牙",
+      "lat": 41.7912,
+      "lon": -3.5998,
+      "altitude_m": 680,
+      "surface": "天然草"
+    },
+    "rcde_stadium": {
+      "stadium": "RCDE球场",
+      "city": "科尔内利亚",
+      "country": "西班牙",
+      "lat": 41.3479,
+      "lon": 2.0747,
+      "altitude_m": 40,
+      "surface": "天然草"
+    },
+    "jose_zorrilla": {
+      "stadium": "何塞·索里利亚球场",
+      "city": "巴拉多利德",
+      "country": "西班牙",
+      "lat": 41.6444,
+      "lon": -4.7611,
+      "altitude_m": 700,
+      "surface": "天然草"
+    },
+    "gran_canaria": {
+      "stadium": "大加那利球场",
+      "city": "拉斯帕尔马斯",
+      "country": "西班牙",
+      "lat": 28.1005,
+      "lon": -15.4567,
+      "altitude_m": 20,
+      "surface": "天然草"
+    },
+    "visit_mallorca": {
+      "stadium": "访问马略卡体育场",
+      "city": "马略卡",
+      "country": "西班牙",
+      "lat": 39.59,
+      "lon": 3.015,
+      "altitude_m": 150,
+      "surface": "天然草"
+    },
+    "coliseum": {
+      "stadium": "阿方索·佩雷斯球场",
+      "city": "赫塔费",
+      "country": "西班牙",
+      "lat": 40.3256,
+      "lon": -3.7149,
+      "altitude_m": 620,
+      "surface": "天然草"
+    },
+    "franchi": {
+      "stadium": "弗兰基球场",
+      "city": "佛罗伦萨",
+      "country": "意大利",
+      "lat": 43.7808,
+      "lon": 11.2825,
+      "altitude_m": 30,
+      "surface": "天然草"
+    },
+    "dallara": {
+      "stadium": "达拉拉球场",
+      "city": "博洛尼亚",
+      "country": "意大利",
+      "lat": 44.4949,
+      "lon": 11.3095,
+      "altitude_m": 50,
+      "surface": "天然草"
+    },
+    "gewiss": {
+      "stadium": "格维斯球场",
+      "city": "贝加莫",
+      "country": "意大利",
+      "lat": 45.7083,
+      "lon": 9.6819,
+      "altitude_m": 220,
+      "surface": "天然草"
+    },
+    "brianteo": {
+      "stadium": "布里安特奥球场",
+      "city": "蒙扎",
+      "country": "意大利",
+      "lat": 45.583,
+      "lon": 9.283,
+      "altitude_m": 150,
+      "surface": "天然草"
+    },
+    "luigi_ferraris": {
+      "stadium": "路易吉·费拉里斯球场",
+      "city": "热那亚",
+      "country": "意大利",
+      "lat": 44.4164,
+      "lon": 8.9524,
+      "altitude_m": 10,
+      "surface": "天然草"
+    },
+    "mapeistadium": {
+      "stadium": "马佩体育场",
+      "city": "萨索洛",
+      "country": "意大利",
+      "lat": 44.7144,
+      "lon": 10.6497,
+      "altitude_m": 60,
+      "surface": "天然草"
+    },
+    "via_del_mare": {
+      "stadium": "维亚·德尔·马雷球场",
+      "city": "莱切",
+      "country": "意大利",
+      "lat": 40.3651,
+      "lon": 18.2089,
+      "altitude_m": 30,
+      "surface": "天然草"
+    },
+    "friuli": {
+      "stadium": "弗留利球场",
+      "city": "乌迪内斯",
+      "country": "意大利",
+      "lat": 46.0816,
+      "lon": 13.2001,
+      "altitude_m": 110,
+      "surface": "天然草"
+    },
+    "carlo_castellani": {
+      "stadium": "卡洛·卡斯特拉尼球场",
+      "city": "恩波利",
+      "country": "意大利",
+      "lat": 43.7265,
+      "lon": 10.9548,
+      "altitude_m": 20,
+      "surface": "天然草"
+    },
+    "bentegodi": {
+      "stadium": "本特戈迪球场",
+      "city": "维罗纳",
+      "country": "意大利",
+      "lat": 45.4353,
+      "lon": 10.9687,
+      "altitude_m": 70,
+      "surface": "天然草"
+    },
+    "unipol_domus": {
+      "stadium": "乌尼波尔·多穆斯球场",
+      "city": "卡利亚里",
+      "country": "意大利",
+      "lat": 39.1997,
+      "lon": 9.1355,
+      "altitude_m": 10,
+      "surface": "天然草"
+    },
+    "stadio_toro": {
+      "stadium": "都灵奥林匹克球场",
+      "city": "都灵",
+      "country": "意大利",
+      "lat": 45.0418,
+      "lon": 7.65,
+      "altitude_m": 240,
+      "surface": "天然草"
+    },
+    "citta_del_tricolore": {
+      "stadium": "三色旗球场",
+      "city": "雷焦艾米利亚",
+      "country": "意大利",
+      "lat": 44.7144,
+      "lon": 10.6497,
+      "altitude_m": 60,
+      "surface": "天然草"
+    },
+    "roazhon_park": {
+      "stadium": "罗阿宗公园球场",
+      "city": "雷恩",
+      "country": "法国",
+      "lat": 48.1075,
+      "lon": -1.7128,
+      "altitude_m": 40,
+      "surface": "天然草"
+    },
+    "allianz_riviera": {
+      "stadium": "安联里维埃拉球场",
+      "city": "尼斯",
+      "country": "法国",
+      "lat": 43.7051,
+      "lon": 7.1925,
+      "altitude_m": 10,
+      "surface": "天然草"
+    },
+    "bolaert": {
+      "stadium": "博拉埃尔球场",
+      "city": "朗斯",
+      "country": "法国",
+      "lat": 50.4329,
+      "lon": 2.8149,
+      "altitude_m": 40,
+      "surface": "天然草"
+    },
+    "meinau": {
+      "stadium": "梅纳乌球场",
+      "city": "斯特拉斯堡",
+      "country": "法国",
+      "lat": 48.56,
+      "lon": 7.752,
+      "altitude_m": 140,
+      "surface": "天然草"
+    },
+    "beaujoire": {
+      "stadium": "博茹瓦尔球场",
+      "city": "南特",
+      "country": "法国",
+      "lat": 47.2557,
+      "lon": -1.5253,
+      "altitude_m": 30,
+      "surface": "天然草"
+    },
+    "delaune": {
+      "stadium": "德拉乌讷球场",
+      "city": "兰斯",
+      "country": "法国",
+      "lat": 49.2467,
+      "lon": 4.025,
+      "altitude_m": 90,
+      "surface": "天然草"
+    },
+    "municipal_toulouse": {
+      "stadium": "市政球场",
+      "city": "图卢兹",
+      "country": "法国",
+      "lat": 43.5831,
+      "lon": 1.4342,
+      "altitude_m": 150,
+      "surface": "天然草"
+    },
+    "stade_francis_le_basser": {
+      "stadium": "弗朗西斯·勒巴瑟球场",
+      "city": "勒阿弗尔",
+      "country": "法国",
+      "lat": 49.4989,
+      "lon": 0.1301,
+      "altitude_m": 10,
+      "surface": "天然草"
+    },
+    "gaston_gerard": {
+      "stadium": "加斯顿·热拉尔球场",
+      "city": "第戎",
+      "country": "法国",
+      "lat": 47.3244,
+      "lon": 5.0687,
+      "altitude_m": 240,
+      "surface": "天然草"
+    },
+    "auguste_delaune_2": {
+      "stadium": "奥古斯特·德拉乌讷球场",
+      "city": "特鲁瓦",
+      "country": "法国",
+      "lat": 48.2992,
+      "lon": 4.079,
+      "altitude_m": 120,
+      "surface": "天然草"
+    },
+    "volkswagen_arena": {
+      "stadium": "大众汽车球场",
+      "city": "沃尔夫斯堡",
+      "country": "德国",
+      "lat": 52.4329,
+      "lon": 10.8039,
+      "altitude_m": 70,
+      "surface": "天然草"
+    },
+    "mercedes_benz_arena_stuttgart": {
+      "stadium": "梅赛德斯-奔驰竞技场",
+      "city": "斯图加特",
+      "country": "德国",
+      "lat": 48.7922,
+      "lon": 9.232,
+      "altitude_m": 240,
+      "surface": "天然草"
+    },
+    "europa_park": {
+      "stadium": "欧罗巴公园球场",
+      "city": "弗赖堡",
+      "country": "德国",
+      "lat": 48.021,
+      "lon": 7.8298,
+      "altitude_m": 280,
+      "surface": "天然草"
+    },
+    "prezero": {
+      "stadium": "普雷泽罗球场",
+      "city": "辛斯海姆",
+      "country": "德国",
+      "lat": 49.2722,
+      "lon": 8.8408,
+      "altitude_m": 160,
+      "surface": "天然草"
+    },
+    "wwk_arena": {
+      "stadium": "WWK球场",
+      "city": "奥格斯堡",
+      "country": "德国",
+      "lat": 48.3222,
+      "lon": 11.6258,
+      "altitude_m": 440,
+      "surface": "天然草"
+    },
+    "weser": {
+      "stadium": "威悉球场",
+      "city": "不莱梅",
+      "country": "德国",
+      "lat": 53.0661,
+      "lon": 8.8376,
+      "altitude_m": 10,
+      "surface": "天然草"
+    },
+    "opel_arena": {
+      "stadium": "奥佩尔竞技场",
+      "city": "美因茨",
+      "country": "德国",
+      "lat": 50.0,
+      "lon": 8.2457,
+      "altitude_m": 110,
+      "surface": "天然草"
+    },
+    "rewirpower": {
+      "stadium": "雷维尔电力球场",
+      "city": "波鸿",
+      "country": "德国",
+      "lat": 51.4889,
+      "lon": 7.2367,
+      "altitude_m": 100,
+      "surface": "天然草"
+    },
+    "an_der_alten_forsterei": {
+      "stadium": "老林务所畔球场",
+      "city": "柏林",
+      "country": "德国",
+      "lat": 52.4572,
+      "lon": 13.5681,
+      "altitude_m": 60,
+      "surface": "天然草"
+    },
+    "voith_arena": {
+      "stadium": "福伊特竞技场",
+      "city": "海登海姆",
+      "country": "德国",
+      "lat": 48.6686,
+      "lon": 10.0262,
+      "altitude_m": 520,
+      "surface": "天然草"
+    },
+    "borussia_park": {
+      "stadium": "普鲁士公园球场",
+      "city": "门兴格拉德巴赫",
+      "country": "德国",
+      "lat": 51.1746,
+      "lon": 6.3857,
+      "altitude_m": 90,
+      "surface": "天然草"
+    },
+    "rheinenergiestadion": {
+      "stadium": "莱茵能源体育场",
+      "city": "科隆",
+      "country": "德国",
+      "lat": 50.9335,
+      "lon": 6.8751,
+      "altitude_m": 40,
+      "surface": "天然草"
+    },
+    "merck_stadion": {
+      "stadium": "默克体育场",
+      "city": "达姆施塔特",
+      "country": "德国",
+      "lat": 49.8567,
+      "lon": 8.6724,
+      "altitude_m": 120,
+      "surface": "天然草"
+    },
+    "selhurst_park": {
+      "stadium": "塞尔赫斯特公园球场",
+      "city": "伦敦",
+      "country": "英格兰",
+      "lat": 51.3983,
+      "lon": -0.0855,
+      "altitude_m": 20,
+      "surface": "天然草"
+    },
+    "brentford_community": {
+      "stadium": "布伦特福德社区球场",
+      "city": "布伦特福德",
+      "country": "英格兰",
+      "lat": 51.488,
+      "lon": -0.2886,
+      "altitude_m": 10,
+      "surface": "天然草"
+    },
+    "craven_cottage": {
+      "stadium": "克拉文农场球场",
+      "city": "伦敦",
+      "country": "英格兰",
+      "lat": 51.4749,
+      "lon": -0.2218,
+      "altitude_m": 10,
+      "surface": "天然草"
+    },
+    "goodison_park": {
+      "stadium": "古迪逊公园球场",
+      "city": "利物浦",
+      "country": "英格兰",
+      "lat": 53.4387,
+      "lon": -2.9663,
+      "altitude_m": 40,
+      "surface": "天然草"
+    },
+    "london_stadium": {
+      "stadium": "伦敦体育场",
+      "city": "伦敦",
+      "country": "英格兰",
+      "lat": 51.5383,
+      "lon": -0.0166,
+      "altitude_m": 10,
+      "surface": "天然草"
+    },
+    "st_james_park": {
+      "stadium": "圣詹姆斯公园球场",
+      "city": "纽卡斯尔",
+      "country": "英格兰",
+      "lat": 54.9756,
+      "lon": -1.6217,
+      "altitude_m": 40,
+      "surface": "天然草"
+    },
+    "amex": {
+      "stadium": "美国运通社区球场",
+      "city": "布莱顿",
+      "country": "英格兰",
+      "lat": 50.8616,
+      "lon": -0.0837,
+      "altitude_m": 10,
+      "surface": "天然草"
+    },
+    "villa_park": {
+      "stadium": "维拉公园球场",
+      "city": "伯明翰",
+      "country": "英格兰",
+      "lat": 52.5092,
+      "lon": -1.8847,
+      "altitude_m": 80,
+      "surface": "天然草"
+    },
+    "molineux": {
+      "stadium": "莫利诺克斯球场",
+      "city": "伍尔弗汉普顿",
+      "country": "英格兰",
+      "lat": 52.5904,
+      "lon": -2.13,
+      "altitude_m": 140,
+      "surface": "天然草"
+    },
+    "vitality": {
+      "stadium": "活力球场",
+      "city": "伯恩茅斯",
+      "country": "英格兰",
+      "lat": 50.7352,
+      "lon": -1.8383,
+      "altitude_m": 20,
+      "surface": "天然草"
+    },
+    "city_ground": {
+      "stadium": "城市足球场",
+      "city": "诺丁汉",
+      "country": "英格兰",
+      "lat": 52.62,
+      "lon": -1.257,
+      "altitude_m": 60,
+      "surface": "天然草"
+    },
+    "turf_moor": {
+      "stadium": "特夫摩尔球场",
+      "city": "伯恩利",
+      "country": "英格兰",
+      "lat": 53.789,
+      "lon": -2.2302,
+      "altitude_m": 120,
+      "surface": "天然草"
+    },
+    "bramall_lane": {
+      "stadium": "布拉莫尔巷球场",
+      "city": "谢菲尔德",
+      "country": "英格兰",
+      "lat": 53.3703,
+      "lon": -1.4708,
+      "altitude_m": 100,
+      "surface": "天然草"
+    },
+    "kenilworth_road": {
+      "stadium": "肯尼沃斯路球场",
+      "city": "卢顿",
+      "country": "英格兰",
+      "lat": 51.8842,
+      "lon": -0.4316,
+      "altitude_m": 120,
+      "surface": "天然草"
+    },
+    "portman_road": {
+      "stadium": "波特曼路球场",
+      "city": "伊普斯维奇",
+      "country": "英格兰",
+      "lat": 52.0551,
+      "lon": 1.1443,
+      "altitude_m": 30,
+      "surface": "天然草"
     }
   },
   "team_default_venue": {
@@ -379,7 +973,80 @@
     "莱比锡": "red_bull_arena_leipzig",
     "RB莱比锡": "red_bull_arena_leipzig",
     "勒沃库森": "bayarena",
-    "法兰克福": "deutsche_bank_park"
+    "法兰克福": "deutsche_bank_park",
+    "巴列卡诺": "vallecas",
+    "阿拉维斯": "mendizorroza",
+    "皇家贝蒂斯": "benito_villamarin",
+    "毕尔巴鄂竞技": "san_mames",
+    "毕尔巴鄂": "san_mames",
+    "瓦伦西亚": "mestalla",
+    "比利亚雷亚尔": "ceramica",
+    "黄色潜水艇": "ceramica",
+    "塞尔塔": "balaidos",
+    "奥萨苏纳": "sadar",
+    "赫罗纳": "montilivi",
+    "莱加内斯": "butarque",
+    "西班牙人": "rcde_stadium",
+    "巴拉多利德": "jose_zorrilla",
+    "拉斯帕尔马斯": "gran_canaria",
+    "马略卡": "visit_mallorca",
+    "赫塔费": "coliseum",
+    "佛罗伦萨": "franchi",
+    "博洛尼亚": "dallara",
+    "亚特兰大": "gewiss",
+    "蒙扎": "brianteo",
+    "热那亚": "luigi_ferraris",
+    "萨索洛": "mapeistadium",
+    "莱切": "via_del_mare",
+    "乌迪内斯": "friuli",
+    "恩波利": "carlo_castellani",
+    "维罗纳": "bentegodi",
+    "卡利亚里": "unipol_domus",
+    "都灵": "stadio_toro",
+    "雷恩": "roazhon_park",
+    "尼斯": "allianz_riviera",
+    "朗斯": "bolaert",
+    "斯特拉斯堡": "meinau",
+    "南特": "beaujoire",
+    "兰斯": "delaune",
+    "图卢兹": "municipal_toulouse",
+    "勒阿弗尔": "stade_francis_le_basser",
+    "第戎": "gaston_gerard",
+    "特鲁瓦": "auguste_delaune_2",
+    "沃尔夫斯堡": "volkswagen_arena",
+    "斯图加特": "mercedes_benz_arena_stuttgart",
+    "弗赖堡": "europa_park",
+    "霍芬海姆": "prezero",
+    "奥格斯堡": "wwk_arena",
+    "不莱梅": "weser",
+    "云达不莱梅": "weser",
+    "美因茨": "opel_arena",
+    "波鸿": "rewirpower",
+    "柏林联合": "an_der_alten_forsterei",
+    "海登海姆": "voith_arena",
+    "门兴": "borussia_park",
+    "门兴格拉德巴赫": "borussia_park",
+    "科隆": "rheinenergiestadion",
+    "达姆施塔特": "merck_stadion",
+    "水晶宫": "selhurst_park",
+    "布伦特福德": "brentford_community",
+    "富勒姆": "craven_cottage",
+    "埃弗顿": "goodison_park",
+    "西汉姆": "london_stadium",
+    "西汉姆联": "london_stadium",
+    "纽卡斯尔": "st_james_park",
+    "纽卡斯尔联": "st_james_park",
+    "布莱顿": "amex",
+    "阿斯顿维拉": "villa_park",
+    "狼队": "molineux",
+    "伯恩茅斯": "vitality",
+    "诺丁汉森林": "city_ground",
+    "诺丁汉": "city_ground",
+    "伯恩利": "turf_moor",
+    "谢菲联": "bramall_lane",
+    "谢菲尔德联": "bramall_lane",
+    "卢顿": "kenilworth_road",
+    "伊普斯维奇": "portman_road"
   },
   "competition_default_venue": {
     "世界杯": "metlife",

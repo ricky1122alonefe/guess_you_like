@@ -1,5 +1,15 @@
 -- Pure PostgreSQL schema for 5-minute odds polling
 
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'fixtures' AND column_name = 'competition'
+    ) THEN
+        ALTER TABLE fixtures ADD COLUMN competition TEXT NOT NULL DEFAULT '';
+    END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS fixtures (
     id              BIGSERIAL PRIMARY KEY,
     source          TEXT NOT NULL DEFAULT '500',
@@ -7,6 +17,7 @@ CREATE TABLE IF NOT EXISTS fixtures (
     home_team       TEXT NOT NULL DEFAULT '',
     away_team       TEXT NOT NULL DEFAULT '',
     match_name      TEXT NOT NULL DEFAULT '',
+    competition     TEXT NOT NULL DEFAULT '',
     kickoff_at      TIMESTAMPTZ,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),

@@ -73,6 +73,7 @@ def run_once(
                 home_team=fx.home,
                 away_team=fx.away,
                 match_name=fx.base_name,
+                competition=fx.league or "",
                 kickoff_at=fx.kickoff,
             )
             tick = poll_fixture(

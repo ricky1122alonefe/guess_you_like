@@ -76,6 +76,54 @@ def _league_map() -> dict[str, Any]:
     return _LEAGUE_MAP_CACHE
 
 
+_LONG_TO_SHORT_LEAGUE = {
+    "英格兰超级联赛": "英超",
+    "西班牙甲级联赛": "西甲",
+    "德国甲级联赛": "德甲",
+    "意大利甲级联赛": "意甲",
+    "法国甲级联赛": "法甲",
+}
+
+
+def _normalize_league_name(name: str | None) -> str:
+    """Trim and map full league names to short names used by the desk."""
+    if not name:
+        return ""
+    cleaned = str(name).strip()
+    if not cleaned:
+        return ""
+    short = _LONG_TO_SHORT_LEAGUE.get(cleaned, cleaned)
+    if short in SUPPORTED_LEAGUES:
+        return short
+    return short
+
+
+def _resolve_league_name(pred: dict, *, index: dict | None = None) -> str:
+    """Best-effort league name from explicit, index, predict_row, or map sources."""
+    candidates: list[str] = []
+
+    if index:
+        candidates.append(str(index.get("league_name") or "").strip())
+
+    candidates.append(str(pred.get("league_name") or "").strip())
+
+    row = pred.get("predict_row") or {}
+    candidates.append(str(row.get("联赛") or "").strip())
+    candidates.append(str(row.get("赛事") or "").strip())
+
+    candidates.append(str(pred.get("league") or "").strip())
+    candidates.append(str(pred.get("competition") or "").strip())
+
+    known_leagues = set((_league_map().get("leagues") or {}).keys())
+
+    for raw in candidates:
+        norm = _normalize_league_name(raw)
+        if norm and (norm in SUPPORTED_LEAGUES or norm in known_leagues):
+            return norm
+
+    return ""
+
+
 def _empty_dimension(dim_id: str, label: str, *, note: str = "数据不足，本维降权/跳过") -> dict:
     return {
         "id": dim_id,
@@ -101,13 +149,14 @@ def build_prematch_desk(
     sporttery_intel: dict | None = None,
     factors: dict | None = None,
     schedule_ctx: dict | None = None,
+    standings_ctx: dict | None = None,
 ) -> dict:
     """Return a pre-match desk dict for the given prediction.
 
     If the league is not in the supported set, the desk is unavailable with
     ``reason="league_not_supported"``. For supported leagues, verified facts
-    from sporttery_intel / weather / schedule are filled in; missing data is
-    explicitly marked as missing rather than fabricated.
+    from sporttery_intel / weather / schedule / standings are filled in; missing
+    data is explicitly marked as missing rather than fabricated.
     """
     pred = pred or {}
     league = league_name or pred.get("league_name") or ""
@@ -136,9 +185,9 @@ def build_prematch_desk(
     _fill_weather(dims, factors, high_impact)
     _fill_schedule_fatigue(dims, schedule_ctx)
     _fill_recent_status(dims, sporttery_intel, high_impact)
-    # referee / motivation intentionally kept missing this iteration.
+    _fill_motivation(dims, standings_ctx, high_impact)
+    # referee remains intentionally missing this iteration.
     dims["referee"]["note"] = "裁判数据未接入，本维保持缺失"
-    dims["motivation"]["note"] = "战意数据未接入，本维保持缺失"
 
     has_any_evidence = any(
         not d.get("missing") and d.get("evidence")
@@ -406,6 +455,41 @@ def _fill_recent_status(
             high_impact.append(f"{label}近期取分率极低（{ratio}%）")
 
 
+def _fill_motivation(
+    dims: dict[str, dict],
+    standings_ctx: dict[str, Any] | None,
+    high_impact: list[str],
+) -> None:
+    """Fill motivation dimension from verified league standings only.
+
+    Facts are limited to: rank, points, gap to safety, and whether this is the
+    final round.  No news or subjective will-to-win narratives are invented.
+    High impact is reserved for final-round direct relegation battles.
+    """
+    dim = dims["motivation"]
+    ctx = standings_ctx or {}
+    evidence = ctx.get("evidence") or []
+    if not evidence:
+        dim["note"] = "积分榜数据不足，本维保持缺失"
+        return
+
+    dim["missing"] = False
+    dim["confidence"] = "medium"
+    dim["evidence"] = evidence
+    dim["note"] = "来自 football-data.org 积分榜（仅排名/积分/分差/轮次）"
+
+    try:
+        from analysis.team_form.standings import is_relegation_battle
+
+        if ctx.get("is_final_round") and is_relegation_battle(ctx):
+            high_impact.append(
+                f"联赛末轮保级直接对话："
+                f"主队第{ctx['home_rank']}名，客队第{ctx['away_rank']}名"
+            )
+    except Exception:
+        pass
+
+
 def _window_counts(dates: list[str]) -> dict[str, int]:
     """Count matches within 7 and 14 days from the most recent listed date."""
     from datetime import datetime, timedelta
@@ -561,9 +645,34 @@ def attach_prematch_and_summary(
     if root is None and fid:
         root = pred.get("output_root") or "output/service"
 
+    # Load index first so league/team/kickoff fallbacks are available.
+    index: dict[str, Any] = {}
+    if fid:
+        try:
+            from match_timeline import load_match_index
+            from db_timeline import load_match_index_from_db
+
+            index = load_match_index_from_db(str(fid)) or {}
+            if not index:
+                index = load_match_index(root, str(fid)) or {}
+        except Exception:
+            index = {}
+    if index.get("kickoff_at") and not pred.get("kickoff_at"):
+        pred["kickoff_at"] = index["kickoff_at"]
+    if index.get("home_team") and not pred.get("home_team"):
+        pred["home_team"] = index["home_team"]
+    if index.get("away_team") and not pred.get("away_team"):
+        pred["away_team"] = index["away_team"]
+
     resolved_league = league_name or pred.get("league_name") or ""
     if resolved_league:
         pred["league_name"] = resolved_league
+
+    # Resolve league_name from multiple fallbacks if still unknown.
+    if not resolved_league:
+        resolved_league = _resolve_league_name(pred, index=index)
+        if resolved_league:
+            pred["league_name"] = resolved_league
 
     # Try to load cached sporttery intel if not supplied.
     intel = sporttery_intel
@@ -593,25 +702,6 @@ def attach_prematch_and_summary(
             log.debug("fetch sporttery intel failed fid=%s: %s", fid, exc)
             intel = {}
 
-    # Try to fill kickoff/teams from index or DB fixture row.
-    index: dict[str, Any] = {}
-    if fid:
-        try:
-            from match_timeline import load_match_index
-            from db_timeline import load_match_index_from_db
-
-            index = load_match_index_from_db(str(fid)) or {}
-            if not index:
-                index = load_match_index(root, str(fid)) or {}
-        except Exception:
-            index = {}
-    if index.get("kickoff_at") and not pred.get("kickoff_at"):
-        pred["kickoff_at"] = index["kickoff_at"]
-    if index.get("home_team") and not pred.get("home_team"):
-        pred["home_team"] = index["home_team"]
-    if index.get("away_team") and not pred.get("away_team"):
-        pred["away_team"] = index["away_team"]
-
     # Fetch venue/weather factors for supported leagues if not supplied.
     fac = factors
     if fac is None and _is_supported_league(resolved_league) and fid:
@@ -640,12 +730,28 @@ def attach_prematch_and_summary(
 
     schedule_ctx = _extract_schedule_dates(pred)
 
+    # Load verified league standings for the motivation dimension.
+    standings_ctx: dict[str, Any] = {}
+    if _is_supported_league(resolved_league) and root:
+        try:
+            from analysis.team_form.standings import build_standings_context, load_standings
+
+            home, away = _parse_teams(pred)
+            if home and away:
+                table = load_standings(resolved_league, root)
+                standings_ctx = build_standings_context(
+                    table, home, away, resolved_league
+                )
+        except Exception as exc:
+            log.debug("load standings failed fid=%s: %s", fid, exc)
+
     pred["prematch_desk"] = build_prematch_desk(
         pred,
         league_name=resolved_league,
         sporttery_intel=intel,
         factors=fac,
         schedule_ctx=schedule_ctx,
+        standings_ctx=standings_ctx,
     )
     pred["comparison_summary"] = build_comparison_summary(pred, pred["prematch_desk"])
     return pred
@@ -676,6 +782,7 @@ def ensure_prematch_attached(
     *,
     output_root: str | Path | None = None,
     fixture_id: str | None = None,
+    league_name: str | None = None,
 ) -> dict:
     """Idempotently attach pre-match desk and comparison summary to ``pred``.
 
@@ -715,4 +822,5 @@ def ensure_prematch_attached(
         pred,
         output_root=output_root,
         fixture_id=fixture_id,
+        league_name=league_name,
     )

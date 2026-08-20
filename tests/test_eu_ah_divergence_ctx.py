@@ -75,7 +75,7 @@ def test_severity_cn_mapping():
     assert div["severity_cn"] in ("基本一致", "轻度分歧", "明显分歧", "巨大分歧")
 
 
-def test_report_uses_db_and_output(monkeypatch):
+def test_report_uses_db_and_output(monkeypatch, tmp_path):
     fake_fixtures = [
         {"id": 1, "external_id": "1420010", "source": "500", "home_team": "A", "away_team": "B", "match_name": "A VS B", "kickoff_at": "2026-08-12T18:00:00+00:00"},
         {"id": 2, "external_id": "1420011", "source": "500", "home_team": "C", "away_team": "D", "match_name": "C VS D", "kickoff_at": "2026-08-12T20:00:00+00:00"},
@@ -95,9 +95,20 @@ def test_report_uses_db_and_output(monkeypatch):
         fake_build,
     )
 
+    # 隔离 output/service 缓存扫描，避免真实目录数据影响断言。
+    monkeypatch.setattr(
+        "daily_picks.load_dashboard_matches",
+        lambda *a, **k: [],
+    )
+    monkeypatch.setattr(
+        "analysis.signals.eu_ah_divergence.scan_eu_ah_divergence",
+        lambda *a, **k: {"matches": []},
+    )
+
     from analysis.signals.eu_ah_divergence import build_divergence_report
 
-    r = build_divergence_report("output/service", within_days=7)
+    r = build_divergence_report(str(tmp_path), within_days=7)
     assert r["scanned"] == 2
     assert len(r["matches"]) == 1
     assert r["matches"][0]["divergence_score"] == 75
+    assert r["matches"][0]["fixture_id"] == "1420010"

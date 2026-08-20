@@ -195,7 +195,11 @@ def append_hourly_snapshot(
     mdir.mkdir(parents=True, exist_ok=True)
 
     meta_path = mdir / "meta.json"
-    meta = {"fixture_id": str(fixture_id), "match_name": match_name or pred.get("match", "")}
+    meta = {
+        "fixture_id": str(fixture_id),
+        "match_name": match_name or pred.get("match", ""),
+        "league_name": pred.get("league_name") or "",
+    }
     if meta_path.is_file():
         try:
             meta.update(json.loads(meta_path.read_text(encoding="utf-8")))
@@ -203,6 +207,8 @@ def append_hourly_snapshot(
             pass
     if match_name or pred.get("match"):
         meta["match_name"] = match_name or pred.get("match") or meta.get("match_name", "")
+    if pred.get("league_name"):
+        meta["league_name"] = pred.get("league_name")
     meta["updated_at"] = now_beijing_str()
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -216,6 +222,7 @@ def append_hourly_snapshot(
     index = {
         "fixture_id": str(fixture_id),
         "match_name": meta.get("match_name", ""),
+        "league_name": meta.get("league_name") or pred.get("league_name") or "",
         "updated_at": meta["updated_at"],
         "point_count": len(timeline),
         "timeline": timeline,

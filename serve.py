@@ -693,7 +693,10 @@ class Handler(BaseHTTPRequestHandler):
             # 赛前桌/对照摘要兜底：失败不得 500，保持页面可用
             if pred:
                 try:
-                    ensure_prematch_attached(pred, output_root=root, fixture_id=fid)
+                    ensure_prematch_attached(
+                        pred, output_root=root, fixture_id=fid,
+                        league_name=idx.get("league_name") if idx else None,
+                    )
                     attach_market_lanes(pred, output_root=root, fixture_id=fid)
                 except Exception:
                     log.exception("详情页赛前桌/三轨附加失败 fid=%s", fid)

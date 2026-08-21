@@ -178,6 +178,36 @@ def test_similar_ev_trap_block():
     assert "近5场" in sim["form"]["home"]
 
 
+def test_result_forecast_block_exposes_weights_and_note():
+    """payload 写清各源权重 + 禁必买声明（同赔只作基准，不抢最终可购方向）。"""
+    ctx = _base_ctx()
+    ctx["result_forecast"]["weights"] = {
+        "history_similar": 0.22,
+        "european": 0.25,
+        "asian": 0.15,
+        "betfair": 0.15,
+        "recent_form": 0.10,
+    }
+    payload = build_ai_expert_desk_payload(ctx)
+    rf = payload["result_forecast"]
+    assert rf["weights"]["history_similar"] == 0.22
+    assert "missing" in rf
+    sim = payload["similar_ev_trap"]
+    assert "similar_weights_note" in sim
+    assert "禁止写成必买" in sim["similar_weights_note"]
+    assert "竞彩轨与 judgment" in sim["similar_weights_note"]
+
+
+def test_similar_trap_league_share_note():
+    """同赔样本带联赛纯度：summary 标注满权/降权，混联赛不隐藏。"""
+    ctx = _base_ctx()
+    ctx["history_similar"]["league_share"] = 0.65
+    payload = build_ai_expert_desk_payload(ctx)
+    sim_summary = payload["similar_ev_trap"]["similar_summary"]
+    assert "联赛样本65%" in sim_summary
+    assert "混联赛" in sim_summary
+
+
 def test_no_form_does_not_fabricate_recent_5():
     ctx = _base_ctx()
     ctx["club_form"] = {}

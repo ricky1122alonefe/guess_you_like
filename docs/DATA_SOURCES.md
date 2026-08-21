@@ -21,6 +21,9 @@ Large optional files (e.g. `WorldCup2026.xlsx`) may not be in the repo; run `pyt
 |--------|--------|
 | odds.500.com / live.500.com / liansai.500.com | Odds, fixtures, scores (scraping) |
 | sporttery.cn (via poll) | Jingcai SP context where available |
+| [api.football-data.org](https://www.football-data.org/) | Top-5 league standings for the motivation dimension (optional, needs `FOOTBALL_DATA_API_KEY`; no key → dimension stays honestly missing) |
+
+Standings cache: `guess-you-like standings` refreshes only expired entries (TTL 6h); `--refresh` forces a refetch. Cached under `output/service/standings/*.json`. **News crawlers are never used for motivation** — the dimension only reads the standings table, never fabricated headlines.
 
 **You must comply with each website's terms of service and robots policy.** This software is for personal research; the authors do not grant rights to the scraped content.
 

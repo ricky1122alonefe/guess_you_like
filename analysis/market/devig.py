@@ -133,3 +133,52 @@ def devig_from_odds(odds_dict: dict, method: str = "proportional") -> dict[str, 
     d = odds_dict.get("draw") or odds_dict.get("eu_draw") or odds_dict.get("sp_draw")
     a = odds_dict.get("away") or odds_dict.get("eu_away") or odds_dict.get("sp_away")
     return devig_1x2(h, d, a, method=method)
+
+
+def devig_pair(
+    odds_h: float,
+    odds_d: float,
+    odds_a: float,
+    primary: str = "proportional",
+    alt: str = "shin",
+) -> dict[str, Any]:
+    """主/备两套去水概率 + 方向一致性信号。
+
+    alt 方法失败（缺库/数值异常）时自动回退 proportional，并标记 alt_available=False。
+    仅供参考展示与置信微调：主方法仍决定可购方向，alt 永不 flip。
+
+    Returns:
+        {"main": {...devig_1x2}, "alt": {...devig_1x2}, "alt_requested": str,
+         "alt_available": bool, "main_pick": str|None, "alt_pick": str|None,
+         "same_pick": bool, "divergence": bool}
+        divergence = alt_available 且两方法最大概率方向不同。
+    """
+    main = devig_1x2(odds_h, odds_d, odds_a, method=primary)
+    alt_d = devig_1x2(odds_h, odds_d, odds_a, method=alt)
+
+    def _pick(d: dict[str, Any]) -> str | None:
+        p = {k: d.get(f"p_{k}", 0.0) for k in ("home", "draw", "away")}
+        if not any(v and v > 0 for v in p.values()):
+            return None
+        return max(p, key=lambda k: p[k] or 0.0)
+
+    main_pick = _pick(main)
+    alt_pick = _pick(alt_d)
+    # 仅当 alt 方法确实生效（未回退）且主/备概率均有效时才视为对照成立
+    alt_available = (
+        alt != primary
+        and alt_d.get("method") == alt
+        and main_pick is not None
+        and alt_pick is not None
+    )
+    same_pick = bool(main_pick and alt_pick and main_pick == alt_pick)
+    return {
+        "main": main,
+        "alt": alt_d,
+        "alt_requested": alt,
+        "alt_available": alt_available,
+        "main_pick": main_pick,
+        "alt_pick": alt_pick,
+        "same_pick": same_pick,
+        "divergence": alt_available and not same_pick,
+    }

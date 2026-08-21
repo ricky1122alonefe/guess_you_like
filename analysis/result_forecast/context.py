@@ -786,4 +786,17 @@ def build_result_forecast_context(
         log.debug("score_range 接入 context 失败 %s: %s", fixture_id, exc)
         ctx["score_range"] = {"missing": ["context_build_error"], "bands": [], "top_bands": []}
 
+    # 同赔桶（odds_bucket）：有数据才进融合；缺失诚实标注（只调置信/降仓，不改竞彩方向）
+    try:
+        from analysis.market.odds_bucket_stats import build_odds_bucket_context
+
+        ob = build_odds_bucket_context(str(fixture_id))
+        if ob and (ob.get("home_bucket") or ob.get("fav_bucket")):
+            ctx["odds_bucket"] = ob
+        else:
+            missing.append("odds_bucket")
+    except Exception as exc:
+        log.debug("odds_bucket 接入 context 失败 %s: %s", fixture_id, exc)
+        missing.append("odds_bucket")
+
     return ctx

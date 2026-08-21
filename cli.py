@@ -13,6 +13,8 @@ Examples:
   guess-you-like api --port 8766 -o output/service
   guess-you-like poll --interval 300 --days 7
   guess-you-like settle --resettle
+  guess-you-like standings              # 刷新五大联赛积分榜缓存（TTL 复用）
+  guess-you-like standings --refresh    # 强制重拉积分榜（需 FOOTBALL_DATA_API_KEY）
   bash scripts/run_local.sh          # local dev (poll + web)
 """.strip()
 
@@ -25,6 +27,7 @@ Usage:
   guess-you-like api [args...]     Read-only JSON API (FastAPI)
   guess-you-like poll [args...]    Poll odds into PostgreSQL
   guess-you-like settle [args...]  Settle finished match results
+  guess-you-like standings [args...] Refresh top-5 league standings cache (football-data.org)
   guess-you-like version           Print version
   guess-you-like --help            Show this help
 
@@ -67,6 +70,11 @@ def main(argv: list[str] | None = None) -> int:
         from scripts.settle_results import main as settle_main
 
         return settle_main(rest)
+
+    if cmd == "standings":
+        from analysis.team_form.standings import main as standings_main
+
+        return standings_main(rest)
 
     print(f"Unknown command: {cmd}\n", file=sys.stderr)
     _print_help()

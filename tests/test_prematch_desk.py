@@ -696,3 +696,59 @@ def test_motivation_missing_without_standings(monkeypatch):
     assert motivation["missing"] is True
     assert referee["missing"] is True
     assert pred["comparison_summary"]["action"] == "hold"
+
+
+def test_motivation_no_high_impact_before_final_round(monkeypatch):
+    """保级区对话但非末轮 → motivation 有数但不进 high_impact。"""
+    table = _make_table_20(
+        (17, "Nottingham Forest", 32, 20),
+        (18, "Burnley", 24, 20),
+        (19, "Luton Town", 26, 20),
+        (20, "Sheffield United", 16, 20),
+    )
+    for row in table:
+        row["playedGames"] = 20
+    monkeypatch.setattr(
+        "analysis.team_form.standings.load_standings",
+        lambda league, output_root: table,
+    )
+
+    pred = {
+        "fixture_id": "302",
+        "league_name": "英超",
+        "home_team": "伯恩利",
+        "away_team": "卢顿",
+        "judgment": "倾向主胜·标准",
+        "result_1x2_cn": "主胜",
+    }
+    attach_prematch_and_summary(pred, output_root="output/service")
+    motivation = _dim(pred["prematch_desk"], "motivation")
+    assert motivation["missing"] is False
+    assert "联赛末轮" not in " ".join(motivation["evidence"])
+    assert not pred["prematch_desk"].get("high_impact_facts")
+
+
+def test_motivation_no_high_impact_final_round_midtable(monkeypatch):
+    """末轮但两队中游（无保级）→ 不进 high_impact。"""
+    table = _make_table_20(
+        (8, "Burnley", 55, 38),
+        (9, "Luton Town", 52, 38),
+    )
+    monkeypatch.setattr(
+        "analysis.team_form.standings.load_standings",
+        lambda league, output_root: table,
+    )
+
+    pred = {
+        "fixture_id": "303",
+        "league_name": "英超",
+        "home_team": "伯恩利",
+        "away_team": "卢顿",
+        "judgment": "倾向主胜·标准",
+        "result_1x2_cn": "主胜",
+    }
+    attach_prematch_and_summary(pred, output_root="output/service")
+    motivation = _dim(pred["prematch_desk"], "motivation")
+    assert motivation["missing"] is False
+    assert "联赛末轮" in " ".join(motivation["evidence"])
+    assert not pred["prematch_desk"].get("high_impact_facts")

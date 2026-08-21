@@ -73,6 +73,7 @@ h1.text-gradient, h2.text-gradient {{ margin-bottom: 12px; }}
 .back a:hover, .page-nav a:hover {{ opacity: 1; text-decoration: underline; }}
 .meta {{ color: {TEXT_MUTED}; font-size: 13px; line-height: 1.55; }}
 .meta strong {{ color: #fde68a; }}
+.muted {{ color: {TEXT_MUTED}; font-size: 12px; }}
 table {{ border-collapse: collapse; width: 100%; }}
 th, td {{
   border-bottom: 1px solid rgba(255,255,255,0.06); padding: 10px 8px;

@@ -128,6 +128,17 @@ def payload_to_markdown(payload: dict) -> str:
             edge = models.get("edge") or {}
             if edge:
                 lines.append(f"  - 市场来源：{edge.get('market_source', '—')}；edge 主/平/客见结构化字段")
+                devig = edge.get("devig") or {}
+                if devig and devig.get("alt_available"):
+                    p_mkt = edge.get("p_mkt") or {}
+                    alt_p = edge.get("p_mkt_alt") or {}
+                    state = "方向一致" if devig.get("same_pick") else "方向分歧"
+                    lines.append(
+                        f"  - 去水对照：{devig.get('main_method')} 主"
+                        f" {float(p_mkt.get('home', 0) or 0) * 100:.0f}%｜"
+                        f"{devig.get('alt_method')} 主"
+                        f" {float(alt_p.get('home', 0) or 0) * 100:.0f}%（{state}）"
+                    )
         lines.append("")
 
     jc = payload.get("jingcai") or {}

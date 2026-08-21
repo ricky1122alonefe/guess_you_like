@@ -14,8 +14,17 @@ import re
 from pathlib import Path
 from typing import Any
 
-from analysis.market.devig import devig_1x2
+from analysis.market.devig import devig_1x2, devig_pair
 from eu_odds_chart import select_major_eu_books
+
+import config
+
+_DEVIG_LABELS = {"proportional": "比例", "shin": "Shin", "power": "Power"}
+
+
+def _devig_label(method: str) -> str:
+    """去水方法的中文展示标签（proportional→比例去水）。"""
+    return _DEVIG_LABELS.get(method, method)
 
 log = logging.getLogger(__name__)
 
@@ -189,7 +198,13 @@ def build_eu_lane(
             "source_books": [],
         }
 
-    fair = devig_1x2(mean["home"], mean["draw"], mean["away"])
+    main_method = getattr(config, "DEVIG_METHOD", "proportional")
+    alt_method = getattr(config, "DEVIG_ALT_METHOD", "shin")
+    pair = devig_pair(
+        mean["home"], mean["draw"], mean["away"],
+        primary=main_method, alt=alt_method,
+    )
+    fair = pair["main"]
     p = {
         "home": fair.get("p_home", 0.0),
         "draw": fair.get("p_draw", 0.0),
@@ -215,6 +230,21 @@ def build_eu_lane(
         f"去水隐含概率：主 {_pct(p['home'])} / 平 {_pct(p['draw'])} / 客 {_pct(p['away'])}",
         f"参考倾向：{pick_cn}",
     ]
+
+    alt_dev = pair["alt"]
+    alt_available = pair["alt_available"]
+    if alt_available:
+        alt_p = {
+            "home": alt_dev.get("p_home", 0.0),
+            "draw": alt_dev.get("p_draw", 0.0),
+            "away": alt_dev.get("p_away", 0.0),
+        }
+        state = "方向一致" if pair["same_pick"] else "方向分歧，参考降权"
+        reasons.append(
+            f"{_devig_label(main_method)}去水 主 {_pct(p['home'])}｜"
+            f"{_devig_label(alt_method)} 主 {_pct(alt_p['home'])}（对照·{state}）"
+        )
+
     if source_books:
         reasons.append(f"来源：{' / '.join(source_books[:4])}")
 
@@ -228,6 +258,24 @@ def build_eu_lane(
         "pick_cn": pick_cn,
         "odds": mean,
         "p_pct": {k: round(v, 3) for k, v in p.items()},
+        "devig": {
+            "main_method": main_method,
+            "alt_method": alt_method,
+            "alt_available": alt_available,
+            "alt_requested": pair["alt_requested"],
+            "same_pick": pair["same_pick"],
+            "divergence": pair["divergence"],
+            "main_p": {k: round(p[k], 4) for k in ("home", "draw", "away")},
+            "alt_p": (
+                {
+                    k: round(alt_dev.get(f"p_{k}", 0.0), 4)
+                    for k in ("home", "draw", "away")
+                }
+                if alt_available
+                else {}
+            ),
+            "overround": fair.get("overround", 0.0),
+        },
         "reasons": reasons,
         "source_books": source_books,
     }
@@ -349,7 +397,8 @@ def is_abandoned_pred(pred: dict[str, Any]) -> bool:
 def scrub_abandon_summary(pred: dict[str, Any]) -> None:
     """放弃/观望时统一放弃态展示与落盘数据。
 
-    1) summary 移除「【竞彩可购】…」段，改为【当前建议】；
+    1) summary 移除「【竞彩可购】…」段，改为【当前建议】；「【参考研判】X（…）」改为
+       「【参考研判】欧亚倾向X（非可购）」，保留欧赔参考数据但明确标注非可购；
     2) predict_row.竞彩推荐/胜平负 与 final_pick_cn 同步为 观望/放弃；
     3) jingcai_pick_info.pick=skip、buyable=false。
     不 flip 竞彩方向（不改成另一方向），仅统一放弃态。
@@ -361,6 +410,13 @@ def scrub_abandon_summary(pred: dict[str, Any]) -> None:
     if isinstance(summary, str) and "【竞彩可购】" in summary:
         cleaned = re.sub(r"【竞彩可购】[^。]*。", "", summary).strip()
         pred["summary"] = f"【当前建议】{advice}。" + cleaned
+    summary = pred.get("summary")
+    if isinstance(summary, str) and "【参考研判】" in summary:
+        pred["summary"] = re.sub(
+            r"【参考研判】([^。]+?)(（[^。]*）)?。",
+            lambda m: f"【参考研判】欧亚倾向{m.group(1).strip()}（非可购）。",
+            summary,
+        )
     row = pred.get("predict_row")
     if isinstance(row, dict):
         for key in ("竞彩推荐", "胜平负"):
@@ -416,18 +472,40 @@ def build_lane_comparison(
         and all(s == jc_pick for s in signals)
     )
 
+    # 去水方法对照：仅当主/备方法方向一致才支持提升置信；
+    # 分歧大 → 降置信/倾向观望，但绝不因 alt 单独 flip 竞彩方向。
+    method_diverged = bool((eu.get("devig") or {}).get("divergence"))
+    if method_diverged:
+        all_present = False
+
     if all_present:
         agreement = "align"
         action = "hold"
         summary = "三轨方向一致，竞彩轨维持原仓位建议。"
     elif conflicts == 0:
-        agreement = "soft"
-        action = "hold"
-        summary = "可用轨方向一致，竞彩轨维持，继续观察欧洲公司变化。"
+        if method_diverged:
+            agreement = "partial"
+            action = "size_down"
+            summary = (
+                "欧赔去水方法（比例 vs Shin）方向分歧，参考置信下调；"
+                "竞彩方向不变，仓位建议降小注。"
+            )
+        else:
+            agreement = "soft"
+            action = "hold"
+            summary = "可用轨方向一致，竞彩轨维持，继续观察欧洲公司变化。"
     elif conflicts == 1:
-        agreement = "partial"
-        action = "size_down"
-        summary = "欧/亚至少一轨与竞彩方向冲突，竞彩仓位建议降小注。"
+        if method_diverged:
+            agreement = "partial"
+            action = "size_down"
+            summary = (
+                "欧/亚至少一轨与竞彩方向冲突，且欧赔去水方法（比例 vs Shin）分歧，"
+                "参考置信下调；竞彩方向不变，仓位建议降小注。"
+            )
+        else:
+            agreement = "partial"
+            action = "size_down"
+            summary = "欧/亚至少一轨与竞彩方向冲突，竞彩仓位建议降小注。"
     else:
         agreement = "partial"
         action = "skip"
@@ -474,6 +552,13 @@ def attach_market_lanes(
         "jingcai": jc,
         "comparison": comp,
     }
+    # 大小球参考轨（独立于 1X2/竞彩，buyable 永远 False，不改竞彩方向）
+    try:
+        from analysis.market.ou_lane import attach_ou_lane
+
+        attach_ou_lane(pred)
+    except Exception:
+        log.debug("attach_ou_lane failed", exc_info=True)
 
     # Persist major books in odds_snapshot for downstream renderers.
     snap = pred.setdefault("odds_snapshot", {})

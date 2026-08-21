@@ -3042,6 +3042,9 @@ def _market_lanes_one_liner(lanes: dict | None) -> str:
         parts.append(f"欧{eu['pick_cn']}")
     if not ah.get("missing") and ah.get("lean_cn"):
         parts.append(f"亚{ah['lean_cn']}")
+    ou = (lanes or {}).get("ou") or {}
+    if not ou.get("missing") and ou.get("p_over") is not None:
+        parts.append(f"大2.5≈{ou['p_over'] * 100:.0f}%")
     return " · ".join(parts)
 
 
@@ -3054,6 +3057,7 @@ def _market_lanes_card(prediction: dict | None) -> str:
     eu = lanes.get("eu") or {}
     ah = lanes.get("ah") or {}
     jc = lanes.get("jingcai") or {}
+    ou = lanes.get("ou") or {}
     comp = lanes.get("comparison") or {}
 
     def _lane_html(title: str, tag: str, items: list[str]) -> str:
@@ -3087,6 +3091,28 @@ def _market_lanes_card(prediction: dict | None) -> str:
     eu_items += [f"倾向：{eu.get('pick_cn') or '—'}"] + (eu.get("reasons") or [])
     ah_items = [f"线 {ah.get('line') or '—'} 主水 {ah.get('home_water') or '—'} 客水 {ah.get('away_water') or '—'}"] + (ah.get("reasons") or [])
     jc_items = [f"玩法：{jc.get('play') or '—'}"] + (jc.get("reasons") or [])
+    # 大小球参考轨（独立于 1X2/竞彩，仅模型基准，不可购）
+    ou_html = ""
+    if not ou.get("missing") and ou.get("p_over") is not None:
+        ou_items: list[str] = [
+            f"P(大2.5)≈{ou['p_over'] * 100:.0f}% / P(小2.5)≈{ou['p_under'] * 100:.0f}%"
+        ]
+        for l in ("1.5", "3.5"):
+            item = (ou.get("lines") or {}).get(l)
+            if item and item.get("over") is not None:
+                ou_items.append(f"P(大{l})≈{item['over'] * 100:.0f}%")
+        if ou.get("btts") is not None:
+            ou_items.append(f"双方进球≈{ou['btts'] * 100:.0f}%")
+        if ou.get("zero_zero") is not None:
+            ou_items.append(f"0-0≈{ou['zero_zero'] * 100:.0f}%")
+        if ou.get("exp_total") is not None:
+            ou_items.append(f"预期总进球≈{ou['exp_total']:.2f}")
+        ou_items += [f"倾向：{ou.get('lean_cn') or '中性'}"] + (ou.get("reasons") or [])
+        ou_items.append("仅模型基准，不可购，不影响竞彩 1X2")
+        ou_html = _lane_html("大小球轨", "参考·非改 1X2", ou_items)
+        ouc = lanes.get("ou_comparison") or {}
+        if ouc.get("summary"):
+            ou_html += f"<p class='meta muted'>{_e(ouc['summary'])}</p>"
 
     agreement = comp.get("agreement") or "partial"
     action = comp.get("action") or "hold"
@@ -3137,10 +3163,31 @@ def _market_lanes_card(prediction: dict | None) -> str:
   {_lane_html(eu.get('label') or '欧赔轨', eu.get('tag') or '参考', eu_items)}
   {_lane_html(ah.get('label') or '亚盘轨', ah.get('tag') or '参考', ah_items)}
   {_lane_html(jc.get('label') or '竞彩轨', jc.get('tag') or '未开售', jc_items)}
+  {ou_html}
   {pre_jingcai_line}
   {buy_line}
-  <p class="meta lane-note">欧亚轨仅作参考，不能跨轨直接变成竞彩购买方向</p>
+  <p class="meta lane-note">欧亚轨仅作参考，不能跨轨直接变成竞彩购买方向；大小球轨为独立参考，不改 1X2</p>
 </div>"""
+
+
+def _ou_range_hint(pred: dict) -> str:
+    """比分不可信时优先展示大小球区间概率（来自市场大小球轨，不推全 0% 精确比分）。"""
+    if not pred:
+        return ""
+    ou = (pred.get("market_lanes") or {}).get("ou")
+    if not ou:
+        try:
+            from analysis.market.ou_lane import build_ou_lane
+
+            ou = build_ou_lane(pred)
+        except Exception:
+            return ""
+    if not ou or ou.get("missing") or ou.get("p_over") is None:
+        return ""
+    return (
+        f"大2.5≈{ou['p_over'] * 100:.0f}% / 小2.5≈{ou['p_under'] * 100:.0f}%"
+        "（区间概率参考）"
+    )
 
 
 def _pred_card(pred: dict, *, title: str = "最新推荐") -> str:
@@ -3173,11 +3220,12 @@ def _pred_card(pred: dict, *, title: str = "最新推荐") -> str:
     scores = "—"
     if _score_enabled():
         raw_scores = row.get("推荐比分") or "、".join(pred.get("likely_scores_detail") or pred.get("likely_scores") or []) or ""
-        # G4: 全 0.0% 假比分不展示
+        # G4: 全 0.0% 假比分不展示，优先改推「区间/合计概率」（大小球轨）
+        range_hint = _ou_range_hint(pred)
         if raw_scores and "0.0%" in raw_scores and "100.0%" not in raw_scores:
-            scores = "比分模型未就绪"
+            scores = range_hint or "比分模型未就绪"
         else:
-            scores = raw_scores or "—"
+            scores = raw_scores or range_hint or "—"
     pick = final_recommendation_cn(pred)
     # 放弃/观望时强制统一放弃态展示：judgment 含「放弃/观望」或 result_1x2_cn=观望 时，
     # 即使底层残留竞彩推荐主胜，也不得显示「竞彩可购：主胜」。
@@ -3190,20 +3238,29 @@ def _pred_card(pred: dict, *, title: str = "最新推荐") -> str:
     )
     if abandoned and "观望" not in pick and "放弃" not in pick:
         pick = "放弃" if "放弃" in str(pred.get("judgment") or "") else "观望"
+    # 放弃/观望收口：主推荐行（含头部 pick 行）不拼 SP / 竞彩玩法，避免
+    # 「当前建议：放弃 · SP 2.03」同页拧巴；SP 另起 muted 行保留（不删欧赔/SP 数据）。
+    abandoned_pick = abandoned or "观望" in pick or "放弃" in pick
     ref = pred.get("reference_result_1x2_cn") or row.get("赛果预测") or pred.get("match_result_1x2_cn") or ""
     jc_play = row.get("竞彩玩法") or ""
     jc_sp = row.get("竞彩SP")
-    sp_txt = f" · SP {jc_sp}" if jc_sp else ""
+    sp_txt = "" if abandoned_pick else (f" · SP {jc_sp}" if jc_sp else "")
     ref_line = ""
     if ref and ref not in (pick, "—", ""):
-        ref_line = f"<p class='meta'><strong>参考研判：</strong>{_e(ref)} <span class='meta'>(欧亚盘口)</span></p>"
-    if abandoned or "观望" in pick or "放弃" in pick:
-        buy_line = f"<p class='meta'><strong>当前建议：</strong>{_e(pick)}{sp_txt}"
+        if abandoned_pick:
+            ref_line = f"<p class='meta muted'><strong>参考研判：</strong>欧亚倾向{_e(ref)}（非可购）</p>"
+        else:
+            ref_line = f"<p class='meta'><strong>参考研判：</strong>{_e(ref)} <span class='meta'>(欧亚盘口)</span></p>"
+    if abandoned_pick:
+        buy_line = f"<p class='meta'><strong>当前建议：</strong>{_e(pick)}</p>"
+        if jc_sp:
+            sp_market = f"{_e(jc_play)} " if jc_play and jc_play != "—" else ""
+            buy_line += f"<p class='meta muted'>盘口 SP 仅供参考：{sp_market}SP {_e(jc_sp)}</p>"
     else:
         buy_line = f"<p class='meta'><strong>竞彩可购：</strong>{_e(pick)}{sp_txt}"
-    if jc_play and jc_play != "—":
-        buy_line += f" · {_e(jc_play)}"
-    buy_line += "</p>"
+        if jc_play and jc_play != "—":
+            buy_line += f" · {_e(jc_play)}"
+        buy_line += "</p>"
     div = pred.get("jingcai_divergence") or {}
     div_line = f"<p class='meta warn'>{_e(div.get('note') or '')}</p>" if div.get("divergence") else ""
     basis = [str(x) for x in (pred.get("analysis_basis") or []) if str(x).strip()]
@@ -3238,7 +3295,7 @@ def _pred_card(pred: dict, *, title: str = "最新推荐") -> str:
 <div class="card pred-card">
   <h3>{_e(title)} <span class="tag">{_e(src_label)}</span>{alert_html}</h3>
   <p><strong class="pick">{_e(pick)}</strong>{sp_txt}
-     {f"<span class='tag'>{_e(jc_play)}</span>" if jc_play and jc_play != "—" else ""}</p>
+     {f"<span class='tag'>{_e(jc_play)}</span>" if not abandoned_pick and jc_play and jc_play != "—" else ""}</p>
   {ref_line}
   {tier_line}
   {buy_line}

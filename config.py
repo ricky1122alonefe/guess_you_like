@@ -69,13 +69,16 @@ JINGCAI_RELEASE_HOUR = 11            # 竞彩官方开售列表大致释放时�
 TOURNAMENT_PHASE = "league"          # 默认联赛模式（非 group/knockout）
 AI_PROFILE_DEFAULT = "league"        # AI 默认联赛 profile（非 worldcup）
 
-# ── 结果预测融合权重（五源）──────────────────────────────
+# ── 结果预测融合权重（六源）──────────────────────────────
 RESULT_FORECAST_WEIGHTS = {
-    "history_similar": 0.35,
+    # history_similar 默认降权：同赔/相似样本只作基准，减少带偏；联赛纯度不足再降/丢
+    "history_similar": 0.22,
     "european": 0.25,
     "asian": 0.15,
     "betfair": 0.15,
     "recent_form": 0.10,
+    # 同赔桶（odds_bucket）：有数据才进融合；只调置信/降仓，不抢最终可购方向
+    "odds_bucket": 0.13,
 }
 RESULT_FORECAST_SKIP_THRESHOLD = 0.38  # max(p) < 此值 → 观望
 
@@ -84,6 +87,7 @@ FORM_WINDOW_DEFAULT = 30       # overall 窗口（20|30|50 可切换）
 FORM_SPLIT_N = 20              # 主队主场 / 客队客场 各取 N 场
 PARLAY_MAX_LEGS = 3            # 串关最大腿数
 DEVIG_METHOD = "proportional"  # 去水方法：proportional | shin | power
+DEVIG_ALT_METHOD = "shin"      # 对照去水方法（仅参考展示/置信微调，不决定可购方向）
 
 # ── 赔率桶校准 ─────────────────────────────────────────────
 ODDS_BUCKET_MIN_N = 20  # 单桶样本门槛；低于此标灰

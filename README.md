@@ -104,8 +104,9 @@ docker compose up -d
 | `MOONSHOT_API_KEY` | Kimi（需 `AI_ENABLE_KIMI=1`） |
 | `CURSOR_API_KEY` | Cursor Composer 桥接（可选） |
 | `CURSOR_MODEL` | 默认 `composer-2.5` |
+| `FOOTBALL_DATA_API_KEY` | football-data.org 积分榜（可选，motivation 战意维；不配则诚实 missing） |
 
-详见 `.env.example` 与 `local_secrets.example.py`。
+配好 `FOOTBALL_DATA_API_KEY` 后运行 `guess-you-like standings --refresh` 预拉五大联赛积分榜缓存（TTL 6 小时复用，详见 `docs/DATA_SOURCES.md`）。其余详见 `.env.example` 与 `local_secrets.example.py`。
 
 ### AI 模型配置（非密钥）
 

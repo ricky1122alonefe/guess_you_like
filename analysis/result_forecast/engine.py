@@ -1,14 +1,16 @@
 """T2: 规则融合「结果预测」引擎。
 
-五源权重（可配置，默认）：
-  1. history_similar  0.35  — 历史相似 1X2 分布
+六源权重（可配置，默认）：
+  1. history_similar  0.22  — 历史相似 1X2 分布（默认降权，避免同赔带偏；联赛纯度不足再降/丢）
   2. european         0.25  — 欧赔去水隐含概率
   3. asian            0.15  — 亚盘方向（映射到主/客倾向）
   4. betfair          0.15  — 必发热度与资金方向
   5. recent_form      0.10  — 近期战绩（主客近况差）
+  6. odds_bucket      0.13  — 同赔桶历史命中率（有数据才进；仅调置信/降仓，不抢最终可购方向）
 
 规则：
-  - 权重在 missing 源上按比例重分配到「仍有」的源
+  - 权重在 missing 源上按比例重分配到「仍有」的源；无 source 的源从权重表剔除（诚实）
+  - history_similar：样本须同联赛才满权（league_share≥0.8 → 1.0；0.5-0.8 → 0.6；<0.5 → 丢弃）
   - pick = argmax(p_home, p_draw, p_away)；max(p) < 0.38 → skip
   - 欧亚严重分歧 → confidence 降级
   - reasons[]：每个进入融合的源至少 1 条中文短句
@@ -22,11 +24,12 @@ log = logging.getLogger(__name__)
 
 # 默认权重（与 config.py RESULT_FORECAST_WEIGHTS 对齐）
 DEFAULT_WEIGHTS: dict[str, float] = {
-    "history_similar": 0.35,
+    "history_similar": 0.22,  # 原 0.35 → 降权，减少「同赔/相似样本」带偏
     "european": 0.25,
     "asian": 0.15,
     "betfair": 0.15,
     "recent_form": 0.10,
+    "odds_bucket": 0.13,  # 同赔桶（有数据才进；只调置信/降仓，不改竞彩方向）
 }
 SKIP_THRESHOLD = 0.38
 HIGH_CONFIDENCE = 0.50
@@ -105,6 +108,63 @@ def _recent_to_probs(recent: dict) -> dict[str, float]:
     return {"home": p_home / total, "draw": p_draw / total, "away": p_away / total}
 
 
+def _odds_bucket_to_probs(ob: dict | None) -> dict[str, float] | None:
+    """同赔桶历史 1X2 命中率 → 概率分布（仅 reliable 桶进入融合；bucket 只调置信/降仓）。"""
+    if not ob:
+        return None
+    hb = ob.get("home_bucket") or {}
+    if not hb.get("reliable"):
+        return None
+    rh, rd, ra = hb.get("rate_home"), hb.get("rate_draw"), hb.get("rate_away")
+    if rh is None or ra is None:
+        return None
+    total = float(rh or 0) + float(rd or 0) + float(ra or 0)
+    if total <= 0:
+        return None
+    return {"home": rh / total, "draw": (rd or 0) / total, "away": ra / total}
+
+
+def _history_league_weight(hist: dict | None) -> float:
+    """联赛纯度折扣：样本须同联赛才满权；league_share 未知时不额外惩罚（引擎权重已默认降权）。
+
+    league_share ≥ 0.8 → 1.0（同联赛满权）
+    0.5 ≤ share < 0.8 → 0.6（混联赛降权）
+    share < 0.5 → 0.0（混联赛严重 → 丢弃该源）
+    """
+    if not hist:
+        return 1.0
+    share = hist.get("league_share")
+    if share is None:
+        return 1.0
+    try:
+        share = float(share)
+    except (TypeError, ValueError):
+        return 1.0
+    if share >= 0.8:
+        return 1.0
+    if share >= 0.5:
+        return 0.6
+    return 0.0
+
+
+def _league_weight_note(hist: dict | None) -> str:
+    """联赛纯度的中文说明（挂在 reasons 里）。"""
+    if not hist:
+        return ""
+    share = hist.get("league_share")
+    if share is None:
+        return ""
+    try:
+        share = float(share)
+    except (TypeError, ValueError):
+        return ""
+    if share >= 0.8:
+        return "，联赛样本 {:.0%}（同联赛满权）".format(share)
+    if share >= 0.5:
+        return "，联赛样本 {:.0%}（混联赛已降权）".format(share)
+    return "，联赛样本 {:.0%}（混联赛严重已丢弃）".format(share)
+
+
 def _build_reasons(context: dict, fused: dict[str, float], sources_used: dict[str, dict]) -> list[str]:
     """生成可解释的中文理由列表。"""
     reasons: list[str] = []
@@ -135,7 +195,14 @@ def _build_reasons(context: dict, fused: dict[str, float], sources_used: dict[st
         p = hist["p"]
         reasons.append(
             f"历史相似{hist['count']}场：主{p['home']:.0%}/平{p['draw']:.0%}/客{p['away']:.0%}"
-            f"（{hist.get('source', 'close')}盘）"
+            f"（{hist.get('source', 'close')}盘{_league_weight_note(hist)}）"
+        )
+    ob = context.get("odds_bucket")
+    hb = (ob or {}).get("home_bucket") or {}
+    if hb and hb.get("reliable"):
+        reasons.append(
+            f"同赔桶{hb.get('n', 0)}场：主{hb['rate_home']:.0%}/平{hb['rate_draw'] or 0:.0%}/客{hb['rate_away']:.0%}"
+            f"（{ob.get('source', '—')}盘，仅参考调整置信，不改竞彩方向）"
         )
     rf = context.get("recent_form")
     if rf:
@@ -210,14 +277,7 @@ def forecast(context: dict[str, Any]) -> dict[str, Any]:
     skip_threshold = _get_skip_threshold()
     missing = context.get("missing") or []
 
-    # 重分配权重
-    active = {k: v for k, v in weights.items() if k not in missing}
-    total_w = sum(active.values())
-    if total_w <= 0:
-        return _skip_result(context, "五源全部缺失，无法预测")
-    norm_weights = {k: v / total_w for k, v in active.items()}
-
-    # 各源概率
+    # 各源概率（只进「有数据」的源；odds_bucket 有 reliable 桶才进）
     source_probs: dict[str, dict[str, float]] = {}
 
     eu = context.get("european")
@@ -240,13 +300,30 @@ def forecast(context: dict[str, Any]) -> dict[str, Any]:
     if rf:
         source_probs["recent_form"] = _recent_to_probs(rf)
 
+    ob = _odds_bucket_to_probs(context.get("odds_bucket"))
+    if ob:
+        source_probs["odds_bucket"] = ob
+
     if not source_probs:
         return _skip_result(context, "无可用信号源")
 
-    # 加权融合
+    # 重分配权重：缺失源剔除后，再把「无 source」的源从权重表剔除（诚实）
+    active0 = {k: v for k, v in weights.items() if k not in missing}
+    active = {k: v for k, v in active0.items() if k in source_probs}
+    total_w = sum(active.values())
+    if total_w <= 0:
+        return _skip_result(context, "无可用信号源（有效权重为 0）")
+    norm_weights = {k: v / total_w for k, v in active.items()}
+
+    # 加权融合（history_similar 按联赛纯度折扣：同联赛满权，混联赛降权/丢弃）
+    hist_w = _history_league_weight(context.get("history_similar"))
     fused = {"home": 0.0, "draw": 0.0, "away": 0.0}
     for src, probs in source_probs.items():
         w = norm_weights.get(src, 0)
+        if src == "history_similar":
+            w *= hist_w
+        if w <= 0:
+            continue
         for k in fused:
             fused[k] += w * probs.get(k, 0)
 
@@ -356,6 +433,7 @@ def forecast(context: dict[str, Any]) -> dict[str, Any]:
             "betfair": context.get("betfair"),
             "history_similar": context.get("history_similar"),
             "recent_form": context.get("recent_form"),
+            "odds_bucket": context.get("odds_bucket"),
             "recent_missing_reason": context.get("recent_missing_reason", ""),
             "market_attitude": ma_ctx,
         },

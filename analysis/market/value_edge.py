@@ -12,7 +12,7 @@ import logging
 from typing import Any
 
 import config
-from analysis.market.devig import devig_1x2
+from analysis.market.devig import devig_1x2, devig_pair
 
 log = logging.getLogger(__name__)
 
@@ -50,9 +50,10 @@ def _extract_jingcai_sp(prediction: dict[str, Any] | None) -> dict[str, float] |
 
 def _market_implied_probabilities(
     odds: dict[str, float],
+    method: str = "proportional",
 ) -> dict[str, float]:
     """对 1X2 赔率去水得到公平概率。"""
-    dev = devig_1x2(odds["home"], odds["draw"], odds["away"])
+    dev = devig_1x2(odds["home"], odds["draw"], odds["away"], method=method)
     return {
         "home": dev["p_home"],
         "draw": dev["p_draw"],
@@ -78,6 +79,8 @@ def compute_edge(
     sp: dict[str, float] | None = None,
     eu_odds: dict[str, float] | None = None,
     model_source: str = "unknown",
+    alt_p_mkt: dict[str, float] | None = None,
+    devig_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """计算模型概率 vs 去水市场概率的 edge。
 
@@ -86,10 +89,14 @@ def compute_edge(
         sp: 可选竞彩 SP {"home": ..., "draw": ..., "away": ...}
         eu_odds: 可选欧赔收盘 {"home": ..., "draw": ..., "away": ...}
         model_source: 模型来源标签（如 result_forecast / poisson）
+        alt_p_mkt: 可选备选去水方法概率（如 Shin），仅参考展示，不改变可购方向
+        devig_meta: 可选去水方法元信息 {"main_method", "alt_method", "alt_available",
+            "same_pick", "divergence"}
 
     Returns:
         {"market_source": "jingcai_sp"|"eu_closing", "odds": ..., "p_mkt": ...,
          "p_model": ..., "edge": ..., "half_kelly": ..., "disclaimer": ...}
+        传 alt_p_mkt 时额外带 "p_mkt_alt"/"edge_alt"/"devig" 对照字段。
         无有效市场赔率时返回 None。
     """
     if not p_model or not any(p_model.values()):
@@ -114,7 +121,7 @@ def compute_edge(
         for k in ("home", "draw", "away")
     }
 
-    return {
+    out: dict[str, Any] = {
         "market_source": market_source,
         "model_source": model_source,
         "odds": {k: round(v, 3) for k, v in odds.items()},
@@ -124,6 +131,30 @@ def compute_edge(
         "half_kelly": half_kelly,
         "disclaimer": DISCLAIMER,
     }
+    if devig_meta:
+        # 去水方法元信息始终写入（含 alt 不可用/回退状态），供 UI/AI 判断对照是否成立
+        out["devig"] = {
+            "main_method": devig_meta.get("main_method"),
+            "alt_method": devig_meta.get("alt_method"),
+            "alt_requested": devig_meta.get("alt_requested"),
+            "alt_available": bool(devig_meta.get("alt_available")),
+            "same_pick": bool(devig_meta.get("same_pick")),
+            "divergence": bool(devig_meta.get("divergence")),
+        }
+    if alt_p_mkt and devig_meta and devig_meta.get("alt_available"):
+        alt_valid = all(
+            isinstance(alt_p_mkt.get(k), (int, float)) and alt_p_mkt[k] > 0
+            for k in ("home", "draw", "away")
+        )
+        if alt_valid:
+            out["p_mkt_alt"] = {
+                k: round(alt_p_mkt[k], 4) for k in ("home", "draw", "away")
+            }
+            out["edge_alt"] = {
+                k: round((p_model.get(k) or 0.0) - alt_p_mkt[k], 4)
+                for k in ("home", "draw", "away")
+            }
+    return out
 
 
 def market_info_from_context(
@@ -151,8 +182,29 @@ def build_model_edges(
 ) -> dict[str, Any] | None:
     """打包融合模型与泊松模型的 edge 对照。"""
     market = market_info_from_context(context, prediction=prediction)
-    if not market["sp"] and not market["eu_odds"]:
+    odds = market["sp"] or market["eu_odds"]
+    if not odds:
         return None
+
+    # 主/备两套去水概率：主方法（proportional）决定可购方向，alt（Shin）仅对照。
+    pair = devig_pair(
+        odds["home"], odds["draw"], odds["away"],
+        primary=getattr(config, "DEVIG_METHOD", "proportional"),
+        alt=getattr(config, "DEVIG_ALT_METHOD", "shin"),
+    )
+    alt_p_mkt: dict[str, float] | None = None
+    if pair["alt_available"]:
+        alt_p_mkt = {
+            k: pair["alt"].get(f"p_{k}", 0.0) for k in ("home", "draw", "away")
+        }
+    devig_meta = {
+        "main_method": pair["main"].get("method"),
+        "alt_method": pair["alt"].get("method"),
+        "alt_requested": pair["alt_requested"],
+        "alt_available": pair["alt_available"],
+        "same_pick": pair["same_pick"],
+        "divergence": pair["divergence"],
+    }
 
     fused_p = {
         "home": result_forecast.get("p_home"),
@@ -165,10 +217,16 @@ def build_model_edges(
     }
     if any(v is not None for v in fused_p.values()):
         edges["result_forecast"] = compute_edge(
-            fused_p, sp=market["sp"], eu_odds=market["eu_odds"], model_source="result_forecast"
+            fused_p,
+            sp=market["sp"], eu_odds=market["eu_odds"],
+            model_source="result_forecast",
+            alt_p_mkt=alt_p_mkt, devig_meta=devig_meta,
         )
     if poisson and poisson.get("p_1x2"):
         edges["poisson"] = compute_edge(
-            poisson["p_1x2"], sp=market["sp"], eu_odds=market["eu_odds"], model_source="poisson"
+            poisson["p_1x2"],
+            sp=market["sp"], eu_odds=market["eu_odds"],
+            model_source="poisson",
+            alt_p_mkt=alt_p_mkt, devig_meta=devig_meta,
         )
     return edges

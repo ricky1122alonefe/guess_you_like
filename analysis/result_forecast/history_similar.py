@@ -159,5 +159,15 @@ def build_history_similar(
         hist = _summarize_to_history(block)
         if hist:
             hist["auto_relaxed"] = auto_relaxed
+            # 联赛纯度：样本须同联赛（或五大内）才满权，混联赛在融合侧降权/丢弃
+            n_all = int(stats.get("count") or 0)
+            if n_all:
+                hist["league_share"] = (stats.get("league_count") or 0) / n_all
+                hist["league_breakdown"] = {
+                    "league": stats.get("league_count"),
+                    "worldcup": stats.get("worldcup_count"),
+                    "qualifier": stats.get("qualifier_count"),
+                    "americas": stats.get("americas_count"),
+                }
             return hist
     return None

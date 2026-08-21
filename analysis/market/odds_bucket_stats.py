@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any, Iterable
 
 from analysis.market.devig import devig_1x2
@@ -173,8 +174,13 @@ def _devig_implied_for_key(probs: dict, key: str) -> float | None:
     return None
 
 
+@lru_cache(maxsize=1)
 def build_bucket_stats(days: int = 90) -> dict[str, Any]:
-    """Build home / draw / fav / ah bucket stats from settled matches."""
+    """Build home / draw / fav / ah bucket stats from settled matches.
+
+    90 天桶统计按天缓存（每场 context 构建都会查，避免反复全表聚合）；
+    settle 数据随抓取变化，TLL 1 天内的旧桶可接受。
+    """
     from db.repository import list_tournament_results
 
     rows = list_tournament_results(source="500", limit=5000)

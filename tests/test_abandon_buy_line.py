@@ -23,7 +23,7 @@ def _fixture_1427956_abandoned() -> dict:
         "league_name": "西甲",
         "judgment": "放弃·变数过大",
         "result_1x2_cn": "主胜",
-        "summary": "【赛事概率】初盘亚盘+欧赔融合相似 55487/55487 场：主胜 43.9%、平 26.4%、客胜 29.7% → 赛事本身倾向 主胜。【竞彩可购】主胜，竞彩SP 主2.07/平2.84/客3.4 → 隐含主胜。比分 2-1(0.0%)、1-1(0.0%)。",
+        "summary": "【赛事概率】初盘亚盘+欧赔融合相似 55487/55487 场：主胜 43.9%、平 26.4%、客胜 29.7% → 赛事本身倾向 主胜。【参考研判】主胜（欧赔+亚盘+历史）。【竞彩可购】主胜，竞彩SP 主2.07/平2.84/客3.4 → 隐含主胜。比分 2-1(0.0%)、1-1(0.0%)。",
         "predict_row": {
             "预测日期": "2026-08-21",
             "比赛": "巴列卡诺VS阿拉维斯",
@@ -94,6 +94,9 @@ def test_scrub_abandon_syncs_row_and_info():
     assert info["buyable"] is False
     assert "【竞彩可购】" not in pred["summary"]
     assert "【当前建议】放弃" in pred["summary"]
+    # 参考研判方向保留（不删欧赔参考数据），但标注非可购，避免与放弃同页拧巴
+    assert "【参考研判】欧亚倾向主胜（非可购）" in pred["summary"]
+    assert "【参考研判】主胜（欧赔+亚盘+历史）" not in pred["summary"]
 
 
 def test_scrub_zero_scores_clears_bare_likely_scores():
@@ -113,3 +116,21 @@ def test_pred_card_abandoned_shows_current_advice_not_buyable_home():
     assert "竞彩可购：主胜" not in html
     # 无有效概率的裸比分「2-1」不展示（detail 清空后）
     assert "2-1" not in html
+
+
+def test_pred_card_abandoned_buy_line_no_sp_and_muted_sp_ref():
+    """放弃态收口：当前建议行同行无 SP / 竞彩玩法；SP 另起 muted 行；参考研判标（非可购）。"""
+    pred = _fixture_1427956_abandoned()
+    html = _pred_card(pred)
+    assert "当前建议：</strong>放弃" in html
+    # 当前建议行（第一个 <p> 段）同行不拼 SP、不拼竞彩玩法
+    seg = html.split("当前建议：", 1)[1].split("</p>", 1)[0]
+    assert "SP" not in seg
+    assert "胜平负" not in seg
+    # SP 信息保留在 muted 行，明确「仅供参考」
+    assert "盘口 SP 仅供参考：胜平负 SP 2.07" in html
+    # 参考研判降权为 muted 且标（非可购），不删欧赔参考数据
+    assert "参考研判：</strong>欧亚倾向主胜（非可购）" in html
+    # 头部 pick 行不带 SP / 玩法 tag
+    assert "放弃</strong> · SP" not in html
+    assert "竞彩可购：主胜" not in html

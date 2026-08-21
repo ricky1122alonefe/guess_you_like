@@ -11,6 +11,7 @@ import difflib
 import json
 import logging
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -140,6 +141,7 @@ def load_standings(
     *,
     use_cache: bool = True,
     max_age_hours: float = _CACHE_TTL_HOURS,
+    api_key: str | None = None,
 ) -> list[dict[str, Any]] | None:
     """Return the ``total`` standings table for ``league_name``.
 
@@ -165,7 +167,7 @@ def load_standings(
         except Exception:
             pass
 
-    payload = fetch_standings(league_name)
+    payload = fetch_standings(league_name, api_key=api_key)
     if not payload:
         return None
 
@@ -254,6 +256,7 @@ def build_standings_context(
         "is_final_round": is_final,
         "played_games": played,
         "total_rounds": total_rounds,
+        "total_teams": total_teams,
         "evidence": evidence,
     }
 
@@ -282,3 +285,83 @@ def is_relegation_battle(ctx: dict[str, Any]) -> bool:
         return False
 
     return _battle(int(home_pos), home_gap) and _battle(int(away_pos), away_gap)
+
+
+def refresh_standings_cache(
+    output_root: str | Path,
+    *,
+    api_key: str | None = None,
+    force: bool = False,
+) -> dict[str, str]:
+    """拉取/刷新五大联赛积分榜缓存。
+
+    返回 ``{league_name: status}``，status ∈ {"ok", "no_key", "failed"}。
+    - 无 API key：全部 "no_key"，不拉取也不写缓存（诚实 missing，不编数据）。
+    - ``force=False`` 时复用新鲜缓存（TTL 见 ``_CACHE_TTL_HOURS``），仅过期/缺失才拉取。
+    """
+    key = api_key or _api_key()
+    statuses: dict[str, str] = {}
+    if not key:
+        for league in _LEAGUE_CODES:
+            statuses[league] = "no_key"
+        return statuses
+
+    for league in _LEAGUE_CODES:
+        if not force:
+            table = load_standings(league, output_root, api_key=key)
+            statuses[league] = "ok" if table else "failed"
+            continue
+        payload = fetch_standings(league, key)
+        if not payload:
+            statuses[league] = "failed"
+            continue
+        try:
+            save_standings_cache(output_root, league, payload)
+            statuses[league] = "ok"
+        except Exception as exc:
+            log.warning("save standings cache failed for %s: %s", league, exc)
+            statuses[league] = "failed"
+    return statuses
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI：拉取/刷新五大联赛积分榜缓存。
+
+    Usage:
+      guess-you-like standings                 # 仅刷新过期/缺失缓存（TTL 复用）
+      guess-you-like standings --refresh       # 强制重新拉取五大联赛
+      guess-you-like standings -o output/data  # 指定缓存目录
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="guess-you-like standings",
+        description="拉取/刷新五大联赛积分榜缓存（football-data.org，motivation 战意维）",
+    )
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="忽略 TTL 强制重新拉取五大联赛",
+    )
+    parser.add_argument(
+        "-o", "--output",
+        default="output/service",
+        help="缓存目录（默认 output/service）",
+    )
+    args = parser.parse_args(argv)
+
+    statuses = refresh_standings_cache(args.output, force=args.refresh)
+    for league, status in statuses.items():
+        label = {
+            "ok": "已更新",
+            "no_key": "未配置 FOOTBALL_DATA_API_KEY，跳过（诚实 missing）",
+            "failed": "拉取失败",
+        }.get(status, status)
+        print(f"{league}: {label}")
+    if not _api_key():
+        print(
+            "提示：设置环境变量 FOOTBALL_DATA_API_KEY（https://www.football-data.org/）"
+            " 后重跑本命令即可填充战意维。",
+            file=sys.stderr,
+        )
+    return 0 if all(s == "ok" for s in statuses.values()) else 1

@@ -1198,6 +1198,9 @@ def _build_result_forecast_block(ctx: dict) -> dict:
         "reasons": (rf.get("reasons") or [])[:6],
         "score_range": rf.get("score_range"),
         "baseline_evidence": rf.get("evidence", [])[:6],
+        # 各源归一化权重（同赔/同赔桶均只作基准，禁止把任一源写成「必买」）
+        "weights": (rf.get("weights") or {}),
+        "missing": rf.get("missing") or [],
     }
 
 
@@ -1275,9 +1278,24 @@ def _build_similar_ev_trap_block(ctx: dict) -> dict:
                 return str(v)
             return f"{f:.1%}" if 0 <= f <= 1 else str(v)
 
+        league_note = ""
+        share = h.get("league_share")
+        try:
+            share = float(share) if share is not None else None
+        except (TypeError, ValueError):
+            share = None
+        if share is not None:
+            if share >= 0.8:
+                league_note = f"；联赛样本{share:.0%}（同联赛满权）"
+            elif share >= 0.5:
+                league_note = f"；联赛样本{share:.0%}（混联赛，已降权）"
+            else:
+                league_note = f"；联赛样本{share:.0%}（混联赛严重，已丢弃）"
+
         return (
             f"同赔样本 {n} 场，主胜 {_fmt_rate(home_rate)}，平局 {_fmt_rate(draw_rate)}，"
             f"客胜 {_fmt_rate(away_rate)}；场均进球 {h.get('avg_total_goals', '—')}"
+            f"{league_note}"
         )
 
     return {
@@ -1309,6 +1327,12 @@ def _build_similar_ev_trap_block(ctx: dict) -> dict:
         },
         "betfair": betfair if betfair else "未接入必发数据",
         "external_factors": external if external else "未接入外部因素",
+        # 同赔权重声明：同赔/同赔桶只作数学基准，禁止把任一源写成「必买」；
+        # 最终可购方向只由竞彩轨与 judgment 决定，同赔不抢方向。
+        "similar_weights_note": (
+            "同赔与同赔桶仅作基准，禁止写成必买；"
+            "最终可购方向只由竞彩轨与 judgment 决定，同赔不抢方向。"
+        ),
     }
 
 
@@ -1338,6 +1362,8 @@ def _collect_missing(ctx: dict) -> list[str]:
         missing.append("team_recent_form/club_form")
     if jc.get("has_rqsp") and not (jc.get("handicap") or jc.get("handicap_label")):
         missing.append("jingcai_handicap")
+    if not ctx.get("odds_bucket"):
+        missing.append("odds_bucket")
     return missing
 
 

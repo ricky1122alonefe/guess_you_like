@@ -262,13 +262,14 @@ def test_f5_pred_snapshot_only():
 
 
 def test_f5_empty_all():
-    """F5-3: 空 timeline 空 pred → skip + 明确 missing。"""
+    """F5-3: 空 timeline 空 pred → skip + 明确 missing（含 odds_bucket 诚实缺失）。"""
     ctx = build_result_forecast_context(
         "test-fid",
         index={"fixture_id": "test-fid", "match_name": "A vs B", "timeline": []},
         prediction=None,
     )
-    assert len(ctx["missing"]) == 5
+    assert len(ctx["missing"]) == 6
+    assert "odds_bucket" in ctx["missing"]
     result = forecast(ctx)
     assert result["pick"] == "skip"
 
@@ -457,3 +458,103 @@ def test_context_returns_market_open_close_for_known_fixture():
     assert moc.get("latest") or moc.get("closing"), "missing latest/closing odds"
     assert "eu_home" in moc["opening"]
     assert "eu_home" in (moc.get("latest") or moc.get("closing") or {})
+
+
+# ============ 同赔桶（odds_bucket）接入融合 ============
+
+def _bucket_ctx(reliable: bool = True, rate=None) -> dict:
+    """五源齐全 + 同赔桶的 mock context。"""
+    ctx = _full_context()
+    ctx["odds_bucket"] = {
+        "home_odds": 2.4,
+        "source": "open",
+        "home_bucket": {
+            "n": 45,
+            "reliable": reliable,
+            "rate_home": 0.42,
+            "rate_draw": 0.27,
+            "rate_away": 0.31,
+        },
+        "fav_bucket": {"fav_hit_rate": 0.53, "reliable": reliable},
+    }
+    return ctx
+
+
+def test_forecast_with_odds_bucket_weights():
+    """有 reliable 同赔桶 → weights 表含 odds_bucket 且参与融合。"""
+    ctx = _bucket_ctx()
+    result = forecast(ctx)
+    assert "odds_bucket" in result["weights"]
+    assert result["factors"].get("odds_bucket") is not None
+    assert any("同赔桶" in r for r in result["reasons"])
+    assert result["pick"] != "skip"
+    # 权重表可断言：六源归一化和 = 1
+    assert abs(sum(result["weights"].values()) - 1.0) < 1e-9
+
+
+def test_forecast_odds_bucket_unreliable_excluded():
+    """同赔桶不可靠（n 不足）→ 不进融合，权重表剔除（missing 诚实）。"""
+    ctx = _bucket_ctx(reliable=False)
+    result = forecast(ctx)
+    assert "odds_bucket" not in result["weights"]
+    assert not any("同赔桶" in r for r in result["reasons"])
+
+
+def test_forecast_no_odds_bucket_compatible():
+    """无同赔桶数据 → 行为与旧版一致：权重表不含 odds_bucket，五源相对比例不变。"""
+    result = forecast(_full_context())
+    assert "odds_bucket" not in result["weights"]
+    total = 0.22 + 0.25 + 0.15 + 0.15 + 0.10
+    assert abs(result["weights"]["history_similar"] - 0.22 / total) < 1e-9
+    assert abs(result["weights"]["european"] - 0.25 / total) < 1e-9
+    assert abs(result["weights"]["betfair"] - 0.15 / total) < 1e-9
+
+
+# ============ history_similar 联赛纯度过滤 ============
+
+def test_history_league_share_full_weight():
+    """同联赛样本 ≥80% → 满权，融合结果与未知联赛一致。"""
+    ctx = _full_context()
+    ctx["history_similar"]["league_share"] = 0.92
+    base = forecast(_full_context())
+    result = forecast(ctx)
+    assert abs(result["p_home"] - base["p_home"]) < 1e-9
+    assert any("同联赛满权" in r for r in result["reasons"])
+
+
+def test_history_league_share_mixed_discounted():
+    """混联赛（0.5-0.8）→ 降权 0.6；仍出预测，reasons 标注降权。"""
+    ctx = _full_context()
+    ctx["history_similar"]["league_share"] = 0.55
+    result = forecast(ctx)
+    assert result["pick"] != "skip"
+    assert any("混联赛已降权" in r for r in result["reasons"])
+
+
+def test_history_league_share_severe_discarded():
+    """混联赛严重（<0.5）→ 该源被丢弃；reasons 说明已丢弃，pick 仍由其它源决定。"""
+    ctx = _full_context()
+    ctx["history_similar"]["league_share"] = 0.30
+    result = forecast(ctx)
+    assert result["pick"] != "skip"
+    assert any("混联赛严重已丢弃" in r for r in result["reasons"])
+
+
+def test_history_league_share_unknown_no_penalty():
+    """league_share 未知（旧 prediction 路径）→ 不额外惩罚，与旧版一致。"""
+    ctx = _full_context()
+    base = forecast(_full_context())
+    result = forecast(ctx)
+    assert abs(result["p_home"] - base["p_home"]) < 1e-9
+
+
+def test_history_league_share_unit_helpers():
+    """_history_league_weight 边界：≥0.8 → 1.0；0.5-0.8 → 0.6；<0.5 → 0.0；None → 1.0。"""
+    from analysis.result_forecast.engine import _history_league_weight
+
+    assert _history_league_weight(None) == 1.0
+    assert _history_league_weight({}) == 1.0
+    assert _history_league_weight({"league_share": 0.80}) == 1.0
+    assert _history_league_weight({"league_share": 0.79}) == 0.6
+    assert _history_league_weight({"league_share": 0.49}) == 0.0
+    assert _history_league_weight({"league_share": "bad"}) == 1.0

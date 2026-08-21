@@ -8,6 +8,7 @@ from analysis.rules.output import (
     print_ai_recommendation,
     print_batch_summary,
     print_recommendation,
+    reconcile_form_variables,
     recommendation_from_dict,
     recommendation_to_baseline,
 )
@@ -36,4 +37,5 @@ __all__ = [
     "print_recommendation",
     "print_batch_summary",
     "print_ai_recommendation",
+    "reconcile_form_variables",
 ]

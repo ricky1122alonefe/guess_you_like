@@ -1723,6 +1723,8 @@ def _score_cell(pk: dict, idx: int, latest_idx: int) -> str:
     score = pk.get("likely_scores")
     if _is_fake_likely_score(score):
         return "比分未就绪"
+    if not score:
+        return "—"
     return _e(score)
 
 
@@ -3062,7 +3064,27 @@ def _market_lanes_card(prediction: dict | None) -> str:
   <ul class="lane-list"><li>{body}</li></ul>
 </div>"""
 
-    eu_items = [f"倾向：{eu.get('pick_cn') or '—'}"] + (eu.get("reasons") or [])
+    eu_items: list[str] = []
+    eu_odds = eu.get("odds") or {}
+    if all(isinstance(eu_odds.get(k), (int, float)) for k in ("home", "draw", "away")):
+        eu_items.append(
+            "欧赔：" + "/".join(f"{eu_odds[k]:.2f}" for k in ("home", "draw", "away"))
+        )
+        # 各公司简写（最多 4 家），避免只靠底部 pre_jingcai_line
+        book_lines: list[str] = []
+        for b in (pred.get("odds_snapshot") or {}).get("eu_books_major") or []:
+            label = b.get("label") or b.get("name")
+            if label and all(
+                isinstance(b.get(k), (int, float)) for k in ("home", "draw", "away")
+            ):
+                book_lines.append(
+                    f"{label} " + "/".join(f"{b[k]:.2f}" for k in ("home", "draw", "away"))
+                )
+            if len(book_lines) >= 4:
+                break
+        if book_lines:
+            eu_items.append(" · ".join(book_lines))
+    eu_items += [f"倾向：{eu.get('pick_cn') or '—'}"] + (eu.get("reasons") or [])
     ah_items = [f"线 {ah.get('line') or '—'} 主水 {ah.get('home_water') or '—'} 客水 {ah.get('away_water') or '—'}"] + (ah.get("reasons") or [])
     jc_items = [f"玩法：{jc.get('play') or '—'}"] + (jc.get("reasons") or [])
 
@@ -3133,6 +3155,18 @@ def _pred_card(pred: dict, *, title: str = "最新推荐") -> str:
     else:
         src_label = "规则"
     reasoning = pred.get("actuary_reasoning") or ""
+    # 放弃/观望时兜底 scrub summary 中的「【竞彩可购】」段（AI 回写/旧 run 均覆盖）
+    try:
+        from analysis.market.three_lane import scrub_abandon_summary
+        scrub_abandon_summary(pred)
+    except Exception:
+        pass
+    # 展示前统一清理全 0.0% 比分（旧 run / AI 回写残留，含 summary / 推荐比分 / likely_scores_detail）
+    try:
+        from score_models import scrub_zero_percent_scores
+        scrub_zero_percent_scores(pred)
+    except Exception:
+        pass
     meta = (pred.get("summary") or "")[:500]
     if reasoning and reasoning not in meta:
         meta = f"{reasoning}\n{meta}" if meta else reasoning
@@ -3145,6 +3179,17 @@ def _pred_card(pred: dict, *, title: str = "最新推荐") -> str:
         else:
             scores = raw_scores or "—"
     pick = final_recommendation_cn(pred)
+    # 放弃/观望时强制统一放弃态展示：judgment 含「放弃/观望」或 result_1x2_cn=观望 时，
+    # 即使底层残留竞彩推荐主胜，也不得显示「竞彩可购：主胜」。
+    abandoned = (
+        "放弃" in str(pred.get("judgment") or "")
+        or "观望" in str(pred.get("judgment") or "")
+        or "观望" in str(pred.get("result_1x2_cn") or "")
+        or "放弃" in str(pred.get("result_1x2_cn") or "")
+        or str(pred.get("result_1x2") or "") == "skip"
+    )
+    if abandoned and "观望" not in pick and "放弃" not in pick:
+        pick = "放弃" if "放弃" in str(pred.get("judgment") or "") else "观望"
     ref = pred.get("reference_result_1x2_cn") or row.get("赛果预测") or pred.get("match_result_1x2_cn") or ""
     jc_play = row.get("竞彩玩法") or ""
     jc_sp = row.get("竞彩SP")
@@ -3152,7 +3197,10 @@ def _pred_card(pred: dict, *, title: str = "最新推荐") -> str:
     ref_line = ""
     if ref and ref not in (pick, "—", ""):
         ref_line = f"<p class='meta'><strong>参考研判：</strong>{_e(ref)} <span class='meta'>(欧亚盘口)</span></p>"
-    buy_line = f"<p class='meta'><strong>竞彩可购：</strong>{_e(pick)}{sp_txt}"
+    if abandoned or "观望" in pick or "放弃" in pick:
+        buy_line = f"<p class='meta'><strong>当前建议：</strong>{_e(pick)}{sp_txt}"
+    else:
+        buy_line = f"<p class='meta'><strong>竞彩可购：</strong>{_e(pick)}{sp_txt}"
     if jc_play and jc_play != "—":
         buy_line += f" · {_e(jc_play)}"
     buy_line += "</p>"
@@ -6234,11 +6282,14 @@ def _path_block(team: str, pick: dict) -> str:
 
 
 def _quant_score_tags(scores: list, *, detail: list | None = None) -> str:
-    if detail:
-        return " ".join(f"<span class='tag'>{_e(str(x))}</span>" for x in detail[:5])
+    from score_models import filter_valid_score_details
+
+    valid_detail = filter_valid_score_details([str(x) for x in (detail or []) if x])[:5]
+    if valid_detail:
+        return " ".join(f"<span class='tag'>{_e(str(x))}</span>" for x in valid_detail)
     if not scores:
         return "<span class='meta'>—</span>"
-    return " ".join(f"<span class='tag'>{_e(str(x))}</span>" for x in scores[:5])
+    return "<span class='meta'>比分模型不足</span>"
 
 
 def _quant_panel(prediction: dict | None) -> str:

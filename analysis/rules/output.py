@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from ai_schema import ACTUARY_JSON_KEYS, ANALYSIS_JSON_KEYS, RECOMMENDATION_KEYS
 from analysis.rules.types import AH_CN, CONFIDENCE_CN, OU_CN, Recommendation
 from match import SCORE_POOL_TOP_N
@@ -287,6 +289,107 @@ def _print_section(title: str, lines: list[str] | str | None) -> None:
         return
     for line in lines:
         print(f"    · {line}")
+
+
+# ---- 近况变数与赛前桌 recent_status 消矛盾 ----
+
+_FORM_NEG_WORDS = ("不佳", "状态差", "低迷", "连败", "糟糕", "状态下滑", "表现差", "近况差")
+_FORM_KEYWORDS = ("近况", "状态", "低迷", "取分", "战绩", "连败")
+_RATIO_RE = re.compile(r"取分率约(\d+)%")
+_WDL_CN = {"W": "胜", "D": "平", "L": "负"}
+
+
+def _side_of_form_variable(var: str) -> str | None:
+    if "主" in var:
+        return "home"
+    if "客" in var:
+        return "away"
+    return None
+
+
+def _recent_status_ratios(pred: dict) -> dict[str, int | None]:
+    """从 prematch_desk.recent_status 提取 主/客 取分率（缺失为 None）。"""
+    out: dict[str, int | None] = {"home": None, "away": None}
+    dims = (pred.get("prematch_desk") or {}).get("dimensions") or []
+    for d in dims:
+        if not isinstance(d, dict) or d.get("id") != "recent_status":
+            continue
+        for line in d.get("evidence") or []:
+            line = str(line)
+            for side, tag in (("home", "主队"), ("away", "客队")):
+                if tag + "：" in line or line.startswith(tag):
+                    m = _RATIO_RE.search(line)
+                    if m:
+                        out[side] = int(m.group(1))
+    return out
+
+
+def _form_wdl_text(recent_form: dict | None, side: str) -> str | None:
+    """从 recent_form.form_str（如 WWDLW）生成「近5场 胜、胜、平、负、胜」描述。"""
+    block = (recent_form or {}).get(side) or {}
+    form_str = str(block.get("form_str") or "")
+    parts = [_WDL_CN.get(ch.upper()) for ch in form_str if ch.upper() in _WDL_CN]
+    if not parts:
+        return None
+    return "近5场 " + "、".join(parts)
+
+
+def reconcile_form_variables(
+    pred: dict,
+    *,
+    recent_form: dict | None = None,
+    recent_status_ratios: dict[str, int | None] | None = None,
+) -> dict:
+    """消除「主队近况不佳」与赛前桌「主队取分率约70%」的同页矛盾。
+
+    规则（冲突时以赛前桌为准）：
+    - 赛前桌 recent_status 某侧取分率 ≥60% 时，删除/改写该侧「近况不佳/状态差」类变数；
+    - 生成近况内容优先用 club_form/recent_form 近5场 WDL，否则用 recent_status；
+      均无数据则不写（不编造伤停/新闻）；
+    - high_impact 不变，不触碰亚盘/竞彩方向。
+
+    就地修改 pred["match_variables"]，返回 pred。
+    """
+    if not isinstance(pred, dict):
+        return pred
+    mvs = pred.get("match_variables")
+    if not isinstance(mvs, list) or not mvs:
+        return pred
+
+    ratios = (
+        recent_status_ratios
+        if recent_status_ratios is not None
+        else _recent_status_ratios(pred)
+    )
+    rf = recent_form if recent_form is not None else (pred.get("recent_form") or {})
+    kept: list[str] = []
+    for var in mvs:
+        var = str(var)
+        if not any(k in var for k in _FORM_KEYWORDS):
+            kept.append(var)
+            continue
+        side = _side_of_form_variable(var)
+        is_negative = any(w in var for w in _FORM_NEG_WORDS)
+        if not is_negative:
+            kept.append(var)
+            continue
+        if side is None:
+            kept.append(var)
+            continue
+        ratio = ratios.get(side)
+        # 1) 冲突：赛前桌该侧取分率 ≥60% → 删除负面说法（以赛前桌为准）
+        if ratio is not None and ratio >= 60:
+            continue
+        # 2) 无赛前桌冲突 → 优先用 club_form 近5场 WDL 改写
+        wdl = _form_wdl_text(rf, side)
+        if wdl:
+            tag = "主队" if side == "home" else "客队"
+            kept.append(f"{tag}{wdl}")
+            continue
+        # 3) 有赛前桌取分率且偏低（一致）→ 保留原说法；完全无数据 → 保留（不误删 AI 研判）
+        kept.append(var)
+    pred["match_variables"] = kept
+    return pred
 
 
 def print_ai_recommendation(data: dict) -> None:

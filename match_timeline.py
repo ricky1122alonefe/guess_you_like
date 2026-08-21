@@ -246,6 +246,12 @@ def append_ai_record(
     ts: str | None = None,
 ) -> dict | None:
     """Persist one AI analysis run (supports dual-model) to ai_records.jsonl."""
+    # 落盘前统一清理全 0.0% 比分（summary / 推荐比分 / likely_scores_detail）
+    try:
+        from score_models import scrub_zero_percent_scores
+        scrub_zero_percent_scores(pred)
+    except Exception:
+        pass
     analyses = compact_ai_analyses(pred)
     if not analyses:
         return None

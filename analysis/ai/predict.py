@@ -41,6 +41,7 @@ from analysis.rules import (
     merge_expert_prediction,
     print_ai_recommendation,
     print_batch_summary,
+    reconcile_form_variables,
     recommendation_from_dict,
     recommendation_to_baseline,
 )
@@ -159,6 +160,8 @@ def run_one_match(
             analysis, baseline, match_name=rec.match,
             evidence_brief=ctx.get("evidence_brief"),
         )
+        # AI 解析后校验：消除「主队近况不佳」与赛前桌「取分率约70%」矛盾
+        reconcile_form_variables(result, recent_form=ctx.get("recent_form"))
     else:
         analysis = parse_analysis_json(content)
         result = apply_baseline_to_prediction(

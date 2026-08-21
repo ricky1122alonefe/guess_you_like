@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from pathlib import Path
 from typing import Any
 
@@ -189,7 +190,25 @@ def build_eu_lane(
         }
 
     fair = devig_1x2(mean["home"], mean["draw"], mean["away"])
-    p = {k: fair.get(k, 0.0) for k in ("home", "draw", "away")}
+    p = {
+        "home": fair.get("p_home", 0.0),
+        "draw": fair.get("p_draw", 0.0),
+        "away": fair.get("p_away", 0.0),
+    }
+    if not any(v > 0 for v in p.values()):
+        return {
+            "id": "eu",
+            "label": "欧赔轨",
+            "tag": "参考·不可购",
+            "buyable": False,
+            "missing": False,
+            "pick": "skip",
+            "pick_cn": "观望",
+            "p_pct": {},
+            "reasons": ["去水后无有效概率（赔率异常或缺失）"],
+            "source_books": source_books,
+        }
+
     pick = max(p, key=p.get)  # type: ignore[arg-type]
     pick_cn = _OUTCOME_CN.get(pick, pick)
     reasons = [
@@ -312,12 +331,64 @@ def build_jingcai_lane(pred: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def is_abandoned_pred(pred: dict[str, Any]) -> bool:
+    """判断 pred 是否已是放弃/观望（judgment 或 result_1x2_cn）。"""
+    if not isinstance(pred, dict):
+        return False
+    judgment = str(pred.get("judgment") or "")
+    cn = str(pred.get("result_1x2_cn") or "")
+    return (
+        "放弃" in judgment
+        or "观望" in judgment
+        or "观望" in cn
+        or "放弃" in cn
+        or str(pred.get("result_1x2") or "") == "skip"
+    )
+
+
+def scrub_abandon_summary(pred: dict[str, Any]) -> None:
+    """放弃/观望时统一放弃态展示与落盘数据。
+
+    1) summary 移除「【竞彩可购】…」段，改为【当前建议】；
+    2) predict_row.竞彩推荐/胜平负 与 final_pick_cn 同步为 观望/放弃；
+    3) jingcai_pick_info.pick=skip、buyable=false。
+    不 flip 竞彩方向（不改成另一方向），仅统一放弃态。
+    """
+    if not isinstance(pred, dict) or not is_abandoned_pred(pred):
+        return
+    advice = "放弃" if "放弃" in str(pred.get("judgment") or "") else "观望"
+    summary = pred.get("summary")
+    if isinstance(summary, str) and "【竞彩可购】" in summary:
+        cleaned = re.sub(r"【竞彩可购】[^。]*。", "", summary).strip()
+        pred["summary"] = f"【当前建议】{advice}。" + cleaned
+    row = pred.get("predict_row")
+    if isinstance(row, dict):
+        for key in ("竞彩推荐", "胜平负"):
+            row[key] = advice
+        pred["final_pick_cn"] = advice
+    info = pred.get("jingcai_pick_info")
+    if isinstance(info, dict):
+        info["jingcai_pick"] = "skip"
+        info["jingcai_pick_cn"] = advice
+        info["jingcai_pick_display"] = advice
+        info["buyable"] = False
+
+
 def build_lane_comparison(
     eu: dict[str, Any],
     ah: dict[str, Any],
     jc: dict[str, Any],
+    *,
+    abandoned: bool = False,
 ) -> dict[str, Any]:
     """Code-generated comparison. Can only hold/size_down/skip the Jingcai lane."""
+    if abandoned:
+        return {
+            "agreement": "partial",
+            "action": "skip",
+            "summary": "盘口桌已放弃，欧/亚仅参考。",
+            "buyable": None,
+        }
     if jc.get("missing") or jc.get("pick") == "skip":
         return {
             "agreement": "partial",
@@ -394,7 +465,8 @@ def attach_market_lanes(
     eu = build_eu_lane(pred, eu_books_major=major)
     ah = build_ah_lane(pred)
     jc = build_jingcai_lane(pred)
-    comp = build_lane_comparison(eu, ah, jc)
+    abandoned = is_abandoned_pred(pred)
+    comp = build_lane_comparison(eu, ah, jc, abandoned=abandoned)
 
     pred["market_lanes"] = {
         "eu": eu,

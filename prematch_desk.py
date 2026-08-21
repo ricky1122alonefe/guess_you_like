@@ -370,7 +370,13 @@ def _fill_schedule_fatigue(
     dims: dict[str, dict],
     schedule_ctx: dict | None,
 ) -> None:
-    """Fill schedule density from recent-form date lists."""
+    """Fill schedule density from recent-form date lists.
+
+    只有赛程确为密集（近7天>=3 场或存在 <=3 天间隔）时，本维才以 medium
+    置信度呈现为强「有数据」（可作 high_impact 候选）；双方近7天均 <=1 场
+    且近14天均 <=2 场、又无密集间隔时，赛程本就不密集，仅保留真实统计并
+    降为 low（参考性弱），不标成强「有数据」。其余情形维持现逻辑。
+    """
     dim = dims["schedule_fatigue"]
     ctx = schedule_ctx or {}
     home_dates = ctx.get("home_dates") or []
@@ -382,6 +388,10 @@ def _fill_schedule_fatigue(
     away_counts = _window_counts(away_dates)
     shortest_home = _shortest_gap_days(home_dates)
     shortest_away = _shortest_gap_days(away_dates)
+
+    has_dense_gap = (shortest_home is not None and shortest_home < 3) or (
+        shortest_away is not None and shortest_away < 3
+    )
 
     evidence: list[str] = []
     if home_dates:
@@ -397,10 +407,26 @@ def _fill_schedule_fatigue(
     if shortest_away is not None and shortest_away < 3:
         evidence.append(f"客队最短间隔 {shortest_away:.1f} 天")
 
-    if evidence:
-        dim["missing"] = False
+    if not evidence:
+        return
+
+    is_sparse = (
+        home_counts["d7"] <= 1
+        and away_counts["d7"] <= 1
+        and home_counts["d14"] <= 2
+        and away_counts["d14"] <= 2
+        and not has_dense_gap
+    )
+
+    dim["missing"] = False
+    dim["evidence"] = evidence
+    if is_sparse:
+        # 赛程不密集：保留真实场次统计但参考性弱，不标成强「有数据」。
+        dim["confidence"] = "low"
+        dim["note"] = "赛程不密集，本维参考性弱"
+    else:
+        # 密集赛程（近7天>=3 或 间隔<=3天）及一般情形维持现逻辑。
         dim["confidence"] = "medium"
-        dim["evidence"] = evidence
         dim["note"] = "基于近期正赛日期统计"
 
 

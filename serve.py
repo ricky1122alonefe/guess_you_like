@@ -51,7 +51,9 @@ from share_card import (
     html_share_posters_batch,
 )
 from prematch_desk import attach_prematch_and_summary, ensure_prematch_attached
-from analysis.market.three_lane import attach_market_lanes
+from analysis.market.three_lane import attach_market_lanes, scrub_abandon_summary
+from analysis.rules.output import reconcile_form_variables
+from score_models import scrub_zero_percent_scores
 from poll_interval import poll_interval_seconds
 from web_ui import html_agent_pipeline_settings, html_agent_workbench, html_ah_analytics, html_ai_settings, html_daily_picks, html_dashboard, html_eu_ah_divergence, html_group_final_copy, html_group_knockout_outlook, html_kelly_calculator, html_match_detail, html_quant_analytics, html_recommendation_review, html_worldcup_ledger
 from apps.api.viz import build_viz_data, get_viz_or_404
@@ -698,6 +700,12 @@ class Handler(BaseHTTPRequestHandler):
                         league_name=idx.get("league_name") if idx else None,
                     )
                     attach_market_lanes(pred, output_root=root, fixture_id=fid)
+                    # 放弃/观望时 scrub summary 中残留的「【竞彩可购】」段（AI 回写/旧 run）
+                    scrub_abandon_summary(pred)
+                    # 展示前统一清理全 0.0% 比分（旧 run / AI 回写残留）
+                    scrub_zero_percent_scores(pred)
+                    # 近况变数与赛前桌 recent_status 消矛盾（冲突以赛前桌为准）
+                    reconcile_form_variables(pred)
                 except Exception:
                     log.exception("详情页赛前桌/三轨附加失败 fid=%s", fid)
             ai_records = load_ai_records(root, fid)
@@ -1593,6 +1601,9 @@ class Handler(BaseHTTPRequestHandler):
                         attach_market_lanes(
                             pred, output_root=self.output_root, fixture_id=fid
                         )
+                        scrub_abandon_summary(pred)
+                        scrub_zero_percent_scores(pred)
+                        reconcile_form_variables(pred)
                         _merge_prediction_into_latest(self.output_root, pred)
                     except Exception:
                         log.exception("抓取后更新对照摘要/三轨失败 fid=%s", fid)

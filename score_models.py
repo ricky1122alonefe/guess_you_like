@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
 
 import config as cfg
@@ -10,6 +11,105 @@ import config as cfg
 OUTCOMES = ("home", "draw", "away")
 RHO = getattr(cfg, "DIXON_COLES_RHO", -0.13)
 MAX_GOALS = getattr(cfg, "SCORE_MODEL_MAX_GOALS", 6)
+
+
+def _extract_prob_pct(detail: str) -> float | None:
+    """Extract numeric probability from strings like '2-1(15.3%)'.
+
+    Returns None when the string has no probability suffix.
+    Whitespace inside the suffix is tolerated.
+    """
+    if not isinstance(detail, str):
+        return None
+    cleaned = detail.replace(" ", "")
+    if "(" not in cleaned or not cleaned.endswith("%)"):
+        return None
+    try:
+        start = cleaned.rfind("(") + 1
+        return float(cleaned[start:-2])
+    except (ValueError, TypeError):
+        return None
+
+
+def filter_valid_score_details(details: list[str]) -> list[str]:
+    """Return score details whose probability is strictly > 0.
+
+    Strings without a probability suffix are preserved (e.g. plain score lists).
+    """
+    valid: list[str] = []
+    for item in details:
+        if not item:
+            continue
+        prob = _extract_prob_pct(item)
+        if prob is None or prob > 0:
+            valid.append(item)
+    return valid
+
+
+_ZERO_PCT_RE = re.compile(r"\(\s*0(?:\.0)?\s*%\)")
+_SCORE_ITEM_RE = re.compile(r"\d+-\d+(?:\(\d+(?:\.\d+)?%\))?")
+
+
+def _scrub_score_text(text: str) -> str:
+    """从「2-1(12.3%)、3-1(0.0%)」中剔除全 0.0% 项，保留正常概率比分。"""
+    if not isinstance(text, str) or not text:
+        return text
+    items = [x.strip() for x in re.split(r"[、,，/\s]+", text) if x.strip()]
+    keep = [x for x in items if not _ZERO_PCT_RE.search(x)]
+    return "、".join(keep)
+
+
+def _scrub_score_segments(text: str) -> str:
+    """移除 summary 中全 0.0% 的「比分 …」段；混合时保留正常概率比分。"""
+    if not isinstance(text, str) or not text:
+        return text
+
+    def _rebuild(match: re.Match[str]) -> str:
+        seg = match.group(0)
+        items = _SCORE_ITEM_RE.findall(seg)
+        if not items:
+            return seg
+        keep = [it for it in items if not _ZERO_PCT_RE.search(it)]
+        if keep:
+            return "比分 " + "、".join(keep) + "。"
+        return ""
+
+    out = re.sub(r"比分[^。]*?。", _rebuild, text)
+    out = re.sub(r"[，,]\s*。", "。", out)
+    out = re.sub(r"[\s　]+", " ", out).strip()
+    return out
+
+
+def scrub_zero_percent_scores(pred: dict[str, Any]) -> None:
+    """展示/落盘前统一清理全 0.0% 比分（summary 段 / 推荐比分 / likely_scores_detail）。
+
+    就地修改 pred。有正常概率的比分照常保留。
+    """
+    if not isinstance(pred, dict):
+        return
+    summary = pred.get("summary")
+    if isinstance(summary, str) and summary:
+        pred["summary"] = _scrub_score_segments(summary)
+    row = pred.get("predict_row")
+    if isinstance(row, dict):
+        rec = row.get("推荐比分")
+        if isinstance(rec, str) and rec:
+            row["推荐比分"] = _scrub_score_text(rec)
+    detail_raw = pred.get("likely_scores_detail")
+    if isinstance(detail_raw, list) and detail_raw:
+        filtered = filter_valid_score_details([str(x) for x in detail_raw])
+        pred["likely_scores_detail"] = filtered
+        if not filtered:
+            # 带概率的 detail 全为 0.0% 等无有效概率：裸比分 likely_scores 同样
+            # 不可信，一并清空，避免展示「仅 2-1 无 %」这类无有效概率的比分。
+            pred["likely_scores"] = []
+    else:
+        for key in ("likely_scores_detail", "likely_scores"):
+            val = pred.get(key)
+            if isinstance(val, list) and val:
+                pred[key] = filter_valid_score_details([str(x) for x in val])
+            elif isinstance(val, str) and val:
+                pred[key] = _scrub_score_text(val)
 
 
 def _poisson_pmf(k: int, lam: float) -> float:
@@ -177,6 +277,8 @@ def build_score_model(
         "stretch_scores": stretch,
         "all_scores": tops,
         "likely_scores": [t["score"] for t in tops[:3]],
-        "likely_scores_detail": [f"{t['score']}({t['prob_pct']}%)" for t in tops[:3]],
+        "likely_scores_detail": filter_valid_score_details(
+            [f"{t['score']}({t['prob_pct']}%)" for t in tops[:3]]
+        ),
         "ah_home_cover_pct": round(ah_home_cover_prob(cells, ah_line) * 100, 1) if ah_line is not None else None,
     }

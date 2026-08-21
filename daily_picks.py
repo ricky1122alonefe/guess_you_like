@@ -1672,6 +1672,14 @@ def save_daily_picks(output_root: str | Path, payload: dict) -> Path:
     out_dir = root / "daily_picks"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{payload['date']}.json"
+    # 落盘前统一清理全 0.0% 比分（AI 三档推荐）
+    try:
+        from score_models import scrub_zero_percent_scores
+        for m in payload.get("matches") or []:
+            if isinstance(m, dict):
+                scrub_zero_percent_scores(m)
+    except Exception:
+        pass
 
     if path.is_file() and payload.get("source") != "ai":
         try:

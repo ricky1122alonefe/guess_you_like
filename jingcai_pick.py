@@ -373,7 +373,21 @@ def compute_jingcai_pick(pred: dict, jc: dict | None) -> dict[str, Any]:
 
 
 def final_recommendation_cn(pred: dict) -> str:
-    """Primary user-facing recommendation — always 竞彩 when available."""
+    """Primary user-facing recommendation — always 竞彩 when available.
+
+    放弃/观望态（judgment / result_1x2_cn 含「放弃」「观望」，或 result_1x2=skip）
+    优先尊重放弃态：即使底层 predict_row / jingcai_pick_info 残留「主胜」等竞彩
+    方向（AI 回写或旧 run 未同步），也统一返回「观望/放弃」，避免详情主推荐行
+    显示「竞彩可购：主胜」。不 flip 方向，仅统一放弃态展示。
+    """
+    judgment = str(pred.get("judgment") or "")
+    rcn = str(pred.get("result_1x2_cn") or "")
+    if "放弃" in judgment or "放弃" in rcn:
+        return "放弃"
+    if "观望" in judgment or "观望" in rcn:
+        return "观望"
+    if str(pred.get("result_1x2") or "") == "skip":
+        return "观望"
     row = pred.get("predict_row") or {}
     for key in ("竞彩推荐", "胜平负", "final_pick_cn"):
         val = row.get(key) if key != "final_pick_cn" else pred.get(key)

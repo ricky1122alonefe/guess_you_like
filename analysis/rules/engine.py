@@ -330,6 +330,7 @@ def _pick_scores(
     eu_count: int = 0,
 ) -> tuple[list[str], list[str]]:
     from product_focus import score_prediction_enabled
+    from score_models import filter_valid_score_details
 
     if not score_prediction_enabled():
         return [], []
@@ -344,6 +345,12 @@ def _pick_scores(
                 f"{sc}({pct})" if pct else sc
                 for sc, pct in historical
             ]
+            detail = filter_valid_score_details(detail)
+            # If all probabilities were zero, drop scores as well.
+            if not detail:
+                return [], []
+            # Rebuild scores so they stay aligned with the filtered detail.
+            scores = [d.split("(")[0] for d in detail]
             return scores, detail
 
     # 仅样本不足时用模板
@@ -613,13 +620,24 @@ def build_recommendation(payload: dict) -> Recommendation:
         from analysis.signals.odds_probs import jingcai_sp_summary
         jc_sp_txt = jingcai_sp_summary(jingcai)
 
+    from score_models import filter_valid_score_details as _filter_scores
+
+    valid_score_detail = _filter_scores(scores_detail)[:3]
+    # Keep Recommendation.scores aligned with the filtered detail.
+    if not valid_score_detail:
+        scores = []
+    # 放弃/观望时禁止写「竞彩可购」，改为「当前建议」
+    if result == "skip" or "观望" in result_cn or "放弃" in result_cn:
+        verdict_txt = f"【当前建议】{result_cn}"
+    else:
+        verdict_txt = f"【竞彩可购】{result_cn}"
     summary = (
         f"【赛事概率】{open_prob_txt}。"
         f"【资金解读】{funds_txt}。"
         f"【参考研判】{reference_cn or result_cn}（{pattern_ref}）。"
-        f"【竞彩可购】{result_cn}"
+        f"{verdict_txt}"
         f"{('，' + jc_sp_txt) if jc_sp_txt else ''}。"
-        f"比分 {'、'.join(scores_detail[:3]) if scores_detail else '—'}。"
+        f"比分 {'、'.join(valid_score_detail) if valid_score_detail else '—'}。"
     )
     if hist_best != (reference_key or result):
         summary += f"（初盘单项最高 {RESULT_CN[hist_best]}，临盘风控调整后参考 {reference_cn or result_cn}）"
@@ -631,7 +649,7 @@ def build_recommendation(payload: dict) -> Recommendation:
         result_1x2=result,
         result_1x2_cn=result_cn,
         likely_scores=scores,
-        likely_scores_detail=scores_detail,
+        likely_scores_detail=valid_score_detail,
         asian_handicap_pick=ah_pick,
         asian_handicap_cn=ah_cn,
         asian_handicap_reason=ah_reason,

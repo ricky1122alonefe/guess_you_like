@@ -23,6 +23,8 @@ from web_ui import (
     _market_lanes_one_liner,
     _market_signal_card,
     _poll_status_line,
+    _pred_card,
+    _quant_score_tags,
     _recommendation_text,
     _score_cell,
     _snapshot_footnote,
@@ -637,12 +639,20 @@ def test_comparison_summary_card_empty_when_missing():
 
 def test_market_lanes_card_renders_three_lanes():
     pred = {
+        "odds_snapshot": {
+            "eu_books_major": [
+                {"label": "威廉", "home": 1.62, "draw": 3.70, "away": 5.50},
+                {"label": "平博", "home": 1.65, "draw": 3.60, "away": 5.20},
+                {"label": "澳门", "home": 1.68, "draw": 3.55, "away": 5.00},
+            ]
+        },
         "market_lanes": {
             "eu": {
                 "label": "欧赔轨",
                 "tag": "参考·不可购",
                 "missing": False,
                 "pick_cn": "主胜",
+                "odds": {"home": 1.62, "draw": 3.70, "away": 5.50},
                 "reasons": ["去水隐含概率：主 45%", "来源：平博"],
             },
             "ah": {
@@ -686,6 +696,11 @@ def test_market_lanes_card_renders_three_lanes():
     assert "非竞彩让球" in html
     assert "维持" in html
     assert "欧亚轨仅作参考" in html
+    # 欧赔轨须显示主/平/客数字（均值行 + 各公司简写）
+    assert "欧赔：" in html
+    assert "1.62/3.70/5.50" in html
+    assert "威廉 1.62/3.70/5.50" in html
+    assert "平博 1.65/3.60/5.20" in html
 
 
 def test_market_lanes_card_empty_when_missing():
@@ -714,3 +729,89 @@ def test_market_lanes_one_liner_divergent():
     txt = _market_lanes_one_liner(lanes)
     assert "欧↔亚↔彩 分裂" in txt
     assert "欧客胜" in txt
+
+
+def test_quant_score_tags_keeps_positive_probs():
+    html = _quant_score_tags(["2-1", "2-0", "1-0"], detail=["2-1(12.3%)", "2-0(8.5%)"])
+    assert "2-1(12.3%)" in html
+    assert "2-0(8.5%)" in html
+    assert "比分模型不足" not in html
+
+
+def test_quant_score_tags_filters_zero_percent():
+    html = _quant_score_tags(["2-1", "2-0", "1-0"], detail=["2-1(0.0%)", "2-0(0.0%)"])
+    assert "2-1(0.0%)" not in html
+    assert "2-0(0.0%)" not in html
+    assert "比分模型不足" in html
+
+
+def test_quant_score_tags_mixed_zero_percent():
+    html = _quant_score_tags(["2-1", "2-0", "1-0"], detail=["2-1(12.3%)", "2-0(0.0%)"])
+    assert "2-1(12.3%)" in html
+    assert "2-0(0.0%)" not in html
+    assert "比分模型不足" not in html
+
+
+def test_quant_score_tags_empty_detail_shows_placeholder():
+    html = _quant_score_tags(["2-1", "2-0", "1-0"], detail=[])
+    assert "比分模型不足" in html
+
+
+def test_quant_score_tags_no_scores_shows_dash():
+    html = _quant_score_tags([], detail=[])
+    assert "—" in html
+    assert "比分模型不足" not in html
+
+
+def test_pred_card_abandoned_uses_current_advice():
+    """放弃/观望时：竞彩可购行改「当前建议」，summary 中【竞彩可购】段被 scrub。"""
+    pred = {
+        "judgment": "放弃·变数过大",
+        "result_1x2_cn": "观望",
+        "predict_row": {"竞彩推荐": "观望"},
+        "summary": "【赛事概率】主42%。【竞彩可购】主胜，SP 2.05。比分 1-0。",
+    }
+    html = _pred_card(pred)
+    assert "当前建议：" in html
+    # judgment 含「放弃」时归一为「放弃」（judgment 为权威来源，比 result_1x2_cn 更优先）
+    assert "放弃" in html
+    assert "竞彩可购：" not in html
+    assert "【竞彩可购】" not in html
+
+
+def test_pred_card_buyable_keeps_jingcai_buy():
+    """可购方向不变：仍显示「竞彩可购：主胜」。"""
+    pred = {
+        "result_1x2_cn": "主胜",
+        "predict_row": {"竞彩推荐": "主胜", "竞彩玩法": "胜平负", "竞彩SP": "2.05"},
+        "summary": "【赛事概率】主42%。【竞彩可购】主胜，SP 2.05。比分 1-0。",
+    }
+    html = _pred_card(pred)
+    assert "竞彩可购：" in html
+    assert "主胜" in html
+    assert "当前建议：" not in html
+
+
+def test_pred_card_scrubs_zero_percent_scores():
+    """含 0.0% 的旧 pred：summary 段删除、推荐比分过滤、渲染 HTML 不含 0.0%。"""
+    pred = {
+        "result_1x2_cn": "主胜",
+        "predict_row": {"竞彩推荐": "主胜", "推荐比分": "2-1(0.0%)、3-1(0.0%)"},
+        "likely_scores_detail": ["2-1(0.0%)", "3-1(0.0%)", "3-2(0.0%)"],
+        "summary": "【赛事概率】主45%。【竞彩可购】主胜，SP 2.05。比分 2-1(0.0%)、3-1(0.0%)、3-2(0.0%)。",
+    }
+    html = _pred_card(pred)
+    assert "0.0%" not in html
+    assert "比分 2-1(0.0%)" not in html
+
+
+def test_pred_card_keeps_valid_scores_after_scrub():
+    """正常概率比分照常显示；混合 0.0% 时仅剔除 0.0% 项。"""
+    pred = {
+        "result_1x2_cn": "主胜",
+        "predict_row": {"竞彩推荐": "主胜", "推荐比分": "2-1(12.3%)、3-1(0.0%)"},
+        "summary": "【赛事概率】主45%。【竞彩可购】主胜，SP 2.05。比分 2-1(12.3%)、3-1(0.0%)。",
+    }
+    html = _pred_card(pred)
+    assert "2-1(12.3%)" in html
+    assert "0.0%" not in html

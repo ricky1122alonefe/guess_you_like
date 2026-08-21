@@ -331,6 +331,81 @@ def test_club_form_populates_schedule_fatigue():
     assert any("近7天" in e for e in schedule_dim["evidence"])
 
 
+def _schedule_dim(pred: dict) -> dict:
+    attach_prematch_and_summary(pred)
+    return next(d for d in pred["prematch_desk"]["dimensions"] if d["id"] == "schedule_fatigue")
+
+
+def test_sparse_schedule_is_low_confidence_not_strong_available():
+    """双方近7天均<=1场且近14天均<=2场、无密集间隔：赛程维降为 low 参考性弱。"""
+    pred = {
+        "fixture_id": "128",
+        "league_name": "英超",
+        "home_team": "曼城",
+        "away_team": "利物浦",
+        "club_form": {
+            "samples": {
+                "home_all": [{"date": "2026-08-15"}],
+                "away_all": [{"date": "2026-08-16"}],
+            }
+        },
+    }
+    schedule_dim = _schedule_dim(pred)
+    assert schedule_dim["missing"] is False
+    assert schedule_dim["confidence"] == "low"
+    assert schedule_dim["note"] == "赛程不密集，本维参考性弱"
+    assert any("主队近7天1场" in e for e in schedule_dim["evidence"])
+    assert any("客队近7天1场" in e for e in schedule_dim["evidence"])
+
+
+def test_dense_schedule_keeps_medium_confidence():
+    """近7天>=3场：维持现逻辑（medium、有数据），不降级为 low。"""
+    pred = {
+        "fixture_id": "129",
+        "league_name": "英超",
+        "home_team": "曼城",
+        "away_team": "利物浦",
+        "club_form": {
+            "samples": {
+                "home_all": [
+                    {"date": "2026-08-15"},
+                    {"date": "2026-08-13"},
+                    {"date": "2026-08-11"},
+                ],
+                "away_all": [{"date": "2026-08-16"}],
+            }
+        },
+    }
+    schedule_dim = _schedule_dim(pred)
+    assert schedule_dim["missing"] is False
+    assert schedule_dim["confidence"] == "medium"
+    assert schedule_dim["note"] == "基于近期正赛日期统计"
+    assert any("主队近7天3场" in e for e in schedule_dim["evidence"])
+
+
+def test_short_gap_schedule_keeps_medium_confidence():
+    """存在<=3天密集间隔：维持现逻辑（medium），即使场次不多也不降级。"""
+    pred = {
+        "fixture_id": "130",
+        "league_name": "英超",
+        "home_team": "曼城",
+        "away_team": "利物浦",
+        "club_form": {
+            "samples": {
+                "home_all": [
+                    {"date": "2026-08-15"},
+                    {"date": "2026-08-13"},
+                ],
+                "away_all": [{"date": "2026-08-16"}],
+            }
+        },
+    }
+    schedule_dim = _schedule_dim(pred)
+    assert schedule_dim["missing"] is False
+    assert schedule_dim["confidence"] == "medium"
+    assert any("主队最短间隔 2.0 天" in e for e in schedule_dim["evidence"])
+
+
 def test_ensure_prematch_recalc_when_intel_newer(monkeypatch, tmp_path):
     """sporttery_intel.json fetched_at 新于 desk as_of 时 ensure 强制重算。"""
     from prematch_desk import ensure_prematch_attached

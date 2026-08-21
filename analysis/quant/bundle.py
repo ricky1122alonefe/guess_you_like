@@ -8,6 +8,7 @@ from analysis.quant.common import (
     avg_goals_from_similarity,
     coerce_odds_dict,
     ensure_eu_implied,
+    fill_eu_from_books_major,
     resolve_team_names,
 )
 from analysis.quant.elo import apply_elo
@@ -26,6 +27,9 @@ def run_quant_analysis(
 ) -> dict:
     """Mutate pred with quant block (score model, Elo, EV, optional MC)."""
     cur = coerce_odds_dict(cur or pred.get("odds_snapshot") or {})
+    cur = fill_eu_from_books_major(
+        pred, cur, output_root=output_root, fixture_id=pred.get("fixture_id")
+    )
     eu_imp = ensure_eu_implied(pred, cur)
     avg_goals = avg_goals_from_similarity(pred)
     home, away = resolve_team_names(pred)

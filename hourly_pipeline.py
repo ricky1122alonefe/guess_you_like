@@ -101,6 +101,13 @@ def _attach_desks(
         fixture_id=fixture_id,
         output_root=output_root,
     )
+    # 旧 pred 可能只有 elo 缺 score_model：幂等补算，供 ou 轨取矩阵
+    try:
+        from analysis.pipeline import ensure_quant
+
+        ensure_quant(pred, output_root=output_root)
+    except Exception:
+        log.exception("quant 补算失败 fid=%s", fixture_id)
     try:
         attach_market_lanes(
             pred,

@@ -151,8 +151,13 @@ def _ensure_similarity_analysis(pred: dict | None, output_root: Path | None = No
         log.exception("相似样本临时重算失败")
 
 
-def _ensure_quant_analysis(pred: dict | None, idx: dict | None = None) -> None:
-    if not pred or pred.get("quant"):
+def _ensure_quant_analysis(
+    pred: dict | None,
+    idx: dict | None = None,
+    *,
+    output_root=None,
+) -> None:
+    if not pred:
         return
     cur = dict(pred.get("odds_snapshot") or {})
     if idx:
@@ -164,18 +169,22 @@ def _ensure_quant_analysis(pred: dict | None, idx: dict | None = None) -> None:
     try:
         from analysis.pipeline import ensure_quant
 
-        ensure_quant(pred, cur=cur or None)
+        # quant 已有但缺 score_model 时内部补算 poisson；
+        # eu 赔率 0/缺失 → 回退 major 均值（与 three_lane 欧赔轨同源，含 DB/xls）
+        ensure_quant(pred, cur=cur or None, output_root=output_root)
     except Exception:
         log.exception("量化分析附加失败")
-    try:
-        from product_focus import score_prediction_enabled
+    # 比分推荐仅在 score_model 就绪时补（无模型保持原样，不阻塞）
+    if (pred.get("quant") or {}).get("score_model"):
+        try:
+            from product_focus import score_prediction_enabled
 
-        if score_prediction_enabled():
-            from analysis.score_recommend import attach_score_recommendation
+            if score_prediction_enabled():
+                from analysis.score_recommend import attach_score_recommendation
 
-            attach_score_recommendation(pred)
-    except Exception:
-        log.exception("比分推荐附加失败")
+                attach_score_recommendation(pred)
+        except Exception:
+            log.exception("比分推荐附加失败")
 
 
 def _ensure_post_recommendation(pred: dict | None) -> None:
@@ -657,7 +666,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             pred = _load_latest_pred(root, fid)
             _ensure_similarity_analysis(pred, root)
-            _ensure_quant_analysis(pred, idx)
+            _ensure_quant_analysis(pred, idx, output_root=root)
             _ensure_post_recommendation(pred)
             ai_records = load_ai_records(root, fid)
             deep_records = load_deep_analyses(root, fid)
@@ -690,7 +699,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             pred = _load_latest_pred(root, fid)
             _ensure_similarity_analysis(pred, root)
-            _ensure_quant_analysis(pred, idx)
+            _ensure_quant_analysis(pred, idx, output_root=root)
             _ensure_post_recommendation(pred)
             # 赛前桌/对照摘要兜底：失败不得 500，保持页面可用
             if pred:
@@ -766,7 +775,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             idx = _load_match_index(root, fid) or {}
             _ensure_similarity_analysis(pred, root)
-            _ensure_quant_analysis(pred, idx)
+            _ensure_quant_analysis(pred, idx, output_root=root)
             _ensure_post_recommendation(pred)
             from match_agents import build_and_archive_agent_board
 
@@ -899,7 +908,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             idx = _load_match_index(root, fid) or {}
             _ensure_similarity_analysis(pred, root)
-            _ensure_quant_analysis(pred, idx)
+            _ensure_quant_analysis(pred, idx, output_root=root)
             _ensure_post_recommendation(pred)
             run_chief = qs.get("run_chief", ["0"])[0] in ("1", "true", "yes")
             profile = qs.get("profile", [None])[0]
@@ -1182,7 +1191,7 @@ class Handler(BaseHTTPRequestHandler):
                 pred = _load_latest_pred(root, fid)
                 _ensure_similarity_analysis(pred, root)
                 idx = _load_match_index(root, fid) or {}
-                _ensure_quant_analysis(pred, idx)
+                _ensure_quant_analysis(pred, idx, output_root=root)
                 from kelly import compute_kelly, kelly_prefill_from_prediction
                 prefill = kelly_prefill_from_prediction(pred, fixture_id=fid)
                 if prefill.get("probability_pct") is not None and prefill.get("odds_value") is not None:
@@ -1446,7 +1455,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 idx = _load_match_index(self.output_root, fid) or {}
                 _ensure_similarity_analysis(pred, self.output_root)
-                _ensure_quant_analysis(pred, idx)
+                _ensure_quant_analysis(pred, idx, output_root=self.output_root)
                 _ensure_post_recommendation(pred)
                 from match_agents import build_and_archive_agent_board, run_chief_match_agent
 
